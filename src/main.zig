@@ -1,16 +1,45 @@
 const std = @import("std");
 const print = @import("std").debug.print;
 
+const Keysym = struct {
+    raw: u8,
+    key: u8,
+    ctrl_key: bool,
+    
+    pub const ESC = std.ascii.control_code.esc;
+    
+    pub fn init(raw: u8) Keysym {
+        if (raw <= std.ascii.control_code.us) {
+            return Keysym {
+                .raw = raw,
+                .key = raw & std.ascii.control_code.us,
+                .ctrl_key = true,
+            };
+        } else {
+            return Keysym {
+                .raw = raw,
+                .key = raw,
+                .ctrl_key = false,
+            };
+        }
+    }
+};
+
 const Editor = struct {
     in: std.fs.File,
     inr: std.fs.File.Reader,
+    out: std.fs.File,
+    outw: std.fs.File.Writer,
     orig_termios: ?std.posix.termios,
     
     pub fn init() Editor {
         const stdin = std.io.getStdIn();
+        const stdout = std.io.getStdOut();
         return Editor {
             .in = stdin,
             .inr = stdin.reader(),
+            .out = stdout,
+            .outw = stdout.writer(),
             .orig_termios = null,
         };
     }
@@ -48,17 +77,45 @@ const Editor = struct {
         }
     }
     
+    // input
+    
+    pub fn readKey(self: *Editor) ?Keysym {
+        const raw = self.inr.readByte() catch return null;
+        return Keysym.init(raw);
+    }
+    
+    // screen
+    
+    pub const CLEAR_SCREEN = "\x1b[2J";
+    pub const RESET_POS = "\x1b[H";
+    
+    pub fn writeAll(self: *Editor, bytes: []const u8) !void {
+        return self.outw.writeAll(bytes);
+    }
+    
+    pub fn refreshScreen(self: *Editor) !void {
+        try self.writeAll(Editor.CLEAR_SCREEN);
+        try self.writeAll(Editor.RESET_POS);
+    }
+    
+    // tick
+    
+    pub fn loop(self: *Editor) !void {
+        try self.refreshScreen();
+        while (true) {
+            if (self.readKey()) |key| {
+                if (key.raw == Keysym.ESC)
+                    break;
+                print("{}\r\n", .{key});
+            }
+        }
+    }
+    
 };
 
 pub fn main() !void {
     var E = Editor.init();
     try E.enableRawMode();
-    const stdin = std.io.getStdIn().reader();
-    while (true) {
-        const byte = stdin.readByte() catch 0;
-        if (byte == 'q')
-            break;
-        print("{}", .{byte});
-    }
+    try E.loop();
     try E.disableRawMode();
 }
