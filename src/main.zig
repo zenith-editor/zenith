@@ -31,11 +31,19 @@ const Keysym = struct {
         }
     }
     
-    pub fn init_special(key: u8) Keysym {
+    pub fn initSpecial(key: u8) Keysym {
         return Keysym {
             .raw = 0,
             .key = key,
         };
+    }
+    
+    pub fn isSpecial(self: Keysym) bool {
+        return self.raw == 0 || self.ctrl_key;
+    }
+    
+    pub fn isPrint(self: Keysym) bool {
+        return !isSpecial && std.ascii.isPrint(self.raw);
     }
 };
 
@@ -78,16 +86,16 @@ const TextHandler = struct {
     
     fn readLines(self: *TextHandler, E: *Editor) !void {
         var file = self.file.?;
-        var line = std.ArrayListUnmanaged(u8) {};
-        var buf: [512]u8 = undefined;
         const allocr = E.allocr();
+        var line = try std.ArrayListUnmanaged(u8).initCapacity(allocr, 1);
+        var buf: [512]u8 = undefined;
         while (true) {
             const nread = try file.read(&buf);
             for (0..nread) |i| {
                 if (buf[i] == '\n') {
                     try line.append(allocr, 0);
                     try self.lines.append(allocr, line);
-                    line = std.ArrayListUnmanaged(u8) {}; // moved to self.lines
+                    line = try std.ArrayListUnmanaged(u8).initCapacity(allocr, 1); // moved to self.lines
                 } else {
                     try line.append(allocr, buf[i]);
                 }
@@ -103,9 +111,9 @@ const TextHandler = struct {
     
     fn draw(self: *TextHandler, E: *Editor) !void {
         var row: u32 = 0;
-        const cursorRow: u32 = self.cursor.row - self.scroll.row;
+        const cursor_row: u32 = self.cursor.row - self.scroll.row;
         for (self.lines.items[self.scroll.row..]) |line| {
-            if (row != cursorRow) {
+            if (row != cursor_row) {
                 try E.renderLine(line.items, row, 0);
             } else {
                 try E.renderLine(line.items, row, self.scroll.col);
@@ -192,6 +200,27 @@ const TextHandler = struct {
             E.needs_redraw = true;
         }
         try self.updateCursorPos(E);
+    }
+    
+    pub fn syncScrollToNewDim(self: *TextHandler, E: *Editor) void {
+        if ((self.scroll.col + self.cursor.col) > E.width) {
+            if (E.width > self.cursor.col) {
+                self.scroll.col = E.width - self.cursor.col + 1;
+            } else {
+                self.scroll.col = self.cursor.col - E.width + 1;
+            }
+        } else {
+            self.scroll.col = 0;
+        }
+        if ((self.scroll.row + self.cursor.row) > E.height) {
+            if (E.height > self.cursor.row) {
+                self.scroll.row = E.height - self.cursor.row + 1;
+            } else {
+                self.scroll.row = self.cursor.row - E.height + 1;
+            }
+        } else { 
+            self.scroll.row = 0;
+        }
     }
 };
 
@@ -288,10 +317,10 @@ const Editor = struct {
             if (self.inr.readByte() catch null) |possibleEsc| {
                 if (possibleEsc == '[') {
                     switch (self.inr.readByte() catch 0) {
-                        'A' => { return Keysym.init_special(Keysym.UP); },
-                        'B' => { return Keysym.init_special(Keysym.DOWN); },
-                        'C' => { return Keysym.init_special(Keysym.RIGHT); },
-                        'D' => { return Keysym.init_special(Keysym.LEFT); },
+                        'A' => { return Keysym.initSpecial(Keysym.UP); },
+                        'B' => { return Keysym.initSpecial(Keysym.DOWN); },
+                        'C' => { return Keysym.initSpecial(Keysym.RIGHT); },
+                        'D' => { return Keysym.initSpecial(Keysym.LEFT); },
                         else => |byte1| {
                             // unknown escape sequence, empty the buffer
                             std.debug.print("{}", .{byte1});
@@ -325,7 +354,11 @@ const Editor = struct {
     }
     
     fn moveCursor(self: *Editor, pos: TextPos) !void {
-        return self.writeFmt("\x1b[{d};{d}H", .{pos.row + 1, pos.col + 1});
+        var row = pos.row;
+        if (row > self.height - 1) { row = self.height - 1; }
+        var col = pos.col;
+        if (col > self.width - 1) { col = self.width - 1; }
+        return self.writeFmt("\x1b[{d};{d}H", .{row + 1, col + 1});
     }
     
     fn refreshScreen(self: *Editor) !void {
@@ -354,11 +387,16 @@ const Editor = struct {
     
     fn updateWinSize(self: *Editor) !void {
         if (builtin.target.os.tag == .linux) {
+            const oldw = self.width;
+            const oldh = self.height;
             var wsz: std.os.linux.winsize = undefined;
             const rc = std.os.linux.ioctl(self.in.handle, std.os.linux.T.IOCGWINSZ, @intFromPtr(&wsz));
             if (std.os.linux.E.init(rc) == .SUCCESS) {
                 self.height = wsz.ws_row;
                 self.width = wsz.ws_col;
+            }
+            if (oldw != 0 and oldh != 0) {
+                self.text_handler.syncScrollToNewDim(self);
             }
             self.needs_redraw = true;
         }
@@ -390,6 +428,9 @@ const Editor = struct {
                         // TODO
                     }
                     else if (keysym.ctrl_key and keysym.key == 'o') {
+                        // TODO
+                    }
+                    else if (keysym.isPrint()) {
                         // TODO
                     }
                 },
