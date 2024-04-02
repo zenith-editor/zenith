@@ -6,12 +6,18 @@ const builtin = @import("builtin");
 const Keysym = struct {
     raw: u8,
     key: u8,
-    ctrl_key: bool,
+    ctrl_key: bool = false,
     
     pub const ESC = std.ascii.control_code.esc;
     
+    pub const RAW_SPECIAL: u8 = 0;
+    pub const UP: u8 = 0;
+    pub const DOWN: u8 = 1;
+    pub const RIGHT: u8 = 2;
+    pub const LEFT: u8 = 3;
+    
     pub fn init(raw: u8) Keysym {
-        if (raw <= std.ascii.control_code.us) {
+        if (raw < std.ascii.control_code.us) {
             return Keysym {
                 .raw = raw,
                 .key = raw | 0b1100000,
@@ -21,17 +27,23 @@ const Keysym = struct {
             return Keysym {
                 .raw = raw,
                 .key = raw,
-                .ctrl_key = false,
             };
         }
+    }
+    
+    pub fn init_special(key: u8) Keysym {
+        return Keysym {
+            .raw = 0,
+            .key = key,
+        };
     }
 };
 
 // text handling
 
 const TextPos = struct {
-    row: i32,
-    col: i32,
+    row: u32 = 0,
+    col: u32 = 0,
 };
 
 const TextHandler = struct {
@@ -39,11 +51,15 @@ const TextHandler = struct {
     
     file: ?std.fs.File,
     lines: LineList,
+    cursor: TextPos,
+    scroll_y: u32,
     
     pub fn init() TextHandler {
         return TextHandler {
             .file = null,
             .lines = LineList {},
+            .cursor = TextPos {},
+            .scroll_y = 0,
         };
     }
     
@@ -51,6 +67,8 @@ const TextHandler = struct {
         if (self.file != null) {
             self.file.?.close();
         }
+        self.cursor = TextPos {};
+        self.scroll_y = 0;
         self.file = file;
         self.lines.clearAndFree(E.allocr());
         try self.readLines(E);
@@ -77,6 +95,17 @@ const TextHandler = struct {
         }
         // line is moved, so no need to free
     }
+    
+    fn draw(self: *TextHandler, E: *Editor) !void {
+        var row: u32 = 0;
+        for (self.lines.items[self.scroll_y..]) |line| {
+            try E.renderLine(line.items, row);
+            row += 1;
+            if (row == E.height) {
+                break;
+            }
+        }
+    }
 };
 
 // editor
@@ -99,8 +128,9 @@ const Editor = struct {
     state: State,
     text_handler: TextHandler,
     alloc_gpa: std.heap.GeneralPurposeAllocator(.{}),
-    width: i32,
-    height: i32,
+    width: u32,
+    height: u32,
+    buffered_byte: u8,
     
     pub fn init() Editor {
         const stdin = std.io.getStdIn();
@@ -117,6 +147,7 @@ const Editor = struct {
             .alloc_gpa = std.heap.GeneralPurposeAllocator(.{}){},
             .width = 0,
             .height = 0,
+            .buffered_byte = 0,
         };
     }
     
@@ -160,7 +191,36 @@ const Editor = struct {
     // console input
     
     fn readKey(self: *Editor) ?Keysym {
+        if (self.buffered_byte != 0) {
+            const b = self.buffered_byte;
+            self.buffered_byte = 0;
+            return Keysym.init(b);
+        }
         const raw = self.inr.readByte() catch return null;
+        if (raw == Keysym.ESC) {
+            if (self.inr.readByte() catch null) |possibleEsc| {
+                if (possibleEsc == '[') {
+                    switch (self.inr.readByte() catch 0) {
+                        'A' => { return Keysym.init_special(Keysym.UP); },
+                        'B' => { return Keysym.init_special(Keysym.DOWN); },
+                        'C' => { return Keysym.init_special(Keysym.RIGHT); },
+                        'D' => { return Keysym.init_special(Keysym.LEFT); },
+                        else => |byte1| {
+                            // unknown escape sequence, empty the buffer
+                            std.debug.print("{}", .{byte1});
+//                             _ = byte1;
+                            while (true) {
+                                const byte2 = self.inr.readByte() catch break;
+                                std.debug.print("{}", .{byte2});
+//                                 _ = byte2;
+                            }
+                        }
+                    }
+                } else {
+                    self.buffered_byte = possibleEsc;
+                }
+            }
+        }
         return Keysym.init(raw);
     }
     
@@ -178,12 +238,29 @@ const Editor = struct {
     }
     
     fn moveCursor(self: *Editor, pos: TextPos) !void {
-        return self.writeFmt("\x1b[{d};{d}H", pos.row, pos.col);
+        return self.writeFmt("\x1b[{d};{d}H", .{pos.row, pos.col});
     }
     
     fn refreshScreen(self: *Editor) !void {
         try self.writeAll(Editor.CLEAR_SCREEN);
         try self.writeAll(Editor.RESET_POS);
+    }
+    
+    // high level output
+    
+    pub fn renderLine(self: *Editor, line: []const u8, row: u32) !void {
+        try self.moveCursor(TextPos {.row = row, .col = 0});
+        var col: u32 = 0;
+        for (line) |byte| {
+            if (col == self.width) {
+                return;
+            }
+            if (std.ascii.isControl(byte)) {
+                continue;
+            }
+            try self.outw.writeByte(byte);
+            col += 1;
+        }
     }
     
     // console misc
@@ -196,6 +273,7 @@ const Editor = struct {
                 self.height = wsz.ws_row;
                 self.width = wsz.ws_col;
             }
+            self.needs_redraw = true;
         }
     }
     
@@ -229,7 +307,11 @@ const Editor = struct {
     // handle output
     
     fn handleOutput(self: *Editor) !void {
-        _=self;
+        if (!self.needs_redraw)
+            return;
+        try self.refreshScreen();
+        try self.text_handler.draw(self);
+        self.needs_redraw = false;
     }
     
     // tick
@@ -238,14 +320,12 @@ const Editor = struct {
     
     pub fn run(self: *Editor) !void {
         try self.updateWinSize();
-        std.debug.print("w={} h={}\r\n", .{self.width, self.height});
         try self.enableRawMode();
         self.needs_redraw = true;
         self.state = State.INIT;
         while (self.state != State.quit) {
             if (resized) {
                 try self.updateWinSize();
-                std.debug.print("w={} h={}\r\n", .{self.width, self.height});
                 resized = false;
             }
             try self.handleInput();
