@@ -47,19 +47,21 @@ const TextPos = struct {
 };
 
 const TextHandler = struct {
+    /// List of null-terminated strings representing lines.
+    /// the final null-byte represents padding for appending
     const LineList = std.ArrayListUnmanaged(std.ArrayListUnmanaged(u8));
     
     file: ?std.fs.File,
     lines: LineList,
     cursor: TextPos,
-    scroll_y: u32,
+    scroll: TextPos,
     
     pub fn init() TextHandler {
         return TextHandler {
             .file = null,
             .lines = LineList {},
             .cursor = TextPos {},
-            .scroll_y = 0,
+            .scroll = TextPos {},
         };
     }
     
@@ -68,7 +70,7 @@ const TextHandler = struct {
             self.file.?.close();
         }
         self.cursor = TextPos {};
-        self.scroll_y = 0;
+        self.scroll = TextPos {};
         self.file = file;
         self.lines.clearAndFree(E.allocr());
         try self.readLines(E);
@@ -78,18 +80,21 @@ const TextHandler = struct {
         var file = self.file.?;
         var line = std.ArrayListUnmanaged(u8) {};
         var buf: [512]u8 = undefined;
+        const allocr = E.allocr();
         while (true) {
             const nread = try file.read(&buf);
             for (0..nread) |i| {
                 if (buf[i] == '\n') {
-                    try self.lines.append(E.allocr(), line);
+                    try line.append(allocr, 0);
+                    try self.lines.append(allocr, line);
                     line = std.ArrayListUnmanaged(u8) {}; // moved to self.lines
                 } else {
-                    try line.append(E.allocr(), buf[i]);
+                    try line.append(allocr, buf[i]);
                 }
             }
             if (nread == 0) {
-                try self.lines.append(E.allocr(), line);
+                try line.append(allocr, 0);
+                try self.lines.append(allocr, line);
                 break;
             }
         }
@@ -98,13 +103,95 @@ const TextHandler = struct {
     
     fn draw(self: *TextHandler, E: *Editor) !void {
         var row: u32 = 0;
-        for (self.lines.items[self.scroll_y..]) |line| {
-            try E.renderLine(line.items, row);
+        const cursorRow: u32 = self.cursor.row - self.scroll.row;
+        for (self.lines.items[self.scroll.row..]) |line| {
+            if (row != cursorRow) {
+                try E.renderLine(line.items, row, 0);
+            } else {
+                try E.renderLine(line.items, row, self.scroll.col);
+            }
             row += 1;
             if (row == E.height) {
                 break;
             }
         }
+        try self.updateCursorPos(E);
+    }
+    
+    // cursor
+    
+    fn updateCursorPos(self: *TextHandler, E: *Editor) !void {
+        try E.moveCursor(TextPos {
+            .row = self.cursor.row - self.scroll.row,
+            .col = self.cursor.col - self.scroll.col,
+        });
+    }
+    
+    fn syncColumnAfterCursor(self: *TextHandler, E: *Editor) void {
+        const rowlen: u32 = @intCast(self.lines.items[self.cursor.row].items.len);
+        if (self.cursor.col <= rowlen - 1) {
+            return;
+        }
+        self.cursor.col = rowlen - 1;
+        const oldScrollCol = self.scroll.col;
+        if (self.cursor.col > E.width) {
+            self.scroll.col = self.cursor.col - E.width;
+        } else {
+            self.scroll.col = 0;
+        }
+        if (oldScrollCol != self.scroll.col) {
+            E.needs_redraw = true;
+        }
+    }
+    
+    pub fn goUp(self: *TextHandler, E: *Editor) !void {
+        if (self.cursor.row == 0) {
+            return;
+        }
+        self.cursor.row -= 1;
+        self.syncColumnAfterCursor(E);
+        if (self.cursor.row < self.scroll.row) {
+            self.scroll.row -= 1;
+            E.needs_redraw = true;
+        }
+        try self.updateCursorPos(E);
+    }
+    
+    pub fn goDown(self: *TextHandler, E: *Editor) !void {
+        if (self.cursor.row == self.lines.items.len - 1) {
+            return;
+        }
+        self.cursor.row += 1;
+        self.syncColumnAfterCursor(E);
+        if ((self.cursor.row - self.scroll.row) >= E.height) {
+            self.scroll.row += 1;
+            E.needs_redraw = true;
+        }
+        try self.updateCursorPos(E);
+    }
+    
+    pub fn goLeft(self: *TextHandler, E: *Editor) !void {
+        if (self.cursor.col == 0) {
+            return;
+        }
+        self.cursor.col -= 1;
+        if (self.cursor.col < self.scroll.col) {
+            self.scroll.col -= 1;
+            E.needs_redraw = true;
+        }
+        try self.updateCursorPos(E);
+    }
+    
+    pub fn goRight(self: *TextHandler, E: *Editor) !void {
+        if (self.cursor.col == self.lines.items[self.cursor.row].items.len - 1) {
+            return;
+        }
+        self.cursor.col += 1;
+        if ((self.cursor.col - self.scroll.col) >= E.width) {
+            self.scroll.col += 1;
+            E.needs_redraw = true;
+        }
+        try self.updateCursorPos(E);
     }
 };
 
@@ -238,7 +325,7 @@ const Editor = struct {
     }
     
     fn moveCursor(self: *Editor, pos: TextPos) !void {
-        return self.writeFmt("\x1b[{d};{d}H", .{pos.row, pos.col});
+        return self.writeFmt("\x1b[{d};{d}H", .{pos.row + 1, pos.col + 1});
     }
     
     fn refreshScreen(self: *Editor) !void {
@@ -248,10 +335,10 @@ const Editor = struct {
     
     // high level output
     
-    pub fn renderLine(self: *Editor, line: []const u8, row: u32) !void {
+    pub fn renderLine(self: *Editor, line: []const u8, row: u32, colOffset: u32) !void {
         try self.moveCursor(TextPos {.row = row, .col = 0});
         var col: u32 = 0;
-        for (line) |byte| {
+        for (line[colOffset..]) |byte| {
             if (col == self.width) {
                 return;
             }
@@ -281,10 +368,22 @@ const Editor = struct {
     
     fn handleInput(self: *Editor) !void {
         if (self.readKey()) |keysym| {
-            std.debug.print("{}\r\n", .{keysym});
+//             std.debug.print("{}\r\n", .{keysym});
             switch(self.state) {
                 State.text => {
-                    if (keysym.ctrl_key and keysym.key == 'q') {
+                    if (keysym.raw == 0 and keysym.key == Keysym.UP) {
+                        try self.text_handler.goUp(self);
+                    }
+                    else if (keysym.raw == 0 and keysym.key == Keysym.DOWN) {
+                        try self.text_handler.goDown(self);
+                    }
+                    else if (keysym.raw == 0 and keysym.key == Keysym.LEFT) {
+                        try self.text_handler.goLeft(self);
+                    }
+                    else if (keysym.raw == 0 and keysym.key == Keysym.RIGHT) {
+                        try self.text_handler.goRight(self);
+                    }
+                    else if (keysym.ctrl_key and keysym.key == 'q') {
                         self.state = State.quit;
                     }
                     else if (keysym.ctrl_key and keysym.key == 's') {
