@@ -1,5 +1,5 @@
 const std = @import("std");
-const print = @import("std").debug.print;
+const builtin = @import("builtin");
 
 // keyboard event
 
@@ -99,6 +99,8 @@ const Editor = struct {
     state: State,
     text_handler: TextHandler,
     alloc_gpa: std.heap.GeneralPurposeAllocator(.{}),
+    width: i32,
+    height: i32,
     
     pub fn init() Editor {
         const stdin = std.io.getStdIn();
@@ -113,6 +115,8 @@ const Editor = struct {
             .state = State.INIT,
             .text_handler = TextHandler.init(),
             .alloc_gpa = std.heap.GeneralPurposeAllocator(.{}){},
+            .width = 0,
+            .height = 0,
         };
     }
     
@@ -182,6 +186,19 @@ const Editor = struct {
         try self.writeAll(Editor.RESET_POS);
     }
     
+    // console misc
+    
+    fn updateWinSize(self: *Editor) !void {
+        if (builtin.target.os.tag == .linux) {
+            var wsz: std.os.linux.winsize = undefined;
+            const rc = std.os.linux.ioctl(self.in.handle, std.os.linux.T.IOCGWINSZ, @intFromPtr(&wsz));
+            if (std.os.linux.E.init(rc) == .SUCCESS) {
+                self.height = wsz.ws_row;
+                self.width = wsz.ws_col;
+            }
+        }
+    }
+    
     // handle input
     
     fn handleInput(self: *Editor) !void {
@@ -220,10 +237,17 @@ const Editor = struct {
     const REFRESH_RATE = 16700000;
     
     pub fn run(self: *Editor) !void {
+        try self.updateWinSize();
+        std.debug.print("w={} h={}\r\n", .{self.width, self.height});
         try self.enableRawMode();
         self.needs_redraw = true;
         self.state = State.INIT;
         while (self.state != State.quit) {
+            if (resized) {
+                try self.updateWinSize();
+                std.debug.print("w={} h={}\r\n", .{self.width, self.height});
+                resized = false;
+            }
             try self.handleInput();
             try self.handleOutput();
             std.time.sleep(Editor.REFRESH_RATE);
@@ -232,6 +256,13 @@ const Editor = struct {
     }
     
 };
+
+// signal handlers
+var resized = false;
+fn handle_sigwinch(signal: c_int) callconv(.C) void {
+    _ = signal;
+    resized = true;
+}
 
 pub fn main() !void {
     var opened_file: ?std.fs.File = null;
@@ -254,6 +285,15 @@ pub fn main() !void {
                 }
             );
         }
+    }
+    if (builtin.target.os.tag == .linux) {
+        const sigaction = std.os.linux.Sigaction {
+            .handler = .{ .handler = handle_sigwinch, },
+            .mask = std.os.linux.empty_sigset,
+            .flags = 0,
+        };
+        _ = std.os.linux.sigaction(std.os.linux.SIG.WINCH, &sigaction, null);
+        // TODO log if sigaction fails
     }
     var E = Editor.init();
     if (opened_file != null) {
