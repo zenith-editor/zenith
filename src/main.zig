@@ -99,14 +99,17 @@ const TextHandler = struct {
       return;
     }
     const file: std.fs.File = self.file.?;
+    try file.seekTo(0);
     try file.setEndPos(0);
     const writer: std.fs.File.Writer = file.writer();
     if (self.lines.items.len > 0) {
-      try writer.writeAll(self.lines.items[0].items);
+//       std.debug.print("{s}", .{self.lines.items[0].items}); 
+      const firstline: *const Line = &self.lines.items[0];
+      try writer.writeAll(firstline.items[0..(firstline.items.len-1)]);
       if (self.lines.items.len > 1) {
         for (self.lines.items[1..]) |line| {
           try writer.writeByte('\n');
-          try writer.writeAll(line.items);
+          try writer.writeAll(line.items[0..(line.items.len-1)]);
         }
       }
     }
@@ -283,6 +286,9 @@ const TextHandler = struct {
     
     self.cursor.row += 1;
     self.cursor.col = 0;
+    if ((self.scroll.row + self.cursor.row) > E.textHeight()) {
+      self.scroll.row += 1;
+    }
     E.needs_redraw = true;
   }
   
@@ -422,7 +428,7 @@ const Editor = struct {
   
   // console input
   
-  fn flushConsoleInput(self: *Editor) {
+  fn flushConsoleInput(self: *Editor) void {
     while (true) {
       const byte = self.inr.readByte() catch break;
       std.debug.print("[{}]", .{byte});
@@ -638,6 +644,7 @@ const Editor = struct {
       }
       std.time.sleep(Editor.REFRESH_RATE);
     }
+    try self.refreshScreen();
     try self.disableRawMode();
   }
   
