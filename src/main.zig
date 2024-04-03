@@ -10,6 +10,7 @@ const Keysym = struct {
     
     const ESC: u8 = std.ascii.control_code.esc;
     const BACKSPACE: u8 = std.ascii.control_code.del;
+    const NEWLINE: u8 = std.ascii.control_code.cr;
     
     const RAW_SPECIAL: u8 = 0;
     const UP: u8 = 0;
@@ -244,6 +245,42 @@ const TextHandler = struct {
         E.needs_redraw = true;
         self.goRight(E);
     }
+    
+    fn insertNewline(self: *TextHandler, E: *Editor) !void {
+        const allocr: std.mem.Allocator = E.allocr();
+        const cutpoint: usize = @intCast(self.cursor.col);
+        const curline: *Line = &self.lines.items[self.cursor.row];
+        
+        std.debug.assert(cutpoint < curline.items.len);
+        
+        if (cutpoint < curline.items.len - 1) {
+            // cutpoint lies inside text portion
+            // newline_len includes sentinel value
+            const newline_len: usize = curline.items.len - cutpoint;
+            var newline: Line = .{};
+            try newline.resize(allocr, newline_len);
+            @memcpy(newline.items[0..newline_len], curline.items[cutpoint..]);
+            std.debug.print("!{s}\n", .{curline.items[cutpoint..]});
+            newline.items[newline_len - 1] = 0;
+            // cut from the current line
+            curline.shrinkAndFree(allocr, cutpoint + 1);
+            curline.items[cutpoint] = 0;
+            try self.lines.insert(allocr, self.cursor.row + 1, newline);
+            // newline is moved
+        } else {
+            // cutpoint is at the end of text portion
+            var newline: Line = try Line.initCapacity(allocr, 1);
+            try newline.append(allocr, 0);
+            try self.lines.insert(allocr, self.cursor.row + 1, newline);
+            // newline is moved
+        }
+        
+        self.cursor.row += 1;
+        self.cursor.col = 0;
+        E.needs_redraw = true;
+    }
+    
+    // deletion
     
     fn deleteChar(self: *TextHandler, E: *Editor) !void {
         var row: *Line = &self.lines.items[self.cursor.row];
@@ -486,7 +523,7 @@ const Editor = struct {
     
     fn handleInput(self: *Editor) !void {
         if (self.readKey()) |keysym| {
-//             std.debug.print("{}\r\n", .{keysym});
+            std.debug.print("{}\n", .{keysym});
             switch(self.state) {
                 State.text => {
                     if (keysym.raw == 0 and keysym.key == Keysym.UP) {
@@ -518,6 +555,9 @@ const Editor = struct {
                     }
                     else if (keysym.raw == Keysym.BACKSPACE) {
                         try self.text_handler.deleteChar(self);
+                    }
+                    else if (keysym.raw == Keysym.NEWLINE) {
+                        try self.text_handler.insertNewline(self);
                     }
                     else if (keysym.isPrint()) {
                         try self.text_handler.insertChar(self, keysym.key);
