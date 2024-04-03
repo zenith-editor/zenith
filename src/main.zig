@@ -472,6 +472,7 @@ const Editor = struct {
   // console output
   
   const CLEAR_SCREEN = "\x1b[2J";
+  const CLEAR_LINE = "\x1b[2K";
   const RESET_POS = "\x1b[H";
   
   fn writeAll(self: *Editor, bytes: []const u8) !void {
@@ -501,41 +502,6 @@ const Editor = struct {
   fn refreshScreen(self: *Editor) !void {
     try self.writeAll(Editor.CLEAR_SCREEN);
     try self.writeAll(Editor.RESET_POS);
-  }
-  
-  // high level output
-  
-  fn renderText(self: *Editor) !void {
-    const text_handler: *const TextHandler = &self.text_handler;
-    var row: u32 = 0;
-    const cursor_row: u32 = text_handler.cursor.row - text_handler.scroll.row;
-    for (text_handler.lines.items[text_handler.scroll.row..]) |line| {
-      if (row != cursor_row) {
-        try self.renderLine(line.items, row, 0);
-      } else {
-        try self.renderLine(line.items, row, text_handler.scroll.col);
-      }
-      row += 1;
-      if (row == self.textHeight()) {
-        break;
-      }
-    }
-    self.needs_update_cursor = true;
-  }
-  
-  fn renderLine(self: *Editor, line: []const u8, row: u32, colOffset: u32) !void {
-    try self.moveCursor(TextPos {.row = row, .col = 0});
-    var col: u32 = 0;
-    for (line[colOffset..line.len-1]) |byte| {
-      if (col == self.w_width) {
-        return;
-      }
-      if (std.ascii.isControl(byte)) {
-        continue;
-      }
-      try self.outw.writeByte(byte);
-      col += 1;
-    }
   }
   
   // console dims
@@ -618,6 +584,46 @@ const Editor = struct {
   
   // handle output
   
+  fn renderText(self: *Editor) !void {
+    const text_handler: *const TextHandler = &self.text_handler;
+    var row: u32 = 0;
+    const cursor_row: u32 = text_handler.cursor.row - text_handler.scroll.row;
+    for (text_handler.lines.items[text_handler.scroll.row..]) |line| {
+      if (row != cursor_row) {
+        try self.renderLine(line.items, row, 0);
+      } else {
+        try self.renderLine(line.items, row, text_handler.scroll.col);
+      }
+      row += 1;
+      if (row == self.textHeight()) {
+        break;
+      }
+    }
+    self.needs_update_cursor = true;
+  }
+  
+  fn renderLine(self: *Editor, line: []const u8, row: u32, colOffset: u32) !void {
+    try self.moveCursor(TextPos {.row = row, .col = 0});
+    var col: u32 = 0;
+    for (line[colOffset..line.len-1]) |byte| {
+      if (col == self.w_width) {
+        return;
+      }
+      if (std.ascii.isControl(byte)) {
+        continue;
+      }
+      try self.outw.writeByte(byte);
+      col += 1;
+    }
+  }
+  
+  fn renderStatus(self: *Editor) !void {
+    try self.moveCursor(TextPos {.row = self.textHeight(), .col = 0});
+    const text_handler: *const TextHandler = &self.text_handler;
+    try self.writeAll(CLEAR_LINE);
+    try self.writeFmt(" {}:{}", .{text_handler.cursor.row+1, text_handler.cursor.col+1});
+  }
+  
   fn handleOutput(self: *Editor) !void {
     if (!self.needs_redraw)
       return;
@@ -643,6 +649,7 @@ const Editor = struct {
       try self.handleInput();
       try self.handleOutput();
       if (self.needs_update_cursor) {
+        try self.renderStatus();
         try self.updateCursorPos();
         self.needs_update_cursor = false;
       }
