@@ -303,7 +303,6 @@ const TextHandler = struct {
       // remove last character before the null terminator
       _ = row.orderedRemove(row.items.len - 2);
     }
-    std.debug.print("{s}\n{}",.{row.items,row});
     E.needs_redraw = true;
     self.goLeft(E);
   }
