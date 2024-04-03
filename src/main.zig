@@ -61,7 +61,7 @@ const TextHandler = struct {
     /// List of null-terminated strings representing lines.
     /// the final null-byte represents padding for appending
     const Line = std.ArrayListUnmanaged(u8);
-    const LineList = std.ArrayListUnmanaged(std.ArrayListUnmanaged(u8));
+    const LineList = std.ArrayListUnmanaged(Line);
     
     file: ?std.fs.File,
     lines: LineList,
@@ -248,8 +248,8 @@ const TextHandler = struct {
     fn deleteChar(self: *TextHandler, E: *Editor) !void {
         var row: *Line = &self.lines.items[self.cursor.row];
         if (row.items.len == 1) {
-            // TODO empty line
-            return;
+            // empty line, so remove it
+            return self.deleteCurrentLine(E);
         } else if (self.cursor.col == 0) {
             // TODO placing cursor at the first column removes the line
             return;
@@ -263,6 +263,16 @@ const TextHandler = struct {
         std.debug.print("{s}\n{}",.{row.items,row});
         E.needs_redraw = true;
         try self.goLeft(E);
+    }
+    
+    fn deleteCurrentLine(self: *TextHandler, E: *Editor) !void {
+        if (self.cursor.row == 0) {
+            return;
+        }
+        var row: Line = self.lines.orderedRemove(self.cursor.row);
+        row.deinit(E.allocr());
+        self.cursor.row -= 1;
+        try self.goTail(E);
     }
 };
 
