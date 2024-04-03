@@ -178,7 +178,7 @@ const TextHandler = struct {
     }
     self.cursor.row += 1;
     self.syncColumnAfterCursor(E);
-    if ((self.cursor.row - self.scroll.row) >= E.textHeight()) {
+    if ((self.cursor.row + self.scroll.row) >= E.textHeight()) {
       self.scroll.row += 1;
       E.needs_redraw = true;
     }
@@ -202,7 +202,7 @@ const TextHandler = struct {
       return;
     }
     self.cursor.col += 1;
-    if ((self.cursor.col - self.scroll.col) >= E.w_width) {
+    if ((self.cursor.col + self.scroll.col) >= E.w_width) {
       self.scroll.col += 1;
       E.needs_redraw = true;
     }
@@ -222,11 +222,11 @@ const TextHandler = struct {
     const line: *Line = &self.lines.items[self.cursor.row];
     const linelen: u32 = @intCast(line.items.len);
     self.cursor.col = linelen - 1;
-    self.syncScrollToNewDim(E);
+    self.syncColumnScroll(E);
     E.needs_redraw = true;
   }
   
-  fn syncScrollToNewDim(self: *TextHandler, E: *Editor) void {
+  fn syncColumnScroll(self: *TextHandler, E: *Editor) void {
     if ((self.scroll.col + self.cursor.col) > E.w_width) {
       if (E.w_width > self.cursor.col) {
         self.scroll.col = E.w_width - self.cursor.col + 1;
@@ -236,6 +236,9 @@ const TextHandler = struct {
     } else {
       self.scroll.col = 0;
     }
+  }
+  
+  fn syncRowScroll(self: *TextHandler, E: *Editor) void {
     if ((self.scroll.row + self.cursor.row) > E.textHeight()) {
       if (E.textHeight() > self.cursor.row) {
         self.scroll.row = E.textHeight() - self.cursor.row + 1;
@@ -548,7 +551,8 @@ const Editor = struct {
         self.w_width = wsz.ws_col;
       }
       if (oldw != 0 and oldh != 0) {
-        self.text_handler.syncScrollToNewDim(self);
+        self.text_handler.syncColumnScroll(self);
+        self.text_handler.syncRowScroll(self);
       }
       self.needs_redraw = true;
     }
