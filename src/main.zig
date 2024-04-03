@@ -16,6 +16,8 @@ const Keysym = struct {
     pub const DOWN: u8 = 1;
     pub const RIGHT: u8 = 2;
     pub const LEFT: u8 = 3;
+    pub const HOME: u8 = 4;
+    pub const END: u8 = 5;
     
     pub fn init(raw: u8) Keysym {
         if (raw < std.ascii.control_code.us) {
@@ -125,17 +127,10 @@ const TextHandler = struct {
                 break;
             }
         }
-        try self.updateCursorPos(E);
+        E.needs_update_cursor = true;
     }
     
     // cursor
-    
-    fn updateCursorPos(self: *TextHandler, E: *Editor) !void {
-        try E.moveCursor(TextPos {
-            .row = self.cursor.row - self.scroll.row,
-            .col = self.cursor.col - self.scroll.col,
-        });
-    }
     
     fn syncColumnAfterCursor(self: *TextHandler, E: *Editor) void {
         const rowlen: u32 = @intCast(self.lines.items[self.cursor.row].items.len);
@@ -164,7 +159,7 @@ const TextHandler = struct {
             self.scroll.row -= 1;
             E.needs_redraw = true;
         }
-        try self.updateCursorPos(E);
+        E.needs_update_cursor = true;
     }
     
     pub fn goDown(self: *TextHandler, E: *Editor) !void {
@@ -177,7 +172,7 @@ const TextHandler = struct {
             self.scroll.row += 1;
             E.needs_redraw = true;
         }
-        try self.updateCursorPos(E);
+        E.needs_update_cursor = true;
     }
     
     pub fn goLeft(self: *TextHandler, E: *Editor) !void {
@@ -189,7 +184,7 @@ const TextHandler = struct {
             self.scroll.col -= 1;
             E.needs_redraw = true;
         }
-        try self.updateCursorPos(E);
+        E.needs_update_cursor = true;
     }
     
     pub fn goRight(self: *TextHandler, E: *Editor) !void {
@@ -201,7 +196,24 @@ const TextHandler = struct {
             self.scroll.col += 1;
             E.needs_redraw = true;
         }
-        try self.updateCursorPos(E);
+        E.needs_update_cursor = true;
+    }
+    
+    pub fn goHead(self: *TextHandler, E: *Editor) !void {
+        self.cursor.col = 0;
+        if (self.scroll.col != 0) {
+            E.needs_redraw = true;
+        }
+        self.scroll.col = 0;
+        E.needs_update_cursor = true;
+    }
+    
+    pub fn goTail(self: *TextHandler, E: *Editor) !void {
+        const line: *Line = &self.lines.items[self.cursor.row];
+        const linelen: u32 = @intCast(line.items.len);
+        self.cursor.col = linelen - 1;
+        self.syncScrollToNewDim(E);
+        E.needs_redraw = true;
     }
     
     pub fn syncScrollToNewDim(self: *TextHandler, E: *Editor) void {
@@ -271,6 +283,7 @@ const Editor = struct {
     outw: std.fs.File.Writer,
     orig_termios: ?std.posix.termios,
     needs_redraw: bool,
+    needs_update_cursor: bool,
     state: State,
     text_handler: TextHandler,
     alloc_gpa: std.heap.GeneralPurposeAllocator(.{}),
@@ -288,6 +301,7 @@ const Editor = struct {
             .outw = stdout.writer(),
             .orig_termios = null,
             .needs_redraw = true,
+            .needs_update_cursor = true,
             .state = State.INIT,
             .text_handler = TextHandler.init(),
             .alloc_gpa = .{},
@@ -351,6 +365,8 @@ const Editor = struct {
                         'B' => { return Keysym.initSpecial(Keysym.DOWN); },
                         'C' => { return Keysym.initSpecial(Keysym.RIGHT); },
                         'D' => { return Keysym.initSpecial(Keysym.LEFT); },
+                        'F' => { return Keysym.initSpecial(Keysym.END); },
+                        'H' => { return Keysym.initSpecial(Keysym.HOME); },
                         else => |byte1| {
                             // unknown escape sequence, empty the buffer
                             std.debug.print("{}", .{byte1});
@@ -389,6 +405,14 @@ const Editor = struct {
         var col = pos.col;
         if (col > self.width - 1) { col = self.width - 1; }
         return self.writeFmt("\x1b[{d};{d}H", .{row + 1, col + 1});
+    }
+    
+    fn updateCursorPos(self: *Editor) !void {
+        const text_handler: *TextHandler = &self.text_handler;
+        try self.moveCursor(TextPos {
+            .row = text_handler.cursor.row - text_handler.scroll.row,
+            .col = text_handler.cursor.col - text_handler.scroll.col,
+        });
     }
     
     fn refreshScreen(self: *Editor) !void {
@@ -451,6 +475,12 @@ const Editor = struct {
                     else if (keysym.raw == 0 and keysym.key == Keysym.RIGHT) {
                         try self.text_handler.goRight(self);
                     }
+                    else if (keysym.raw == 0 and keysym.key == Keysym.HOME) {
+                        try self.text_handler.goHead(self);
+                    }
+                    else if (keysym.raw == 0 and keysym.key == Keysym.END) {
+                        try self.text_handler.goTail(self);
+                    }
                     else if (keysym.ctrl_key and keysym.key == 'q') {
                         self.state = State.quit;
                     }
@@ -503,6 +533,10 @@ const Editor = struct {
             }
             try self.handleInput();
             try self.handleOutput();
+            if (self.needs_update_cursor) {
+                try self.updateCursorPos();
+                self.needs_update_cursor = false;
+            }
             std.time.sleep(Editor.REFRESH_RATE);
         }
         try self.disableRawMode();
