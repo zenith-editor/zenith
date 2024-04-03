@@ -69,12 +69,16 @@ const TextHandler = struct {
   cursor: TextPos,
   scroll: TextPos,
   
-  fn init() TextHandler {
+  fn init(allocr: std.mem.Allocator) !TextHandler {
+    var lines = try LineList.initCapacity(allocr, 1);
+    var firstline = try Line.initCapacity(allocr, 1);
+    try firstline.append(allocr, 0);
+    try lines.append(allocr, firstline);
     return TextHandler {
       .file = null,
-      .lines = LineList {},
-      .cursor = TextPos {},
-      .scroll = TextPos {},
+      .lines = lines,
+      .cursor = .{},
+      .scroll = .{},
     };
   }
   
@@ -373,9 +377,11 @@ const Editor = struct {
   height: u32,
   buffered_byte: u8,
   
-  fn init() Editor {
-    const stdin = std.io.getStdIn();
-    const stdout = std.io.getStdOut();
+  fn init() !Editor {
+    const stdin: std.fs.File = std.io.getStdIn();
+    const stdout: std.fs.File = std.io.getStdOut();
+    var alloc_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    const text_handler = try TextHandler.init(alloc_gpa.allocator());
     return Editor {
       .in = stdin,
       .inr = stdin.reader(),
@@ -385,8 +391,8 @@ const Editor = struct {
       .needs_redraw = true,
       .needs_update_cursor = true,
       .state = State.INIT,
-      .text_handler = TextHandler.init(),
-      .alloc_gpa = .{},
+      .text_handler = text_handler,
+      .alloc_gpa = alloc_gpa,
       .width = 0,
       .height = 0,
       .buffered_byte = 0,
@@ -667,7 +673,7 @@ pub fn main() !void {
     _ = std.os.linux.sigaction(std.os.linux.SIG.WINCH, &sigaction, null);
     // TODO log if sigaction fails
   }
-  var E = Editor.init();
+  var E = try Editor.init();
   if (opened_file != null) {
     try E.text_handler.open(&E, opened_file.?);
   }
