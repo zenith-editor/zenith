@@ -149,7 +149,7 @@ const TextHandler = struct {
         }
     }
     
-    fn goUp(self: *TextHandler, E: *Editor) !void {
+    fn goUp(self: *TextHandler, E: *Editor) void {
         if (self.cursor.row == 0) {
             return;
         }
@@ -162,7 +162,7 @@ const TextHandler = struct {
         E.needs_update_cursor = true;
     }
     
-    fn goDown(self: *TextHandler, E: *Editor) !void {
+    fn goDown(self: *TextHandler, E: *Editor) void {
         if (self.cursor.row == self.lines.items.len - 1) {
             return;
         }
@@ -175,7 +175,7 @@ const TextHandler = struct {
         E.needs_update_cursor = true;
     }
     
-    fn goLeft(self: *TextHandler, E: *Editor) !void {
+    fn goLeft(self: *TextHandler, E: *Editor) void {
         if (self.cursor.col == 0) {
             return;
         }
@@ -187,7 +187,7 @@ const TextHandler = struct {
         E.needs_update_cursor = true;
     }
     
-    fn goRight(self: *TextHandler, E: *Editor) !void {
+    fn goRight(self: *TextHandler, E: *Editor) void {
         if (self.cursor.col == self.lines.items[self.cursor.row].items.len - 1) {
             return;
         }
@@ -199,7 +199,7 @@ const TextHandler = struct {
         E.needs_update_cursor = true;
     }
     
-    fn goHead(self: *TextHandler, E: *Editor) !void {
+    fn goHead(self: *TextHandler, E: *Editor) void {
         self.cursor.col = 0;
         if (self.scroll.col != 0) {
             E.needs_redraw = true;
@@ -208,7 +208,7 @@ const TextHandler = struct {
         E.needs_update_cursor = true;
     }
     
-    fn goTail(self: *TextHandler, E: *Editor) !void {
+    fn goTail(self: *TextHandler, E: *Editor) void {
         const line: *Line = &self.lines.items[self.cursor.row];
         const linelen: u32 = @intCast(line.items.len);
         self.cursor.col = linelen - 1;
@@ -242,7 +242,7 @@ const TextHandler = struct {
     fn insertChar(self: *TextHandler, E: *Editor, char: u8) !void {
         try self.lines.items[self.cursor.row].insert(E.allocr(), self.cursor.col, char);
         E.needs_redraw = true;
-        try self.goRight(E);
+        self.goRight(E);
     }
     
     fn deleteChar(self: *TextHandler, E: *Editor) !void {
@@ -262,7 +262,7 @@ const TextHandler = struct {
         }
         std.debug.print("{s}\n{}",.{row.items,row});
         E.needs_redraw = true;
-        try self.goLeft(E);
+        self.goLeft(E);
     }
     
     fn deleteCurrentLine(self: *TextHandler, E: *Editor) !void {
@@ -272,7 +272,7 @@ const TextHandler = struct {
         var row: Line = self.lines.orderedRemove(self.cursor.row);
         row.deinit(E.allocr());
         self.cursor.row -= 1;
-        try self.goTail(E);
+        self.goTail(E);
     }
 };
 
@@ -474,22 +474,22 @@ const Editor = struct {
             switch(self.state) {
                 State.text => {
                     if (keysym.raw == 0 and keysym.key == Keysym.UP) {
-                        try self.text_handler.goUp(self);
+                        self.text_handler.goUp(self);
                     }
                     else if (keysym.raw == 0 and keysym.key == Keysym.DOWN) {
-                        try self.text_handler.goDown(self);
+                        self.text_handler.goDown(self);
                     }
                     else if (keysym.raw == 0 and keysym.key == Keysym.LEFT) {
-                        try self.text_handler.goLeft(self);
+                        self.text_handler.goLeft(self);
                     }
                     else if (keysym.raw == 0 and keysym.key == Keysym.RIGHT) {
-                        try self.text_handler.goRight(self);
+                        self.text_handler.goRight(self);
                     }
                     else if (keysym.raw == 0 and keysym.key == Keysym.HOME) {
-                        try self.text_handler.goHead(self);
+                        self.text_handler.goHead(self);
                     }
                     else if (keysym.raw == 0 and keysym.key == Keysym.END) {
-                        try self.text_handler.goTail(self);
+                        self.text_handler.goTail(self);
                     }
                     else if (keysym.ctrl_key and keysym.key == 'q') {
                         self.state = State.quit;
