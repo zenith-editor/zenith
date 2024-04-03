@@ -422,6 +422,13 @@ const Editor = struct {
   
   // console input
   
+  fn flushConsoleInput(self: *Editor) {
+    while (true) {
+      const byte = self.inr.readByte() catch break;
+      std.debug.print("[{}]", .{byte});
+    }
+  }
+  
   fn readKey(self: *Editor) ?Keysym {
     if (self.buffered_byte != 0) {
       const b = self.buffered_byte;
@@ -441,13 +448,8 @@ const Editor = struct {
             'H' => { return Keysym.initSpecial(Keysym.HOME); },
             else => |byte1| {
               // unknown escape sequence, empty the buffer
-              std.debug.print("{}", .{byte1});
-//               _ = byte1;
-              while (true) {
-                const byte2 = self.inr.readByte() catch break;
-                std.debug.print("{}", .{byte2});
-//                 _ = byte2;
-              }
+              std.debug.print("[{}]", .{byte1});
+              self.flushConsoleInput();
             }
           }
         } else {
