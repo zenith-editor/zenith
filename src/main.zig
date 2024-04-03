@@ -137,23 +137,6 @@ const TextHandler = struct {
     // line is moved, so no need to free
   }
   
-  fn draw(self: *TextHandler, E: *Editor) !void {
-    var row: u32 = 0;
-    const cursor_row: u32 = self.cursor.row - self.scroll.row;
-    for (self.lines.items[self.scroll.row..]) |line| {
-      if (row != cursor_row) {
-        try E.renderLine(line.items, row, 0);
-      } else {
-        try E.renderLine(line.items, row, self.scroll.col);
-      }
-      row += 1;
-      if (row == E.height) {
-        break;
-      }
-    }
-    E.needs_update_cursor = true;
-  }
-  
   // cursor
   
   fn syncColumnAfterCursor(self: *TextHandler, E: *Editor) void {
@@ -510,6 +493,24 @@ const Editor = struct {
   
   // high level output
   
+  fn renderText(self: *Editor) !void {
+    var text_handler: *TextHandler = &self.text_handler;
+    var row: u32 = 0;
+    const cursor_row: u32 = text_handler.cursor.row - text_handler.scroll.row;
+    for (text_handler.lines.items[text_handler.scroll.row..]) |line| {
+      if (row != cursor_row) {
+        try self.renderLine(line.items, row, 0);
+      } else {
+        try self.renderLine(line.items, row, text_handler.scroll.col);
+      }
+      row += 1;
+      if (row == self.height) {
+        break;
+      }
+    }
+    self.needs_update_cursor = true;
+  }
+  
   fn renderLine(self: *Editor, line: []const u8, row: u32, colOffset: u32) !void {
     try self.moveCursor(TextPos {.row = row, .col = 0});
     var col: u32 = 0;
@@ -604,7 +605,7 @@ const Editor = struct {
     if (!self.needs_redraw)
       return;
     try self.refreshScreen();
-    try self.text_handler.draw(self);
+    try self.renderText();
     self.needs_redraw = false;
   }
   
