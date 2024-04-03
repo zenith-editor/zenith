@@ -89,6 +89,25 @@ const TextHandler = struct {
         try self.readLines(E);
     }
     
+    fn save(self: *TextHandler) !void {
+        if (self.file == null) {
+            // TODO
+            return;
+        }
+        const file: std.fs.File = self.file.?;
+        try file.setEndPos(0);
+        const writer: std.fs.File.Writer = file.writer();
+        if (self.lines.items.len > 0) {
+            try writer.writeAll(self.lines.items[0].items);
+            if (self.lines.items.len > 1) {
+                for (self.lines.items[1..]) |line| {
+                    try writer.writeByte('\n');
+                    try writer.writeAll(line.items);
+                }
+            }
+        }
+    }
+    
     fn readLines(self: *TextHandler, E: *Editor) !void {
         var file: std.fs.File = self.file.?;
         const allocr: std.mem.Allocator = E.allocr();
@@ -548,7 +567,7 @@ const Editor = struct {
                         self.state = State.quit;
                     }
                     else if (keysym.ctrl_key and keysym.key == 's') {
-                        // TODO
+                        try self.text_handler.save();
                     }
                     else if (keysym.ctrl_key and keysym.key == 'o') {
                         // TODO
