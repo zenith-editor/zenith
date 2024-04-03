@@ -251,8 +251,8 @@ const TextHandler = struct {
             // empty line, so remove it
             return self.deleteCurrentLine(E);
         } else if (self.cursor.col == 0) {
-            // TODO placing cursor at the first column removes the line
-            return;
+            // placing cursor at the first column removes the line break
+            return self.fuseWithPrevLine(E);
         } else if (self.cursor.col < row.items.len) {
             // remove character before the cursor
             _ = row.orderedRemove(self.cursor.col - 1);
@@ -270,9 +270,25 @@ const TextHandler = struct {
             return;
         }
         var row: Line = self.lines.orderedRemove(self.cursor.row);
-        row.deinit(E.allocr());
+        defer row.deinit(E.allocr());
         self.cursor.row -= 1;
         self.goTail(E);
+    }
+    
+    fn fuseWithPrevLine(self: *TextHandler, E: *Editor) !void {
+        if (self.cursor.row == 0) {
+            return;
+        }
+        var row: Line = self.lines.orderedRemove(self.cursor.row);
+        defer row.deinit(E.allocr());
+        self.cursor.row -= 1;
+        self.goTail(E);
+        var prevRow: *Line = &self.lines.items[self.cursor.row];
+        // remove sentinel for previous line
+        if (prevRow.pop() != 0) {
+            std.debug.panic("expected sentinel value", .{});
+        }
+        try prevRow.appendSlice(E.allocr(), row.items);
     }
 };
 
