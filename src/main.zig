@@ -8,18 +8,18 @@ const Keysym = struct {
     key: u8,
     ctrl_key: bool = false,
     
-    pub const ESC: u8 = std.ascii.control_code.esc;
-    pub const BACKSPACE: u8 = std.ascii.control_code.del;
+    const ESC: u8 = std.ascii.control_code.esc;
+    const BACKSPACE: u8 = std.ascii.control_code.del;
     
-    pub const RAW_SPECIAL: u8 = 0;
-    pub const UP: u8 = 0;
-    pub const DOWN: u8 = 1;
-    pub const RIGHT: u8 = 2;
-    pub const LEFT: u8 = 3;
-    pub const HOME: u8 = 4;
-    pub const END: u8 = 5;
+    const RAW_SPECIAL: u8 = 0;
+    const UP: u8 = 0;
+    const DOWN: u8 = 1;
+    const RIGHT: u8 = 2;
+    const LEFT: u8 = 3;
+    const HOME: u8 = 4;
+    const END: u8 = 5;
     
-    pub fn init(raw: u8) Keysym {
+    fn init(raw: u8) Keysym {
         if (raw < std.ascii.control_code.us) {
             return Keysym {
                 .raw = raw,
@@ -34,18 +34,18 @@ const Keysym = struct {
         }
     }
     
-    pub fn initSpecial(key: u8) Keysym {
+    fn initSpecial(key: u8) Keysym {
         return Keysym {
             .raw = 0,
             .key = key,
         };
     }
     
-    pub fn isSpecial(self: Keysym) bool {
+    fn isSpecial(self: Keysym) bool {
         return (self.raw == @as(u8, 0)) or self.ctrl_key;
     }
     
-    pub fn isPrint(self: Keysym) bool {
+    fn isPrint(self: Keysym) bool {
         return !self.isSpecial() and std.ascii.isPrint(self.raw);
     }
 };
@@ -68,7 +68,7 @@ const TextHandler = struct {
     cursor: TextPos,
     scroll: TextPos,
     
-    pub fn init() TextHandler {
+    fn init() TextHandler {
         return TextHandler {
             .file = null,
             .lines = LineList {},
@@ -77,7 +77,7 @@ const TextHandler = struct {
         };
     }
     
-    pub fn open(self: *TextHandler, E: *Editor, file: std.fs.File) !void {
+    fn open(self: *TextHandler, E: *Editor, file: std.fs.File) !void {
         if (self.file != null) {
             self.file.?.close();
         }
@@ -149,7 +149,7 @@ const TextHandler = struct {
         }
     }
     
-    pub fn goUp(self: *TextHandler, E: *Editor) !void {
+    fn goUp(self: *TextHandler, E: *Editor) !void {
         if (self.cursor.row == 0) {
             return;
         }
@@ -162,7 +162,7 @@ const TextHandler = struct {
         E.needs_update_cursor = true;
     }
     
-    pub fn goDown(self: *TextHandler, E: *Editor) !void {
+    fn goDown(self: *TextHandler, E: *Editor) !void {
         if (self.cursor.row == self.lines.items.len - 1) {
             return;
         }
@@ -175,7 +175,7 @@ const TextHandler = struct {
         E.needs_update_cursor = true;
     }
     
-    pub fn goLeft(self: *TextHandler, E: *Editor) !void {
+    fn goLeft(self: *TextHandler, E: *Editor) !void {
         if (self.cursor.col == 0) {
             return;
         }
@@ -187,7 +187,7 @@ const TextHandler = struct {
         E.needs_update_cursor = true;
     }
     
-    pub fn goRight(self: *TextHandler, E: *Editor) !void {
+    fn goRight(self: *TextHandler, E: *Editor) !void {
         if (self.cursor.col == self.lines.items[self.cursor.row].items.len - 1) {
             return;
         }
@@ -199,7 +199,7 @@ const TextHandler = struct {
         E.needs_update_cursor = true;
     }
     
-    pub fn goHead(self: *TextHandler, E: *Editor) !void {
+    fn goHead(self: *TextHandler, E: *Editor) !void {
         self.cursor.col = 0;
         if (self.scroll.col != 0) {
             E.needs_redraw = true;
@@ -208,7 +208,7 @@ const TextHandler = struct {
         E.needs_update_cursor = true;
     }
     
-    pub fn goTail(self: *TextHandler, E: *Editor) !void {
+    fn goTail(self: *TextHandler, E: *Editor) !void {
         const line: *Line = &self.lines.items[self.cursor.row];
         const linelen: u32 = @intCast(line.items.len);
         self.cursor.col = linelen - 1;
@@ -216,7 +216,7 @@ const TextHandler = struct {
         E.needs_redraw = true;
     }
     
-    pub fn syncScrollToNewDim(self: *TextHandler, E: *Editor) void {
+    fn syncScrollToNewDim(self: *TextHandler, E: *Editor) void {
         if ((self.scroll.col + self.cursor.col) > E.width) {
             if (E.width > self.cursor.col) {
                 self.scroll.col = E.width - self.cursor.col + 1;
@@ -239,13 +239,13 @@ const TextHandler = struct {
     
     // append
     
-    pub fn insertChar(self: *TextHandler, E: *Editor, char: u8) !void {
+    fn insertChar(self: *TextHandler, E: *Editor, char: u8) !void {
         try self.lines.items[self.cursor.row].insert(E.allocr(), self.cursor.col, char);
         E.needs_redraw = true;
         try self.goRight(E);
     }
     
-    pub fn deleteChar(self: *TextHandler, E: *Editor) !void {
+    fn deleteChar(self: *TextHandler, E: *Editor) !void {
         var row: *Line = &self.lines.items[self.cursor.row];
         if (row.items.len == 1) {
             // TODO empty line
@@ -269,12 +269,12 @@ const TextHandler = struct {
 // editor
 
 const Editor = struct {
-    pub const State = enum {
+    const State = enum {
         text,
         command,
         quit,
         
-        pub const INIT = State.text;
+        const INIT = State.text;
     };
     
     in: std.fs.File,
@@ -291,7 +291,7 @@ const Editor = struct {
     height: u32,
     buffered_byte: u8,
     
-    pub fn init() Editor {
+    fn init() Editor {
         const stdin = std.io.getStdIn();
         const stdout = std.io.getStdOut();
         return Editor {
@@ -311,7 +311,7 @@ const Editor = struct {
         };
     }
     
-    pub fn allocr(self: *Editor) std.mem.Allocator {
+    fn allocr(self: *Editor) std.mem.Allocator {
         return self.alloc_gpa.allocator();
     }
     
@@ -422,7 +422,7 @@ const Editor = struct {
     
     // high level output
     
-    pub fn renderLine(self: *Editor, line: []const u8, row: u32, colOffset: u32) !void {
+    fn renderLine(self: *Editor, line: []const u8, row: u32, colOffset: u32) !void {
         try self.moveCursor(TextPos {.row = row, .col = 0});
         var col: u32 = 0;
         for (line[colOffset..line.len-1]) |byte| {
@@ -521,7 +521,7 @@ const Editor = struct {
     
     const REFRESH_RATE = 16700000;
     
-    pub fn run(self: *Editor) !void {
+    fn run(self: *Editor) !void {
         try self.updateWinSize();
         try self.enableRawMode();
         self.needs_redraw = true;
