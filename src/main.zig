@@ -8,7 +8,8 @@ const Keysym = struct {
     key: u8,
     ctrl_key: bool = false,
     
-    pub const ESC = std.ascii.control_code.esc;
+    pub const ESC: u8 = std.ascii.control_code.esc;
+    pub const BACKSPACE: u8 = std.ascii.control_code.del;
     
     pub const RAW_SPECIAL: u8 = 0;
     pub const UP: u8 = 0;
@@ -39,11 +40,11 @@ const Keysym = struct {
     }
     
     pub fn isSpecial(self: Keysym) bool {
-        return self.raw == 0 || self.ctrl_key;
+        return (self.raw == @as(u8, 0)) or self.ctrl_key;
     }
     
     pub fn isPrint(self: Keysym) bool {
-        return !isSpecial && std.ascii.isPrint(self.raw);
+        return !self.isSpecial() and std.ascii.isPrint(self.raw);
     }
 };
 
@@ -57,6 +58,7 @@ const TextPos = struct {
 const TextHandler = struct {
     /// List of null-terminated strings representing lines.
     /// the final null-byte represents padding for appending
+    const Line = std.ArrayListUnmanaged(u8);
     const LineList = std.ArrayListUnmanaged(std.ArrayListUnmanaged(u8));
     
     file: ?std.fs.File,
@@ -85,9 +87,9 @@ const TextHandler = struct {
     }
     
     fn readLines(self: *TextHandler, E: *Editor) !void {
-        var file = self.file.?;
-        const allocr = E.allocr();
-        var line = try std.ArrayListUnmanaged(u8).initCapacity(allocr, 1);
+        var file: std.fs.File = self.file.?;
+        const allocr: std.mem.Allocator = E.allocr();
+        var line: Line = try Line.initCapacity(allocr, 1);
         var buf: [512]u8 = undefined;
         while (true) {
             const nread = try file.read(&buf);
@@ -95,7 +97,7 @@ const TextHandler = struct {
                 if (buf[i] == '\n') {
                     try line.append(allocr, 0);
                     try self.lines.append(allocr, line);
-                    line = try std.ArrayListUnmanaged(u8).initCapacity(allocr, 1); // moved to self.lines
+                    line = try Line.initCapacity(allocr, 1); // moved to self.lines
                 } else {
                     try line.append(allocr, buf[i]);
                 }
@@ -222,6 +224,34 @@ const TextHandler = struct {
             self.scroll.row = 0;
         }
     }
+    
+    // append
+    
+    pub fn insertChar(self: *TextHandler, E: *Editor, char: u8) !void {
+        try self.lines.items[self.cursor.row].insert(E.allocr(), self.cursor.col, char);
+        E.needs_redraw = true;
+        try self.goRight(E);
+    }
+    
+    pub fn deleteChar(self: *TextHandler, E: *Editor) !void {
+        var row: *Line = &self.lines.items[self.cursor.row];
+        if (row.items.len == 1) {
+            // TODO empty line
+            return;
+        } else if (self.cursor.col == 0) {
+            // TODO placing cursor at the first column removes the line
+            return;
+        } else if (self.cursor.col < row.items.len) {
+            // remove character before the cursor
+            _ = row.orderedRemove(self.cursor.col - 1);
+        } else {
+            // remove last character before the null terminator
+            _ = row.orderedRemove(row.items.len - 2);
+        }
+        std.debug.print("{s}\n{}",.{row.items,row});
+        E.needs_redraw = true;
+        try self.goLeft(E);
+    }
 };
 
 // editor
@@ -260,7 +290,7 @@ const Editor = struct {
             .needs_redraw = true,
             .state = State.INIT,
             .text_handler = TextHandler.init(),
-            .alloc_gpa = std.heap.GeneralPurposeAllocator(.{}){},
+            .alloc_gpa = .{},
             .width = 0,
             .height = 0,
             .buffered_byte = 0,
@@ -371,7 +401,7 @@ const Editor = struct {
     pub fn renderLine(self: *Editor, line: []const u8, row: u32, colOffset: u32) !void {
         try self.moveCursor(TextPos {.row = row, .col = 0});
         var col: u32 = 0;
-        for (line[colOffset..]) |byte| {
+        for (line[colOffset..line.len-1]) |byte| {
             if (col == self.width) {
                 return;
             }
@@ -430,8 +460,11 @@ const Editor = struct {
                     else if (keysym.ctrl_key and keysym.key == 'o') {
                         // TODO
                     }
+                    else if (keysym.raw == Keysym.BACKSPACE) {
+                        try self.text_handler.deleteChar(self);
+                    }
                     else if (keysym.isPrint()) {
-                        // TODO
+                        try self.text_handler.insertChar(self, keysym.key);
                     }
                 },
                 State.command => {
