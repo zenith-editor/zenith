@@ -441,10 +441,11 @@ const Editor = struct {
       fn handleInput(self: *Editor, keysym: Keysym) !void {
         var cmd_data: *Editor.CommandData = &self.cmd_data.?;
         if (keysym.raw == Keysym.ESC) {
-          // TODO
+          self.setState(.text);
         }
         else if (keysym.raw == Keysym.BACKSPACE) {
-          // TODO
+          _ = cmd_data.cmdinp.popOrNull();
+          self.needs_update_cursor = true;
         }
         else if (keysym.raw == Keysym.NEWLINE) {
           if (cmd_data.onInputted) |onInputted| {
@@ -567,6 +568,11 @@ const Editor = struct {
     return self.alloc_gpa.allocator();
   }
   
+  fn afterSetState(self: *Editor) void {
+    self.needs_redraw = true;
+    self.needs_update_cursor = true;
+  }
+  
   fn setState(self: *Editor, comptime state: State) void {
     if (comptime state != State.command) {
       if (self.cmd_data != null) {
@@ -582,8 +588,7 @@ const Editor = struct {
     if (state_handler.onSet) |onSet| {
       onSet(self);
     }
-    self.needs_redraw = true;
-    self.needs_update_cursor = true;
+    self.afterSetState();
   }
   
   // raw mode
