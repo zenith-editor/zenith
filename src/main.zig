@@ -354,6 +354,83 @@ const Editor = struct {
     const INIT = State.text;
   };
   
+  const StateHandler = struct {
+    handleInput: *const fn (self: *Editor, keysym: Keysym) anyerror!void,
+    handleOutput: *const fn (self: *Editor) anyerror!void,
+    
+    fn _createStateHandler(comptime T: type) StateHandler {
+      return StateHandler {
+        .handleInput = T.handleInput,
+        .handleOutput = T.handleOutput,
+      };
+    }
+    
+    const TextImpl = struct {
+      fn handleInput(self: *Editor, keysym: Keysym) !void {
+        if (keysym.raw == 0 and keysym.key == Keysym.UP) {
+          self.text_handler.goUp(self);
+        }
+        else if (keysym.raw == 0 and keysym.key == Keysym.DOWN) {
+          self.text_handler.goDown(self);
+        }
+        else if (keysym.raw == 0 and keysym.key == Keysym.LEFT) {
+          self.text_handler.goLeft(self);
+        }
+        else if (keysym.raw == 0 and keysym.key == Keysym.RIGHT) {
+          self.text_handler.goRight(self);
+        }
+        else if (keysym.raw == 0 and keysym.key == Keysym.HOME) {
+          self.text_handler.goHead(self);
+        }
+        else if (keysym.raw == 0 and keysym.key == Keysym.END) {
+          self.text_handler.goTail(self);
+        }
+        else if (keysym.ctrl_key and keysym.key == 'q') {
+          self.setState(State.quit);
+        }
+        else if (keysym.ctrl_key and keysym.key == 's') {
+          try self.text_handler.save();
+        }
+        else if (keysym.ctrl_key and keysym.key == 'o') {
+          // TODO
+        }
+        else if (keysym.raw == Keysym.BACKSPACE) {
+          try self.text_handler.deleteChar(self);
+        }
+        else if (keysym.raw == Keysym.NEWLINE) {
+          try self.text_handler.insertNewline(self);
+        }
+        else if (keysym.isPrint()) {
+          try self.text_handler.insertChar(self, keysym.key);
+        }
+      }
+      
+      fn handleOutput(self: *Editor) !void {
+        try self.refreshScreen();
+        try self.renderText();
+      }
+    };
+    const Text: StateHandler = _createStateHandler(TextImpl);
+    
+    const CommandImpl = struct {
+      fn handleInput(self: *Editor, keysym: Keysym) !void {
+        _ = self;
+        _ = keysym;
+      }
+      
+      fn handleOutput(self: *Editor) !void {
+        _ = self;
+      }
+    };
+    const Command: StateHandler = _createStateHandler(CommandImpl);
+    
+    const List = [_]*const StateHandler{
+      &Text,
+      &Command,
+      &Text, // quit
+    };
+  };
+  
   const STATUS_BAR_HEIGHT = 2;
   
   in: std.fs.File,
@@ -363,7 +440,8 @@ const Editor = struct {
   orig_termios: ?std.posix.termios,
   needs_redraw: bool,
   needs_update_cursor: bool,
-  state: State,
+  _state: State,
+  state_handler: *const StateHandler,
   text_handler: TextHandler,
   alloc_gpa: std.heap.GeneralPurposeAllocator(.{}),
   w_width: u32,
@@ -381,7 +459,8 @@ const Editor = struct {
       .orig_termios = null,
       .needs_redraw = true,
       .needs_update_cursor = true,
-      .state = State.INIT,
+      ._state = State.INIT,
+      .state_handler = &StateHandler.Text,
       .text_handler = undefined,
       .alloc_gpa = .{},
       .w_width = 0,
@@ -394,6 +473,11 @@ const Editor = struct {
   
   fn allocr(self: *Editor) std.mem.Allocator {
     return self.alloc_gpa.allocator();
+  }
+  
+  fn setState(self: *Editor, comptime state: State) void {
+    self._state = state;
+    self.state_handler = StateHandler.List[@intFromEnum(state)];
   }
   
   // raw mode
@@ -533,52 +617,7 @@ const Editor = struct {
   fn handleInput(self: *Editor) !void {
     if (self.readKey()) |keysym| {
       std.debug.print("{}\n", .{keysym});
-      switch(self.state) {
-        State.text => {
-          if (keysym.raw == 0 and keysym.key == Keysym.UP) {
-            self.text_handler.goUp(self);
-          }
-          else if (keysym.raw == 0 and keysym.key == Keysym.DOWN) {
-            self.text_handler.goDown(self);
-          }
-          else if (keysym.raw == 0 and keysym.key == Keysym.LEFT) {
-            self.text_handler.goLeft(self);
-          }
-          else if (keysym.raw == 0 and keysym.key == Keysym.RIGHT) {
-            self.text_handler.goRight(self);
-          }
-          else if (keysym.raw == 0 and keysym.key == Keysym.HOME) {
-            self.text_handler.goHead(self);
-          }
-          else if (keysym.raw == 0 and keysym.key == Keysym.END) {
-            self.text_handler.goTail(self);
-          }
-          else if (keysym.ctrl_key and keysym.key == 'q') {
-            self.state = State.quit;
-          }
-          else if (keysym.ctrl_key and keysym.key == 's') {
-            try self.text_handler.save();
-          }
-          else if (keysym.ctrl_key and keysym.key == 'o') {
-            // TODO
-          }
-          else if (keysym.raw == Keysym.BACKSPACE) {
-            try self.text_handler.deleteChar(self);
-          }
-          else if (keysym.raw == Keysym.NEWLINE) {
-            try self.text_handler.insertNewline(self);
-          }
-          else if (keysym.isPrint()) {
-            try self.text_handler.insertChar(self, keysym.key);
-          }
-        },
-        State.command => {
-          if (keysym.raw == Keysym.ESC) {
-            self.state = State.text;
-          }
-        },
-        State.quit => {},
-      }
+      try self.state_handler.handleInput(self, keysym);
     }
   }
   
@@ -627,8 +666,7 @@ const Editor = struct {
   fn handleOutput(self: *Editor) !void {
     if (!self.needs_redraw)
       return;
-    try self.refreshScreen();
-    try self.renderText();
+    try self.state_handler.handleOutput(self);
     self.needs_redraw = false;
   }
   
@@ -640,8 +678,8 @@ const Editor = struct {
     try self.updateWinSize();
     try self.enableRawMode();
     self.needs_redraw = true;
-    self.state = State.INIT;
-    while (self.state != State.quit) {
+    self.setState(State.INIT);
+    while (self._state != State.quit) {
       if (resized) {
         try self.updateWinSize();
         resized = false;
