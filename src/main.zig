@@ -568,13 +568,8 @@ const Editor = struct {
     return self.alloc_gpa.allocator();
   }
   
-  fn afterSetState(self: *Editor) void {
-    self.needs_redraw = true;
-    self.needs_update_cursor = true;
-  }
-  
-  fn setState(self: *Editor, comptime state: State) void {
-    if (comptime state != State.command) {
+  fn setState(self: *Editor, state: State) void {
+    if (state != State.command) {
       if (self.cmd_data != null) {
         self.cmd_data.?.deinit(self);
         self.cmd_data = null;
@@ -583,12 +578,13 @@ const Editor = struct {
       std.debug.assert(self.cmd_data != null);
     }
     self._state = state;
-    const state_handler = comptime StateHandler.List[@intFromEnum(state)];
+    const state_handler = StateHandler.List[@intFromEnum(state)];
     self.state_handler = state_handler;
     if (state_handler.onSet) |onSet| {
       onSet(self);
     }
-    self.afterSetState();
+    self.needs_redraw = true;
+    self.needs_update_cursor = true;
   }
   
   // raw mode
