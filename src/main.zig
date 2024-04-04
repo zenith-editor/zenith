@@ -408,6 +408,11 @@ const Editor = struct {
       fn handleOutput(self: *Editor) !void {
         try self.refreshScreen();
         try self.renderText();
+        if (self.needs_update_cursor) {
+          try self.renderStatus();
+          try self.updateCursorPos();
+          self.needs_update_cursor = false;
+        }
       }
     };
     const Text: StateHandler = _createStateHandler(TextImpl);
@@ -418,8 +423,25 @@ const Editor = struct {
         _ = keysym;
       }
       
+      fn renderStatus(self: *Editor) !void {
+        try self.moveCursor(TextPos {.row = self.textHeight(), .col = 0});
+        const text_handler: *const TextHandler = &self.text_handler;
+        try self.writeAll(Editor.CLEAR_LINE);
+        if (self.prompt) |prompt| {
+          try self.writeAll(prompt);
+        }
+        try self.moveCursor(TextPos {.row = (self.textHeight() + 1), .col = 0});
+        try self.writeAll(" >");
+      }
+      
       fn handleOutput(self: *Editor) !void {
-        _ = self;
+        try self.refreshScreen();
+        try self.renderText();
+        if (self.needs_update_cursor) {
+          try CommandImpl.renderStatus(self);
+          try self.updateCursorPos();
+          self.needs_update_cursor = false;
+        }
       }
     };
     const Command: StateHandler = _createStateHandler(CommandImpl);
@@ -435,18 +457,27 @@ const Editor = struct {
   
   in: std.fs.File,
   inr: std.fs.File.Reader,
+  
   out: std.fs.File,
   outw: std.fs.File.Writer,
+  
   orig_termios: ?std.posix.termios,
+  
   needs_redraw: bool,
   needs_update_cursor: bool,
+  
   _state: State,
   state_handler: *const StateHandler,
-  text_handler: TextHandler,
+  
   alloc_gpa: std.heap.GeneralPurposeAllocator(.{}),
+  
   w_width: u32,
   w_height: u32,
   buffered_byte: u8,
+  
+  text_handler: TextHandler,
+  
+  prompt: ?[]const u8,
   
   fn init() !Editor {
     const stdin: std.fs.File = std.io.getStdIn();
@@ -461,11 +492,12 @@ const Editor = struct {
       .needs_update_cursor = true,
       ._state = State.INIT,
       .state_handler = &StateHandler.Text,
-      .text_handler = undefined,
       .alloc_gpa = .{},
       .w_width = 0,
       .w_height = 0,
       .buffered_byte = 0,
+      .text_handler = undefined,
+      .prompt = null,
     };
     editor.text_handler = try TextHandler.init(editor.allocr());
     return editor;
@@ -686,11 +718,6 @@ const Editor = struct {
       }
       try self.handleInput();
       try self.handleOutput();
-      if (self.needs_update_cursor) {
-        try self.renderStatus();
-        try self.updateCursorPos();
-        self.needs_update_cursor = false;
-      }
       std.time.sleep(Editor.REFRESH_RATE);
     }
     try self.refreshScreen();
