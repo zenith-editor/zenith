@@ -63,24 +63,21 @@ const TextPos = struct {
 };
 
 const TextHandler = struct {
-  file: ?std.fs.File,
+  file: ?std.fs.File = null,
+  
   /// List of null-terminated strings representing lines.
   /// the final null-byte represents padding for appending
-  lines: StringList,
-  cursor: TextPos,
-  scroll: TextPos,
+  lines: StringList = .{},
+  
+  cursor: TextPos = .{},
+  scroll: TextPos = .{},
   
   fn init(allocr: std.mem.Allocator) !TextHandler {
     var lines = try StringList.initCapacity(allocr, 1);
     var firstline = try String.initCapacity(allocr, 1);
     try firstline.append(allocr, 0);
     try lines.append(allocr, firstline);
-    return TextHandler {
-      .file = null,
-      .lines = lines,
-      .cursor = .{},
-      .scroll = .{},
-    };
+    return TextHandler { .lines = lines, };
   }
   
   fn open(self: *TextHandler, E: *Editor, file: std.fs.File) !void {
@@ -370,7 +367,6 @@ const Editor = struct {
     }
     
     fn _createStateHandler(comptime T: type) StateHandler {
-      
       return StateHandler {
         .handleInput = T.handleInput,
         .handleOutput = T.handleOutput,
