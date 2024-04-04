@@ -358,15 +358,28 @@ const Editor = struct {
   const StateHandler = struct {
     handleInput: *const fn (self: *Editor, keysym: Keysym) anyerror!void,
     handleOutput: *const fn (self: *Editor) anyerror!void,
+    onSet: ?*const fn (self: *Editor) void,
+    
+    fn _voidFnOrNull(comptime T: type, comptime name: []const u8)
+    ?*const fn (self: *Editor) void {
+      if (@hasDecl(T, name)) {
+        return @field(T, name);
+      } else {
+        return null;
+      }
+    }
     
     fn _createStateHandler(comptime T: type) StateHandler {
+      
       return StateHandler {
         .handleInput = T.handleInput,
         .handleOutput = T.handleOutput,
+        .onSet = _voidFnOrNull(T, "onSet"),
       };
     }
     
     const TextImpl = struct {
+      fn onSet(self: *Editor) void {_=self;}
       fn handleInput(self: *Editor, keysym: Keysym) !void {
         if (keysym.raw == 0 and keysym.key == Keysym.UP) {
           self.text_handler.goUp(self);
@@ -393,7 +406,11 @@ const Editor = struct {
           try self.text_handler.save();
         }
         else if (keysym.ctrl_key and keysym.key == 'o') {
-          // TODO
+          self.cmd_data = CommandData {
+            .prompt = "Enter file",
+            .onInputted = Editor.onOpenInputted,
+          };
+          self.setState(State.command);
         }
         else if (keysym.raw == Keysym.BACKSPACE) {
           try self.text_handler.deleteChar(self);
@@ -407,8 +424,11 @@ const Editor = struct {
       }
       
       fn handleOutput(self: *Editor) !void {
-        try self.refreshScreen();
-        try self.renderText();
+        if (self.needs_redraw) {
+          try self.refreshScreen();
+          try self.renderText();
+          self.needs_redraw = false;
+        }
         if (self.needs_update_cursor) {
           try self.renderStatus();
           try self.updateCursorPos();
@@ -419,27 +439,62 @@ const Editor = struct {
     const Text: StateHandler = _createStateHandler(TextImpl);
     
     const CommandImpl = struct {
+      fn onSet(self: *Editor) void {
+        // forces renderStatus when handleOutput is called
+        self.needs_update_cursor = true;
+      }
+      
       fn handleInput(self: *Editor, keysym: Keysym) !void {
-        _ = self;
-        _ = keysym;
+        var cmd_data: *Editor.CommandData = &self.cmd_data.?;
+        if (keysym.raw == Keysym.ESC) {
+          // TODO
+        }
+        else if (keysym.raw == Keysym.BACKSPACE) {
+          // TODO
+        }
+        else if (keysym.raw == Keysym.NEWLINE) {
+          if (cmd_data.onInputted) |onInputted| {
+            try onInputted(self);
+          }
+        }
+        else if (keysym.isPrint()) {
+          try cmd_data.cmdinp.append(self.allocr(), keysym.key);
+          if (cmd_data.promptoverlay != null) {
+            cmd_data.promptoverlay = null;
+          }
+          self.needs_update_cursor = true;
+        }
       }
       
       fn renderStatus(self: *Editor) !void {
         try self.moveCursor(TextPos {.row = self.textHeight(), .col = 0});
         try self.writeAll(Editor.CLEAR_LINE);
-        if (self.prompt) |prompt| {
+        const cmd_data: *const Editor.CommandData = &self.cmd_data.?;
+        if (cmd_data.promptoverlay) |promptoverlay| {
+          try self.writeAll(promptoverlay);
+        } else if (cmd_data.prompt) |prompt| {
           try self.writeAll(prompt);
         }
         try self.moveCursor(TextPos {.row = (self.textHeight() + 1), .col = 0});
+        try self.writeAll(Editor.CLEAR_LINE);
         try self.writeAll(" >");
+        var col: u32 = 0;
+        for (cmd_data.cmdinp.items) |byte| {
+          if (col > self.w_width) {
+            return;
+          }
+          try self.outw.writeByte(byte);
+          col += 1;
+        }
       }
       
       fn handleOutput(self: *Editor) !void {
-        try self.refreshScreen();
-        try self.renderText();
+        if (self.needs_redraw) {
+          try self.refreshScreen();
+          try self.renderText();
+        }
         if (self.needs_update_cursor) {
           try CommandImpl.renderStatus(self);
-          try self.updateCursorPos();
           self.needs_update_cursor = false;
         }
       }
@@ -451,6 +506,17 @@ const Editor = struct {
       &Command,
       &Text, // quit
     };
+  };
+  
+  const CommandData = struct {
+    prompt: ?[]const u8 = null,
+    promptoverlay: ?[]const u8 = null,
+    cmdinp: String = .{},
+    onInputted: ?*const fn (self: *Editor) anyerror!void,
+    
+    fn deinit(self: *CommandData, E: *Editor) void {
+      self.cmdinp.deinit(E.allocr());
+    }
   };
   
   const STATUS_BAR_HEIGHT = 2;
@@ -477,7 +543,7 @@ const Editor = struct {
   
   text_handler: TextHandler,
   
-  prompt: ?[]const u8,
+  cmd_data: ?CommandData,
   
   fn init() !Editor {
     const stdin: std.fs.File = std.io.getStdIn();
@@ -497,7 +563,7 @@ const Editor = struct {
       .w_height = 0,
       .buffered_byte = 0,
       .text_handler = undefined,
-      .prompt = null,
+      .cmd_data = null,
     };
     editor.text_handler = try TextHandler.init(editor.allocr());
     return editor;
@@ -508,8 +574,20 @@ const Editor = struct {
   }
   
   fn setState(self: *Editor, comptime state: State) void {
+    if (comptime state != State.command) {
+      if (self.cmd_data != null) {
+        self.cmd_data.?.deinit(self);
+        self.cmd_data = null;
+      }
+    } else {
+      std.debug.assert(self.cmd_data != null);
+    }
     self._state = state;
-    self.state_handler = StateHandler.List[@intFromEnum(state)];
+    const state_handler = comptime StateHandler.List[@intFromEnum(state)];
+    self.state_handler = state_handler;
+    if (state_handler.onSet) |onSet| {
+      onSet(self);
+    }
   }
   
   // raw mode
@@ -696,10 +774,7 @@ const Editor = struct {
   }
   
   fn handleOutput(self: *Editor) !void {
-    if (!self.needs_redraw)
-      return;
     try self.state_handler.handleOutput(self);
-    self.needs_redraw = false;
   }
   
   // tick
@@ -722,6 +797,46 @@ const Editor = struct {
     }
     try self.refreshScreen();
     try self.disableRawMode();
+  }
+  
+  // events
+  
+  fn onOpenInputted(self: *Editor) !void {
+    self.needs_update_cursor = true;
+    const cwd = std.fs.cwd();
+    var cmd_data: *Editor.CommandData = &self.cmd_data.?;
+    const path: []const u8 = cmd_data.cmdinp.items;
+    var opened_file: ?std.fs.File = null;
+    cwd.access(path, .{}) catch |err| switch(err) {
+      error.FileNotFound => {
+        opened_file = cwd.createFile(path, .{
+          .read = true,
+          .truncate = false
+        }) catch |create_err| {
+          std.debug.print("create file: {}", .{create_err});
+          cmd_data.promptoverlay = "Unable to create new file!";
+          return;
+        };
+      },
+      else => {
+        std.debug.print("access: {}", .{err});
+        cmd_data.promptoverlay = "Unable to open file!";
+        return;
+      },
+    };
+    if (opened_file == null) {
+      opened_file = cwd.openFile(path, .{
+        .mode = .read_write,
+        .lock = .shared,
+      }) catch |err| {
+        std.debug.print("w: {}", .{err});
+        cmd_data.promptoverlay = "Unable to open file!";
+        return;
+      };
+    }
+    try self.text_handler.open(self, opened_file.?);
+    self.setState(State.INIT);
+    self.needs_redraw = true;
   }
   
 };
