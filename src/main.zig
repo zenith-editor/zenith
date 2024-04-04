@@ -1,6 +1,10 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+// types
+const String = std.ArrayListUnmanaged(u8);
+const StringList = std.ArrayListUnmanaged(String);
+
 // keyboard event
 
 const Keysym = struct {
@@ -59,19 +63,16 @@ const TextPos = struct {
 };
 
 const TextHandler = struct {
+  file: ?std.fs.File,
   /// List of null-terminated strings representing lines.
   /// the final null-byte represents padding for appending
-  const Line = std.ArrayListUnmanaged(u8);
-  const LineList = std.ArrayListUnmanaged(Line);
-  
-  file: ?std.fs.File,
-  lines: LineList,
+  lines: StringList,
   cursor: TextPos,
   scroll: TextPos,
   
   fn init(allocr: std.mem.Allocator) !TextHandler {
-    var lines = try LineList.initCapacity(allocr, 1);
-    var firstline = try Line.initCapacity(allocr, 1);
+    var lines = try StringList.initCapacity(allocr, 1);
+    var firstline = try String.initCapacity(allocr, 1);
     try firstline.append(allocr, 0);
     try lines.append(allocr, firstline);
     return TextHandler {
@@ -104,7 +105,7 @@ const TextHandler = struct {
     const writer: std.fs.File.Writer = file.writer();
     if (self.lines.items.len > 0) {
 //       std.debug.print("{s}", .{self.lines.items[0].items}); 
-      const firstline: *const Line = &self.lines.items[0];
+      const firstline: *const String = &self.lines.items[0];
       try writer.writeAll(firstline.items[0..(firstline.items.len-1)]);
       if (self.lines.items.len > 1) {
         for (self.lines.items[1..]) |line| {
@@ -118,7 +119,7 @@ const TextHandler = struct {
   fn readLines(self: *TextHandler, E: *Editor) !void {
     var file: std.fs.File = self.file.?;
     const allocr: std.mem.Allocator = E.allocr();
-    var line: Line = try Line.initCapacity(allocr, 1);
+    var line: String = try String.initCapacity(allocr, 1);
     var buf: [512]u8 = undefined;
     while (true) {
       const nread = try file.read(&buf);
@@ -126,7 +127,7 @@ const TextHandler = struct {
         if (buf[i] == '\n') {
           try line.append(allocr, 0);
           try self.lines.append(allocr, line);
-          line = try Line.initCapacity(allocr, 1); // moved to self.lines
+          line = try String.initCapacity(allocr, 1); // moved to self.lines
         } else {
           try line.append(allocr, buf[i]);
         }
@@ -219,7 +220,7 @@ const TextHandler = struct {
   }
   
   fn goTail(self: *TextHandler, E: *Editor) void {
-    const line: *Line = &self.lines.items[self.cursor.row];
+    const line: *String = &self.lines.items[self.cursor.row];
     const linelen: u32 = @intCast(line.items.len);
     self.cursor.col = linelen - 1;
     self.syncColumnScroll(E);
@@ -261,7 +262,7 @@ const TextHandler = struct {
   fn insertNewline(self: *TextHandler, E: *Editor) !void {
     const allocr: std.mem.Allocator = E.allocr();
     const cutpoint: usize = @intCast(self.cursor.col);
-    const curline: *Line = &self.lines.items[self.cursor.row];
+    const curline: *String = &self.lines.items[self.cursor.row];
     
     std.debug.assert(cutpoint < curline.items.len);
     
@@ -269,7 +270,7 @@ const TextHandler = struct {
       // cutpoint lies inside text portion
       // newline_len includes sentinel value
       const newline_len: usize = curline.items.len - cutpoint;
-      var newline: Line = .{};
+      var newline: String = .{};
       try newline.resize(allocr, newline_len);
       @memcpy(newline.items[0..newline_len], curline.items[cutpoint..]);
       std.debug.print("!{s}\n", .{curline.items[cutpoint..]});
@@ -281,7 +282,7 @@ const TextHandler = struct {
       // newline is moved
     } else {
       // cutpoint is at the end of text portion
-      var newline: Line = try Line.initCapacity(allocr, 1);
+      var newline: String = try String.initCapacity(allocr, 1);
       try newline.append(allocr, 0);
       try self.lines.insert(allocr, self.cursor.row + 1, newline);
       // newline is moved
@@ -298,7 +299,7 @@ const TextHandler = struct {
   // deletion
   
   fn deleteChar(self: *TextHandler, E: *Editor) !void {
-    var row: *Line = &self.lines.items[self.cursor.row];
+    var row: *String = &self.lines.items[self.cursor.row];
     if (row.items.len == 1) {
       // empty line, so remove it
       return self.deleteCurrentLine(E);
@@ -320,7 +321,7 @@ const TextHandler = struct {
     if (self.cursor.row == 0) {
       return;
     }
-    var row: Line = self.lines.orderedRemove(self.cursor.row);
+    var row: String = self.lines.orderedRemove(self.cursor.row);
     defer row.deinit(E.allocr());
     self.cursor.row -= 1;
     self.goTail(E);
@@ -330,11 +331,11 @@ const TextHandler = struct {
     if (self.cursor.row == 0) {
       return;
     }
-    var row: Line = self.lines.orderedRemove(self.cursor.row);
+    var row: String = self.lines.orderedRemove(self.cursor.row);
     defer row.deinit(E.allocr());
     self.cursor.row -= 1;
     self.goTail(E);
-    var prevRow: *Line = &self.lines.items[self.cursor.row];
+    var prevRow: *String = &self.lines.items[self.cursor.row];
     // remove sentinel for previous line
     if (prevRow.pop() != 0) {
       std.debug.panic("expected sentinel value", .{});
@@ -425,7 +426,6 @@ const Editor = struct {
       
       fn renderStatus(self: *Editor) !void {
         try self.moveCursor(TextPos {.row = self.textHeight(), .col = 0});
-        const text_handler: *const TextHandler = &self.text_handler;
         try self.writeAll(Editor.CLEAR_LINE);
         if (self.prompt) |prompt| {
           try self.writeAll(prompt);
