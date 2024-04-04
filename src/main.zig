@@ -379,7 +379,6 @@ const Editor = struct {
     }
     
     const TextImpl = struct {
-      fn onSet(self: *Editor) void {_=self;}
       fn handleInput(self: *Editor, keysym: Keysym) !void {
         if (keysym.raw == 0 and keysym.key == Keysym.UP) {
           self.text_handler.goUp(self);
@@ -439,11 +438,6 @@ const Editor = struct {
     const Text: StateHandler = _createStateHandler(TextImpl);
     
     const CommandImpl = struct {
-      fn onSet(self: *Editor) void {
-        // forces renderStatus when handleOutput is called
-        self.needs_update_cursor = true;
-      }
-      
       fn handleInput(self: *Editor, keysym: Keysym) !void {
         var cmd_data: *Editor.CommandData = &self.cmd_data.?;
         if (keysym.raw == Keysym.ESC) {
@@ -588,6 +582,8 @@ const Editor = struct {
     if (state_handler.onSet) |onSet| {
       onSet(self);
     }
+    self.needs_redraw = true;
+    self.needs_update_cursor = true;
   }
   
   // raw mode
