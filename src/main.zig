@@ -68,7 +68,7 @@ const TextHandler = struct {
     text_handler: *const TextHandler,
     pos: u32 = 0,
     
-    inline fn next(self: *TextIterator) ?u8 {
+    fn next(self: *TextIterator) ?u8 {
       const text_handler: *const TextHandler = self.text_handler;
       const logical_tail_start = text_handler.head_end + text_handler.gap.len;
       if (self.pos < text_handler.head_end) {
@@ -76,13 +76,14 @@ const TextHandler = struct {
         self.pos += 1;
         return ch;
       } else if (self.pos >= text_handler.head_end and self.pos < logical_tail_start) {
+        std.debug.assert(text_handler.head_end < logical_tail_start);
         const gap_relidx = self.pos - text_handler.head_end;
         const ch = text_handler.gap.slice()[gap_relidx];
         self.pos += 1;
         return ch;
       } else {
         const real_tailidx = text_handler.tail_start + (self.pos - logical_tail_start);
-        if (real_tailidx > text_handler.buffer.items.len) {
+        if (real_tailidx >= text_handler.buffer.items.len) {
           return null;
         }
         const ch = text_handler.buffer.items[real_tailidx];
@@ -96,7 +97,7 @@ const TextHandler = struct {
   
   /// Buffer of characters. Logical text buffer is then:
   ///
-  /// text = buffer[0..(head_end + 1)] ++ gap ++ buffer[tail_start..]
+  /// text = buffer[0..(head_end)] ++ gap ++ buffer[tail_start..]
   buffer: String = .{},
   
   /// Real position where the head of the text ends
@@ -110,6 +111,7 @@ const TextHandler = struct {
   
   /// Logical offsets to start of lines. These offsets are defined based on
   /// positions within the logical text buffer above.
+  /// These offsets do not contain the newline character.
   line_offsets: std.ArrayListUnmanaged(u32) = .{},
   
   cursor: TextPos = .{},
@@ -141,18 +143,19 @@ const TextHandler = struct {
     var file: std.fs.File = self.file.?;
     const allocr: std.mem.Allocator = E.allocr();
     self.buffer = String.fromOwnedSlice(try file.readToEndAlloc(allocr, std.math.maxInt(u32)));
+    // first line
+    try self.line_offsets.append(allocr, 0);
     var i: u32 = 0;
-    var line_start: u32 = 0;
+//     var line_start: u32 = 0;
     for (self.buffer.items) |byte| {
       if (byte == '\n') {
-        try self.line_offsets.append(allocr, line_start);
-        line_start = i + 1;
+        try self.line_offsets.append(allocr, i + 1);
       }
       i += 1;
     }
-    if (line_start < i) {
-      try self.line_offsets.append(allocr, line_start);
-    }
+//     if (line_start < i) {
+//       try self.line_offsets.append(allocr, line_start);
+//     }
   }
   
   // general manip
@@ -161,23 +164,39 @@ const TextHandler = struct {
     return TextIterator { .text_handler = self, .pos = pos, };
   }
   
-  fn getRowLen(self: *TextHandler, row: u32) u32 {
-    const offset_start: u32 = self.line_offsets.items[row];
-    const offset_end: u32 = if ((row + 1) < self.line_offsets.items.len)
-      self.line_offsets.items[row + 1]
+  fn getRowOffsetEnd(self: *const TextHandler, row: u32) u32 {
+    // The newline character of the current line is not counted
+    return if ((row + 1) < self.line_offsets.items.len)
+      (self.line_offsets.items[row + 1] - 1)
     else
-      @intCast(self.buffer.items.len);
+      @intCast(self.buffer.items.len + self.gap.slice().len);
+  }
+  
+  fn getRowLen(self: *const TextHandler, row: u32) u32 {
+    const offset_start: u32 = self.line_offsets.items[row];
+    const offset_end: u32 = self.getRowOffsetEnd(row);
     return offset_end - offset_start;
   }
+  
+  // gap
+  
+  fn flushGapBuffer(self: *TextHandler, E: *Editor) !void {
+    try self.buffer.insertSlice(E.allocr(), self.head_end, self.gap.slice());
+    self.gap = .{};
+  } 
   
   // cursor
   
   fn syncColumnAfterCursor(self: *TextHandler, E: *Editor) void {
     const rowlen: u32 = self.getRowLen(self.cursor.row);
-    if (self.cursor.col <= rowlen - 1) {
-      return;
+    if (rowlen == 0) {
+      self.cursor.col = 0;
+    } else {
+      if (self.cursor.col <= rowlen - 1) {
+        return;
+      }
+      self.cursor.col = rowlen - 1;
     }
-    self.cursor.col = rowlen - 1;
     const oldScrollCol = self.scroll.col;
     if (self.cursor.col > E.w_width) {
       self.scroll.col = self.cursor.col - E.w_width;
@@ -250,7 +269,7 @@ const TextHandler = struct {
   
   fn goTail(self: *TextHandler, E: *Editor) void {
     const rowlen: u32 = self.getRowLen(self.cursor.row);
-    self.cursor.col = rowlen - 1;
+    self.cursor.col = rowlen;
     self.syncColumnScroll(E);
     E.needs_redraw = true;
   }
@@ -281,11 +300,38 @@ const TextHandler = struct {
   
   // append
   
+  fn updateLineOffsets(self: *TextHandler, fromRow: u32) void {
+    for (self.line_offsets.items[(fromRow + 1)..]) |*rowptr| {
+      rowptr.* += 1;
+    }
+  }
+  
   fn insertChar(self: *TextHandler, E: *Editor, char: u8) !void {
-    _=.{self,E,char};
-//     try self.lines.items[self.cursor.row].insert(E.allocr(), self.cursor.col, char);
-//     E.needs_redraw = true;
-//     self.goRight(E);
+    const insidx: u32 = self.line_offsets.items[self.cursor.row] + self.cursor.col;
+    // std.debug.print("ins: {} {} {}\n", .{insidx, self.head_end, (self.head_end + self.gap.slice().len)});
+    if (insidx > self.head_end and insidx <= self.head_end + self.gap.slice().len) {
+      // insertion within gap
+      const gap_relidx = insidx - self.head_end;
+      // std.debug.print("ins gap: {}\n", .{gap_relidx});
+      if (gap_relidx == self.gap.slice().len) {
+        try self.gap.append(char);
+      } else {
+        try self.gap.insert(gap_relidx, char);
+      }
+      if (self.gap.slice().len == GAP_SIZE) {
+        try self.flushGapBuffer(E);
+      }
+    } else {
+      // insertion outside of gap
+      try self.flushGapBuffer(E);
+      // std.debug.print("ins out of gap: {s}\n", .{self.buffer.items});
+      self.head_end = insidx;
+      self.tail_start = insidx;
+      try self.gap.append(char);
+    }
+    self.updateLineOffsets(self.cursor.row);
+    E.needs_redraw = true;
+    self.goRight(E);
   }
   
   fn insertNewline(self: *TextHandler, E: *Editor) !void {
@@ -766,10 +812,7 @@ const Editor = struct {
     const cursor_row: u32 = text_handler.cursor.row - text_handler.scroll.row;
     for (text_handler.scroll.row..text_handler.line_offsets.items.len) |i| {
       const offset_start: u32 = text_handler.line_offsets.items[i];
-      const offset_end: u32 = if ((i + 1) < text_handler.line_offsets.items.len)
-        text_handler.line_offsets.items[i + 1]
-      else
-        @intCast(text_handler.buffer.items.len);
+      const offset_end: u32 = text_handler.getRowOffsetEnd(@intCast(i));
       
       const colOffset: u32 = if (row == cursor_row) text_handler.scroll.col else 0;
       var iter = text_handler.iterate(offset_start + colOffset);
@@ -793,7 +836,7 @@ const Editor = struct {
     self.needs_update_cursor = true;
   }
   
-  inline fn renderCharInLine(self: *Editor, byte: u8, colref: *u32) !bool {
+  fn renderCharInLine(self: *Editor, byte: u8, colref: *u32) !bool {
     if (colref.* == self.w_width) {
       return false;
     }
