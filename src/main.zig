@@ -64,22 +64,58 @@ const TextPos = struct {
 const TextHandler = struct {
   const GAP_SIZE = 128;
   
+  const TextIterator = struct {
+    text_handler: *const TextHandler,
+    pos: u32 = 0,
+    
+    inline fn next(self: *TextIterator) ?u8 {
+      const text_handler: *const TextHandler = self.text_handler;
+      const logical_tail_start = text_handler.head_end + text_handler.gap.len;
+      if (self.pos < text_handler.head_end) {
+        const ch = text_handler.buffer.items[self.pos];
+        self.pos += 1;
+        return ch;
+      } else if (self.pos >= text_handler.head_end and self.pos < logical_tail_start) {
+        const gap_relidx = self.pos - text_handler.head_end;
+        const ch = text_handler.gap.slice()[gap_relidx];
+        self.pos += 1;
+        return ch;
+      } else {
+        const real_tailidx = text_handler.tail_start + (self.pos - logical_tail_start);
+        if (real_tailidx > text_handler.buffer.items.len) {
+          return null;
+        }
+        const ch = text_handler.buffer.items[real_tailidx];
+        self.pos += 1;
+        return ch;
+      }
+    }
+  };
+  
   file: ?std.fs.File = null,
   
   /// Buffer of characters. Logical text buffer is then:
   ///
-  /// text = buffer[0..(front_end + 1)] ++ gap ++ buffer[back_start..]
+  /// text = buffer[0..(head_end + 1)] ++ gap ++ buffer[tail_start..]
   buffer: String = .{},
-  front_end: u32 = 0,
-  back_start: u32 = 0,
+  
+  /// Real position where the head of the text ends
+  head_end: u32 = 0,
+  
+  /// Real position where the tail of the text starts
+  tail_start: u32 = 0,
+  
+  /// Gap buffer
   gap: std.BoundedArray(u8, GAP_SIZE) = .{},
   
-  /// Offsets to start of lines. These offsets are defined based on
+  /// Logical offsets to start of lines. These offsets are defined based on
   /// positions within the logical text buffer above.
   line_offsets: std.ArrayListUnmanaged(u32) = .{},
   
   cursor: TextPos = .{},
   scroll: TextPos = .{},
+  
+  // io
   
   fn open(self: *TextHandler, E: *Editor, file: std.fs.File) !void {
     if (self.file != null) {
@@ -117,6 +153,12 @@ const TextHandler = struct {
     if (line_start < i) {
       try self.line_offsets.append(allocr, line_start);
     }
+  }
+  
+  // general manip
+  
+  fn iterate(self: *const TextHandler, pos: u32) TextIterator {
+    return TextIterator { .text_handler = self, .pos = pos, };
   }
   
   fn getRowLen(self: *TextHandler, row: u32) u32 {
@@ -728,12 +770,21 @@ const Editor = struct {
         text_handler.line_offsets.items[i + 1]
       else
         @intCast(text_handler.buffer.items.len);
-      const line: []const u8 = text_handler.buffer.items[offset_start..offset_end];
-      if (row != cursor_row) {
-        try self.renderLine(line, row, 0);
-      } else {
-        try self.renderLine(line, row, text_handler.scroll.col);
+      
+      const colOffset: u32 = if (row == cursor_row) text_handler.scroll.col else 0;
+      var iter = text_handler.iterate(offset_start + colOffset);
+      
+      try self.moveCursor(TextPos {.row = row, .col = 0});
+      var col: u32 = 0;
+      while (iter.next()) |byte| {
+        if (!(try self.renderCharInLine(byte, &col))) {
+          break;
+        }
+        if (iter.pos == offset_end) {
+          break;
+        }
       }
+      
       row += 1;
       if (row == self.textHeight()) {
         break;
@@ -742,19 +793,16 @@ const Editor = struct {
     self.needs_update_cursor = true;
   }
   
-  fn renderLine(self: *Editor, line: []const u8, row: u32, colOffset: u32) !void {
-    try self.moveCursor(TextPos {.row = row, .col = 0});
-    var col: u32 = 0;
-    for (line[colOffset..line.len]) |byte| {
-      if (col == self.w_width) {
-        return;
-      }
-      if (std.ascii.isControl(byte)) {
-        continue;
-      }
-      try self.outw.writeByte(byte);
-      col += 1;
+  inline fn renderCharInLine(self: *Editor, byte: u8, colref: *u32) !bool {
+    if (colref.* == self.w_width) {
+      return false;
     }
+    if (std.ascii.isControl(byte)) {
+      return true;
+    }
+    try self.outw.writeByte(byte);
+    colref.* += 1;
+    return true;
   }
   
   fn renderStatus(self: *Editor) !void {
