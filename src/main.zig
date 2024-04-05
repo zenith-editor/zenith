@@ -91,6 +91,13 @@ const TextHandler = struct {
         return ch;
       }
     }
+    
+    fn nextUntil(self: *TextIterator, offset_end: u32) ?u8 {
+      if (self.pos == offset_end) {
+        return null;
+      }
+      return self.next();
+    }
   };
   
   file: ?std.fs.File = null,
@@ -328,6 +335,7 @@ const TextHandler = struct {
     if (char == '\n') {
       self.incrementLineOffsets(self.cursor.row);
       try self.line_offsets.insert(E.allocr(), self.cursor.row + 1, insidx + 1);
+      // std.debug.print("{any} {any}", .{self.gap.slice(), self.line_offsets.items});
       
       self.cursor.row += 1;
       self.cursor.col = 0;
@@ -789,11 +797,8 @@ const Editor = struct {
       
       try self.moveCursor(TextPos {.row = row, .col = 0});
       var col: u32 = 0;
-      while (iter.next()) |byte| {
+      while (iter.nextUntil(offset_end)) |byte| {
         if (!(try self.renderCharInLine(byte, &col))) {
-          break;
-        }
-        if (iter.pos == offset_end) {
           break;
         }
       }
