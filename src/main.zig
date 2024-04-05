@@ -146,16 +146,12 @@ const TextHandler = struct {
     // first line
     try self.line_offsets.append(allocr, 0);
     var i: u32 = 0;
-//     var line_start: u32 = 0;
     for (self.buffer.items) |byte| {
       if (byte == '\n') {
         try self.line_offsets.append(allocr, i + 1);
       }
       i += 1;
     }
-//     if (line_start < i) {
-//       try self.line_offsets.append(allocr, line_start);
-//     }
   }
   
   // general manip
@@ -300,7 +296,7 @@ const TextHandler = struct {
   
   // append
   
-  fn updateLineOffsets(self: *TextHandler, fromRow: u32) void {
+  fn incrementLineOffsets(self: *TextHandler, fromRow: u32) void {
     for (self.line_offsets.items[(fromRow + 1)..]) |*rowptr| {
       rowptr.* += 1;
     }
@@ -329,47 +325,21 @@ const TextHandler = struct {
       self.tail_start = insidx;
       try self.gap.append(char);
     }
-    self.updateLineOffsets(self.cursor.row);
-    E.needs_redraw = true;
-    self.goRight(E);
-  }
-  
-  fn insertNewline(self: *TextHandler, E: *Editor) !void {
-    _=.{self,E};
-//     const allocr: std.mem.Allocator = E.allocr();
-//     const cutpoint: usize = @intCast(self.cursor.col);
-//     const curline: *String = &self.lines.items[self.cursor.row];
-//     
-//     std.debug.assert(cutpoint < curline.items.len);
-//     
-//     if (cutpoint < curline.items.len - 1) {
-//       // cutpoint lies inside text portion
-//       // newline_len includes sentinel value
-//       const newline_len: usize = curline.items.len - cutpoint;
-//       var newline: String = .{};
-//       try newline.resize(allocr, newline_len);
-//       @memcpy(newline.items[0..newline_len], curline.items[cutpoint..]);
-//       std.debug.print("!{s}\n", .{curline.items[cutpoint..]});
-//       newline.items[newline_len - 1] = 0;
-//       // cut from the current line
-//       curline.shrinkAndFree(allocr, cutpoint + 1);
-//       curline.items[cutpoint] = 0;
-//       try self.lines.insert(allocr, self.cursor.row + 1, newline);
-//       // newline is moved
-//     } else {
-//       // cutpoint is at the end of text portion
-//       var newline: String = try String.initCapacity(allocr, 1);
-//       try newline.append(allocr, 0);
-//       try self.lines.insert(allocr, self.cursor.row + 1, newline);
-//       // newline is moved
-//     }
-//     
-//     self.cursor.row += 1;
-//     self.cursor.col = 0;
-//     if ((self.scroll.row + self.cursor.row) > E.textHeight()) {
-//       self.scroll.row += 1;
-//     }
-//     E.needs_redraw = true;
+    if (char == '\n') {
+      self.incrementLineOffsets(self.cursor.row);
+      try self.line_offsets.insert(E.allocr(), self.cursor.row + 1, insidx + 1);
+      
+      self.cursor.row += 1;
+      self.cursor.col = 0;
+      if ((self.scroll.row + self.cursor.row) > E.textHeight()) {
+        self.scroll.row += 1;
+      }
+      E.needs_redraw = true;
+    } else {
+      self.incrementLineOffsets(self.cursor.row);
+      E.needs_redraw = true;
+      self.goRight(E);
+    }
   }
   
   // deletion
@@ -493,7 +463,7 @@ const Editor = struct {
           try self.text_handler.deleteChar(self);
         }
         else if (keysym.raw == Keysym.NEWLINE) {
-          try self.text_handler.insertNewline(self);
+          try self.text_handler.insertChar(self, '\n');
         }
         else if (keysym.isPrint()) {
           try self.text_handler.insertChar(self, keysym.key);
