@@ -144,7 +144,19 @@ const TextHandler = struct {
       // TODO
       return;
     }
-    // TODO
+    const file: std.fs.File = self.file.?;
+    try file.seekTo(0);
+    try file.setEndPos(0);
+    const writer: std.fs.File.Writer = file.writer();
+    for (self.buffer.items[0..self.head_end]) |byte| {
+      try writer.writeByte(byte);
+    }
+    for (self.gap.slice()) |byte| {
+      try writer.writeByte(byte);
+    }
+    for (self.buffer.items[self.tail_start..]) |byte| {
+      try writer.writeByte(byte);
+    }
   }
   
   fn readLines(self: *TextHandler, E: *Editor) !void {
@@ -422,6 +434,7 @@ const TextHandler = struct {
       self.decrementLineOffsets(deletedrowidx);
       _ = self.line_offsets.orderedRemove(deletedrowidx);
     } else {
+      self.decrementLineOffsets(self.cursor.row);
       self.goLeft(E);
     }
 
