@@ -187,7 +187,7 @@ const TextHandler = struct {
   }
   
   fn getLogicalLength(self: *const TextHandler) u32 {
-    return @intCast(self.head_end + self.gap.slice().len + (self.buffer.items.len - self.tail_start));
+    return @intCast(self.head_end + self.gap.len + (self.buffer.items.len - self.tail_start));
   }
   
   fn getRowOffsetEnd(self: *const TextHandler, row: u32) u32 {
@@ -209,13 +209,12 @@ const TextHandler = struct {
   fn flushGapBuffer(self: *TextHandler, E: *Editor) !void {
     if (self.tail_start > self.head_end) {
       // buffer contains deleted characters
-      std.debug.print("fl: {} {}\n", .{self.tail_start, self.head_end});
       const deleted_chars = self.tail_start - self.head_end;
       const logical_tail_start = self.head_end + self.gap.len;
+      const logical_len = self.getLogicalLength();
       if (deleted_chars > self.gap.len) {
         const gapdest: []u8 = self.buffer.items[self.head_end..logical_tail_start];
         @memcpy(gapdest, self.gap.slice());
-        const logical_len = self.getLogicalLength();
         const taildest: []u8 = self.buffer.items[logical_tail_start..logical_len];
         std.mem.copyForwards(u8, taildest, self.buffer.items[self.tail_start..]);
       } else {
@@ -224,6 +223,7 @@ const TextHandler = struct {
         const dest: []u8 = self.buffer.items[self.head_end..logical_tail_start];
         @memcpy(dest, self.gap.slice());
       }
+      self.buffer.shrinkRetainingCapacity(logical_len);
     } else {
       try self.buffer.insertSlice(E.allocr(), self.head_end, self.gap.slice());
     }
@@ -353,17 +353,17 @@ const TextHandler = struct {
   
   fn insertChar(self: *TextHandler, E: *Editor, char: u8) !void {
     const insidx: u32 = self.line_offsets.items[self.cursor.row] + self.cursor.col;
-    // std.debug.print("ins: {} {} {}\n", .{insidx, self.head_end, (self.head_end + self.gap.slice().len)});
-    if (insidx > self.head_end and insidx <= self.head_end + self.gap.slice().len) {
+    // std.debug.print("ins: {} {} {}\n", .{insidx, self.head_end, (self.head_end + self.gap.len)});
+    if (insidx > self.head_end and insidx <= self.head_end + self.gap.len) {
       // insertion within gap
       const gap_relidx = insidx - self.head_end;
       // std.debug.print("ins gap: {}\n", .{gap_relidx});
-      if (gap_relidx == self.gap.slice().len) {
+      if (gap_relidx == self.gap.len) {
         try self.gap.append(char);
       } else {
         try self.gap.insert(gap_relidx, char);
       }
-      if (self.gap.slice().len == GAP_SIZE) {
+      if (self.gap.len == GAP_SIZE) {
         try self.flushGapBuffer(E);
       }
     } else {
