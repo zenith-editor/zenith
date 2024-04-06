@@ -106,6 +106,15 @@ const TextHandler = struct {
     start: u32,
     /// Logical position of ending marker
     end: u32,
+    /// Cursor at starting marker
+    start_cur: TextPos,
+  };
+  
+  const _Utils = struct {
+    fn lower_u32(context: void, lhs: u32, rhs: u32) bool {
+      _ = context;
+      return lhs < rhs;
+    }
   };
   
   file: ?std.fs.File = null,
@@ -249,6 +258,8 @@ const TextHandler = struct {
     } else {
       try self.buffer.insertSlice(E.allocr(), self.head_end, self.gap.slice());
     }
+    self.head_end = 0;
+    self.tail_start = 0;
     self.gap = .{};
   } 
   
@@ -413,6 +424,8 @@ const TextHandler = struct {
       }
       if (self.gap.len == GAP_SIZE) {
         try self.flushGapBuffer(E);
+        self.head_end = insidx;
+        self.tail_start = insidx;
       }
     } else {
       // insertion outside of gap
@@ -525,6 +538,68 @@ const TextHandler = struct {
     E.needs_redraw = true;
   }
   
+  fn deleteMarked(self: *TextHandler, E: *Editor) !void {
+    if (self.markers) |markers| {
+      // assume that the gap buffer is flushed to make it easier
+      // for us to delete the region
+      try self.flushGapBuffer(E);
+      
+      const n_deleted = markers.end - markers.start;
+      if (markers.end >= self.buffer.items.len) {
+        const new_len = self.buffer.items.len - n_deleted - 1;
+        self.buffer.shrinkRetainingCapacity(new_len);
+      } else {
+        // Remove chars from buffer
+        const new_len = self.buffer.items.len - n_deleted - 1;
+        std.mem.copyForwards(
+          u8,
+          self.buffer.items[markers.start..new_len],
+          self.buffer.items[(markers.end + 1)..]
+        );
+        self.buffer.shrinkRetainingCapacity(new_len);
+      }
+      
+      const line_start = std.sort.lowerBound(
+        u32,
+        markers.start,
+        self.line_offsets.items,
+        {},
+        _Utils.lower_u32,
+      );
+      const line_end = std.sort.lowerBound(
+        u32,
+        markers.end + 1,
+        self.line_offsets.items,
+        {},
+        _Utils.lower_u32,
+      );
+      // std.debug.print("delete line: {} {}\n", .{line_start, line_end});
+      // std.debug.print("{}\n", .{self.line_offsets});
+      if (line_end <= self.line_offsets.items.len) {
+        for (self.line_offsets.items[(line_end)..]) |*line| {
+          line.* -= n_deleted + 1;
+        }
+      }
+      
+      const lines_deleted = line_end - line_start;
+      if (lines_deleted > 0) {
+        // Remove line from lines
+        const new_len = self.line_offsets.items.len - lines_deleted;
+        std.mem.copyForwards(
+          u32,
+          self.line_offsets.items[line_start..new_len],
+          self.line_offsets.items[line_end..]
+        );
+        self.line_offsets.shrinkRetainingCapacity(new_len);
+      }
+      
+      self.cursor = markers.start_cur;
+
+      E.needs_redraw = true;
+      self.markers = null;
+    }
+  }
+  
   // markers
   
   pub fn markStart(self: *TextHandler) void {
@@ -536,18 +611,26 @@ const TextHandler = struct {
     self.markers = .{
       .start = markidx,
       .end = markidx,
+      .start_cur = self.cursor,
     };
   }
   
   pub fn markEnd(self: *TextHandler, E: *Editor) void {
-    const markidx: u32 = self.line_offsets.items[self.cursor.row] + self.cursor.col;
+    var markidx: u32 = self.line_offsets.items[self.cursor.row] + self.cursor.col;
+    const logical_len = self.getLogicalLength();
+    if (markidx >= logical_len) {
+      markidx = logical_len;
+    }
     if (self.markers) |*markers| {
       if (markidx > markers.start) {
         markers.end = markidx;
       } else {
         const end: u32 = markers.start;
-        markers.start = markidx;
-        markers.end = end;
+        markers.* = .{
+          .start = markidx,
+          .end = end,
+          .start_cur = self.cursor,
+        };
       }
     } else {
       unreachable;
@@ -656,10 +739,17 @@ const Editor = struct {
           self.needs_redraw = false;
         }
         if (self.needs_update_cursor) {
-          try self.renderStatus();
+          try TextImpl.renderStatus(self);
           try self.updateCursorPos();
           self.needs_update_cursor = false;
         }
+      }
+      
+      fn renderStatus(self: *Editor) !void {
+        try self.moveCursor(TextPos {.row = self.getTextHeight(), .col = 0});
+        const text_handler: *const TextHandler = &self.text_handler;
+        try self.writeAll(CLEAR_LINE);
+        try self.writeFmt(" {}:{}", .{text_handler.cursor.row+1, text_handler.cursor.col+1});
       }
     };
     const Text: StateHandler = _createStateHandler(TextImpl);
@@ -736,6 +826,7 @@ const Editor = struct {
       
       fn handleInput(self: *Editor, keysym: Keysym) !void {
         if (keysym.raw == Keysym.ESC) {
+          self.text_handler.markers = null;
           self.setState(.text);
           return;
         }
@@ -751,8 +842,17 @@ const Editor = struct {
         else if (keysym.raw == 0 and keysym.key == Keysym.RIGHT) {
           self.text_handler.goRight(self);
         }
+        else if (keysym.raw == 0 and keysym.key == Keysym.HOME) {
+          self.text_handler.goHead(self);
+        }
+        else if (keysym.raw == 0 and keysym.key == Keysym.END) {
+          self.text_handler.goTail(self);
+        }
         else if (keysym.raw == Keysym.NEWLINE) {
           self.text_handler.markEnd(self);
+        }
+        else if (keysym.raw == 0 and keysym.key == Keysym.DEL) {
+          try self.text_handler.deleteMarked(self);
         }
       }
       
@@ -763,10 +863,27 @@ const Editor = struct {
           self.needs_redraw = false;
         }
         if (self.needs_update_cursor) {
-          try self.renderStatus();
+          try MarkImpl.renderStatus(self);
           try self.updateCursorPos();
           self.needs_update_cursor = false;
         }
+      }
+      
+      fn renderStatus(self: *Editor) !void {
+        try self.moveCursor(TextPos {.row = self.getTextHeight(), .col = 0});
+        try self.writeAll(CLEAR_LINE);
+        try self.writeAll("Enter: mark end, Del: delete");
+        var status: [32]u8 = undefined;
+        const status_slice = try std.fmt.bufPrint(
+          &status,
+          "{d}:{d}",
+          .{self.text_handler.cursor.row,self.text_handler.cursor.col}, 
+        );
+        try self.moveCursor(TextPos {
+          .row = self.getTextHeight() + 1,
+          .col = @intCast(self.w_width - status_slice.len),
+        });
+        try self.writeAll(status_slice);
       }
     };
     const Mark: StateHandler = _createStateHandler(MarkImpl);
@@ -1186,13 +1303,6 @@ const Editor = struct {
     } else {
       return self.renderCharInLine(byte, colref);
     }
-  }
-  
-  fn renderStatus(self: *Editor) !void {
-    try self.moveCursor(TextPos {.row = self.getTextHeight(), .col = 0});
-    const text_handler: *const TextHandler = &self.text_handler;
-    try self.writeAll(CLEAR_LINE);
-    try self.writeFmt(" {}:{}", .{text_handler.cursor.row+1, text_handler.cursor.col+1});
   }
   
   fn handleOutput(self: *Editor) !void {
