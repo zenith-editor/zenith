@@ -122,6 +122,9 @@ const TextHandler = struct {
   /// These offsets do not contain the newline character.
   line_offsets: std.ArrayListUnmanaged(u32) = .{},
   
+  /// Maximum number of digits needed to print line position (starting from 1)
+  line_digits: u32 = 1,
+  
   cursor: TextPos = .{},
   scroll: TextPos = .{},
   
@@ -178,6 +181,7 @@ const TextHandler = struct {
       }
       i += 1;
     }
+    self.calcLineDigits();
   }
   
   // general manip
@@ -192,6 +196,10 @@ const TextHandler = struct {
   
   fn getNoLines(self: *const TextHandler) u32 {
     return @intCast(self.line_offsets.items.len);
+  }
+  
+  fn calcLineDigits(self: *TextHandler) void {
+    self.line_digits = std.math.log10(self.getNoLines() + 1) + 1;
   }
   
   fn getRowOffsetEnd(self: *const TextHandler, row: u32) u32 {
@@ -407,6 +415,7 @@ const TextHandler = struct {
     if (char == '\n') {
       self.incrementLineOffsets(self.cursor.row);
       try self.line_offsets.insert(E.allocr(), self.cursor.row + 1, insidx + 1);
+      self.calcLineDigits();
       // std.debug.print("{any} {any}", .{self.gap.slice(), self.line_offsets.items});
       
       self.cursor.row += 1;
@@ -931,7 +940,7 @@ const Editor = struct {
     const text_handler: *TextHandler = &self.text_handler;
     try self.moveCursor(TextPos {
       .row = text_handler.cursor.row - text_handler.scroll.row,
-      .col = text_handler.cursor.col - text_handler.scroll.col,
+      .col = (text_handler.cursor.col - text_handler.scroll.col) + text_handler.line_digits + 1,
     });
   }
   
@@ -944,7 +953,7 @@ const Editor = struct {
   
   fn updateWinSize(self: *Editor) !void {
     if (builtin.target.os.tag == .linux) {
-      const oldw = self.getTextWidth();
+      const oldw = self.w_width;
       const oldh = self.w_height;
       var wsz: std.os.linux.winsize = undefined;
       const rc = std.os.linux.ioctl(self.in.handle, std.os.linux.T.IOCGWINSZ, @intFromPtr(&wsz));
@@ -961,7 +970,7 @@ const Editor = struct {
   }
   
   fn getTextWidth(self: *Editor) u32 {
-    return self.w_width;
+    return self.w_width - self.text_handler.line_digits - 1;
   }
   
   fn getTextHeight(self: *Editor) u32 {
@@ -983,7 +992,9 @@ const Editor = struct {
     const text_handler: *const TextHandler = &self.text_handler;
     var row: u32 = 0;
     const cursor_row: u32 = text_handler.cursor.row - text_handler.scroll.row;
+    var lineno: [16]u8 = undefined;
     for (text_handler.scroll.row..text_handler.getNoLines()) |i| {
+      
       const offset_start: u32 = text_handler.line_offsets.items[i];
       const offset_end: u32 = text_handler.getRowOffsetEnd(@intCast(i));
       
@@ -991,6 +1002,14 @@ const Editor = struct {
       var iter = text_handler.iterate(offset_start + colOffset);
       
       try self.moveCursor(TextPos {.row = row, .col = 0});
+      
+      const lineno_slice = try std.fmt.bufPrint(&lineno, "{d}", .{i+1});
+      for(0..(self.text_handler.line_digits - lineno_slice.len)) |_| {
+        try self.outw.writeByte(' ');
+      }
+      try self.writeAll(lineno_slice);
+      try self.outw.writeByte(' ');
+      
       var col: u32 = 0;
       while (iter.nextUntil(offset_end)) |byte| {
         if (!(try self.renderCharInLine(byte, &col))) {
