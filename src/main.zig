@@ -272,7 +272,7 @@ const TextHandler = struct {
     }
     self.cursor.row += 1;
     self.syncColumnAfterCursor(E);
-    if ((self.cursor.row + self.scroll.row) >= E.textHeight()) {
+    if ((self.scroll.row + E.textHeight()) <= self.cursor.row) {
       self.scroll.row += 1;
       E.needs_redraw = true;
     }
@@ -319,8 +319,26 @@ const TextHandler = struct {
     E.needs_redraw = true;
   }
   
+  fn gotoLine(self: *TextHandler, E: *Editor, row: u32) !void {
+    if (row >= self.line_offsets.items.len) {
+      return error.Overflow;
+    }
+    self.cursor.row = row;
+    self.syncRowScroll(E);
+    self.cursor.col = 0;
+    self.scroll.col = 0;
+  }
+  
   fn syncColumnScroll(self: *TextHandler, E: *Editor) void {
-    if ((self.scroll.col + self.cursor.col) > E.w_width) {
+    if (self.scroll.col > self.cursor.col) {
+      if (E.w_width < self.cursor.col) {
+        self.scroll.col = self.cursor.col - E.w_width + 1;
+      } else if (self.cursor.col == 0) {
+        self.scroll.col = 0;
+      } else {
+        self.scroll.col = self.cursor.col - 1;
+      }
+    } else if ((self.scroll.col + self.cursor.col) > E.w_width) {
       if (E.w_width > self.cursor.col) {
         self.scroll.col = E.w_width - self.cursor.col + 1;
       } else {
@@ -332,7 +350,15 @@ const TextHandler = struct {
   }
   
   fn syncRowScroll(self: *TextHandler, E: *Editor) void {
-    if ((self.scroll.row + self.cursor.row) > E.textHeight()) {
+    if (self.scroll.row > self.cursor.row) {
+      if (E.textHeight() < self.cursor.row) {
+        self.scroll.row = self.cursor.row - E.textHeight() + 1;
+      } else if (self.cursor.row == 0) {
+        self.scroll.row = 0;
+      } else {
+        self.scroll.row = self.cursor.row - 1;
+      }
+    } else if ((self.scroll.row + self.cursor.row) > E.textHeight()) {
       if (E.textHeight() > self.cursor.row) {
         self.scroll.row = E.textHeight() - self.cursor.row + 1;
       } else {
@@ -518,8 +544,16 @@ const Editor = struct {
         }
         else if (keysym.ctrl_key and keysym.key == 'o') {
           self.cmd_data = CommandData {
-            .prompt = "Enter file",
-            .onInputted = Editor.onOpenInputted,
+            .prompt = "Open file:",
+            .onInputted = Commands.Open.onInputted,
+          };
+          self.setState(State.command);
+        }
+        else if (keysym.ctrl_key and keysym.key == 'g') {
+          self.cmd_data = CommandData {
+            .prompt = "Go to line (first = ^g, last = ^G):",
+            .onInputted = Commands.GotoLine.onInputted,
+            .onKey = Commands.GotoLine.onKey,
           };
           self.setState(State.command);
         }
@@ -555,14 +589,19 @@ const Editor = struct {
         if (keysym.raw == Keysym.ESC) {
           self.setState(.text);
         }
-        else if (keysym.raw == Keysym.BACKSPACE) {
+        
+        if (cmd_data.onKey) |onKey| {
+          if (try onKey(self, keysym)) {
+            return;
+          }
+        }
+        
+        if (keysym.raw == Keysym.BACKSPACE) {
           _ = cmd_data.cmdinp.popOrNull();
           self.needs_update_cursor = true;
         }
         else if (keysym.raw == Keysym.NEWLINE) {
-          if (cmd_data.onInputted) |onInputted| {
-            try onInputted(self);
-          }
+          try cmd_data.onInputted(self);
         }
         else if (keysym.isPrint()) {
           try cmd_data.cmdinp.append(self.allocr(), keysym.key);
@@ -619,11 +658,99 @@ const Editor = struct {
     prompt: ?[]const u8 = null,
     promptoverlay: ?[]const u8 = null,
     cmdinp: String = .{},
-    onInputted: ?*const fn (self: *Editor) anyerror!void,
+    onInputted: *const fn (self: *Editor) anyerror!void,
+    
+    /// Handle key, returns false if no key is handled
+    onKey: ?*const fn (self: *Editor, keysym: Keysym) anyerror!bool = null,
     
     fn deinit(self: *CommandData, E: *Editor) void {
       self.cmdinp.deinit(E.allocr());
     }
+  };
+  
+  // commands
+  const Commands = struct {
+    const Open = struct {
+      fn onInputted(self: *Editor) !void {
+        self.needs_update_cursor = true;
+        const cwd = std.fs.cwd();
+        var cmd_data: *Editor.CommandData = &self.cmd_data.?;
+        const path: []const u8 = cmd_data.cmdinp.items;
+        var opened_file: ?std.fs.File = null;
+        cwd.access(path, .{}) catch |err| switch(err) {
+          error.FileNotFound => {
+            opened_file = cwd.createFile(path, .{
+              .read = true,
+              .truncate = false
+            }) catch |create_err| {
+              std.debug.print("create file: {}", .{create_err});
+              cmd_data.promptoverlay = "Unable to create new file!";
+              return;
+            };
+          },
+          else => {
+            std.debug.print("access: {}", .{err});
+            cmd_data.promptoverlay = "Unable to open file!";
+            return;
+          },
+        };
+        if (opened_file == null) {
+          opened_file = cwd.openFile(path, .{
+            .mode = .read_write,
+            .lock = .shared,
+          }) catch |err| {
+            std.debug.print("w: {}", .{err});
+            cmd_data.promptoverlay = "Unable to open file!";
+            return;
+          };
+        }
+        try self.text_handler.open(self, opened_file.?);
+        self.setState(State.text);
+        self.needs_redraw = true;
+      }
+    };
+    
+    const GotoLine = struct {
+      fn onInputted(self: *Editor) !void {
+        self.needs_update_cursor = true;
+        var text_handler: *TextHandler = &self.text_handler;
+        var cmd_data: *Editor.CommandData = &self.cmd_data.?;
+        const line: u32 = std.fmt.parseInt(u32, cmd_data.cmdinp.items, 10) catch {
+          cmd_data.promptoverlay = "Invalid integer!";
+          return;
+        };
+        if (line == 0) {
+          cmd_data.promptoverlay = "Lines start at 1!";
+          return;
+        }
+        text_handler.gotoLine(self, line - 1) catch {
+          cmd_data.promptoverlay = "Out of bounds!";
+          return;
+        };
+        self.setState(State.text);
+        self.needs_redraw = true;
+      }
+      
+      fn onKey(self: *Editor, keysym: Keysym) !bool {
+        if (keysym.isPrint()) {
+          if (keysym.key == 'g') {
+            try self.text_handler.gotoLine(self, 0);
+            self.setState(State.text);
+            self.needs_redraw = true;
+            return true;
+          } else if (keysym.key == 'G') {
+            try self.text_handler.gotoLine(
+              self,
+              @intCast(self.text_handler.line_offsets.items.len - 1)
+            );
+            self.setState(State.text);
+            self.needs_redraw = true;
+            return true;
+          }
+        }
+        return false;
+      }
+    };
   };
   
   const STATUS_BAR_HEIGHT = 2;
@@ -914,46 +1041,6 @@ const Editor = struct {
     }
     try self.refreshScreen();
     try self.disableRawMode();
-  }
-  
-  // events
-  
-  fn onOpenInputted(self: *Editor) !void {
-    self.needs_update_cursor = true;
-    const cwd = std.fs.cwd();
-    var cmd_data: *Editor.CommandData = &self.cmd_data.?;
-    const path: []const u8 = cmd_data.cmdinp.items;
-    var opened_file: ?std.fs.File = null;
-    cwd.access(path, .{}) catch |err| switch(err) {
-      error.FileNotFound => {
-        opened_file = cwd.createFile(path, .{
-          .read = true,
-          .truncate = false
-        }) catch |create_err| {
-          std.debug.print("create file: {}", .{create_err});
-          cmd_data.promptoverlay = "Unable to create new file!";
-          return;
-        };
-      },
-      else => {
-        std.debug.print("access: {}", .{err});
-        cmd_data.promptoverlay = "Unable to open file!";
-        return;
-      },
-    };
-    if (opened_file == null) {
-      opened_file = cwd.openFile(path, .{
-        .mode = .read_write,
-        .lock = .shared,
-      }) catch |err| {
-        std.debug.print("w: {}", .{err});
-        cmd_data.promptoverlay = "Unable to open file!";
-        return;
-      };
-    }
-    try self.text_handler.open(self, opened_file.?);
-    self.setState(State.INIT);
-    self.needs_redraw = true;
   }
   
 };
