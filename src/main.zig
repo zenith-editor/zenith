@@ -107,7 +107,8 @@ const TextHandler = struct {
   /// text = buffer[0..(head_end)] ++ gap ++ buffer[tail_start..]
   buffer: String = .{},
   
-  /// Real position where the head of the text ends
+  /// Real position where the head of the text ends (excluding the last
+  /// character)
   head_end: u32 = 0,
   
   /// Real position where the tail of the text starts
@@ -184,7 +185,16 @@ const TextHandler = struct {
   // gap
   
   fn flushGapBuffer(self: *TextHandler, E: *Editor) !void {
-    try self.buffer.insertSlice(E.allocr(), self.head_end, self.gap.slice());
+    if (self.tail_start > self.head_end) {
+      // buffer contains deleted characters
+      const deletedChars = self.tail_start - self.head_end;
+      const reservedChars = self.gap.slice().len - deletedChars;
+      _ = try self.buffer.addManyAt(E.allocr(), self.head_end, reservedChars);
+      const dest: []u8 = self.buffer.items[self.head_end..(self.head_end+self.gap.slice().len)];
+      @memcpy(dest, self.gap.slice());
+    } else {
+      try self.buffer.insertSlice(E.allocr(), self.head_end, self.gap.slice());
+    }
     self.gap = .{};
   } 
   
@@ -352,53 +362,72 @@ const TextHandler = struct {
   
   // deletion
   
+  fn decrementLineOffsets(self: *TextHandler, fromRow: u32) void {
+    for (self.line_offsets.items[(fromRow + 1)..]) |*rowptr| {
+      rowptr.* -= 1;
+    }
+  }
+  
   fn deleteChar(self: *TextHandler, E: *Editor) !void {
-    _=.{self,E};
-//     var row: *String = &self.lines.items[self.cursor.row];
-//     if (row.items.len == 1) {
-//       // empty line, so remove it
-//       return self.deleteCurrentLine(E);
-//     } else if (self.cursor.col == 0) {
-//       // placing cursor at the first column removes the line break
-//       return self.fuseWithPrevLine(E);
-//     } else if (self.cursor.col < row.items.len) {
-//       // remove character before the cursor
-//       _ = row.orderedRemove(self.cursor.col - 1);
-//     } else {
-//       // remove last character before the null terminator
-//       _ = row.orderedRemove(row.items.len - 2);
-//     }
-//     E.needs_redraw = true;
-//     self.goLeft(E);
+    var delidx: u32 = self.line_offsets.items[self.cursor.row] + self.cursor.col;
+    if (delidx == 0) {
+      return;
+    }
+    delidx -= 1;
+    
+    const logical_tail_start = self.head_end + self.gap.len;
+    std.debug.print("{}/h{}/t{}\n",.{delidx, self.head_end,logical_tail_start});
+
+    var deletedChar: ?u8 = null;
+    if (delidx < self.head_end) {
+      std.debug.print("1\n", .{});
+      if (delidx == (self.head_end - 1)) {
+        std.debug.print("1.1\n", .{});
+        // deletion exactly before gap
+        deletedChar = self.buffer.items[self.head_end - 1];
+        self.head_end -= 1;
+      } else {
+        // deletion before gap
+        const dest: []u8 = self.buffer.items[delidx..(self.head_end-1)];
+        const src: []const u8 = self.buffer.items[(delidx+1)..self.head_end];
+        deletedChar = self.buffer.items[delidx];
+        std.mem.copyForwards(u8, dest, src);
+        self.head_end -= 1;
+      }
+    } else if (delidx >= logical_tail_start) {
+      std.debug.print("2\n", .{});
+      const real_tailidx = self.tail_start + (delidx - logical_tail_start);
+      if (delidx == logical_tail_start) {
+        std.debug.print("2.1\n", .{});
+        // deletion one char after gap
+        deletedChar = self.buffer.items[real_tailidx];
+        self.tail_start += 1;
+      }
+      // deletion after gap
+      deletedChar = self.buffer.orderedRemove(real_tailidx);
+    } else {
+      std.debug.print("3\n", .{});
+//       // deletion within gap
+      const gap_relidx = delidx - self.head_end;
+      deletedChar = self.gap.orderedRemove(gap_relidx);
+    }
+    
+    std.debug.print("del {?}\n", .{deletedChar});
+    
+    if (self.cursor.col == 0) {
+      std.debug.assert(deletedChar == '\n');
+      const deletedrowidx = self.cursor.row;
+      self.cursor.row -= 1;
+      self.goTail(E);
+      self.decrementLineOffsets(deletedrowidx);
+      _ = self.line_offsets.orderedRemove(deletedrowidx);
+    } else {
+      self.goLeft(E);
+    }
+
+    E.needs_redraw = true;
   }
-  
-  fn deleteCurrentLine(self: *TextHandler, E: *Editor) !void {
-    _=.{self,E};
-//     if (self.cursor.row == 0) {
-//       return;
-//     }
-//     var row: String = self.lines.orderedRemove(self.cursor.row);
-//     defer row.deinit(E.allocr());
-//     self.cursor.row -= 1;
-//     self.goTail(E);
-  }
-  
-  fn fuseWithPrevLine(self: *TextHandler, E: *Editor) !void {
-    _=.{self,E};
-//     if (self.cursor.row == 0) {
-//       return;
-//     }
-//     var row: String = self.lines.orderedRemove(self.cursor.row);
-//     defer row.deinit(E.allocr());
-//     self.cursor.row -= 1;
-//     self.goTail(E);
-//     var prevRow: *String = &self.lines.items[self.cursor.row];
-//     // remove sentinel for previous line
-//     if (prevRow.pop() != 0) {
-//       std.debug.panic("expected sentinel value", .{});
-//     }
-//     try prevRow.appendSlice(E.allocr(), row.items);
-  }
+
 };
 
 // editor
