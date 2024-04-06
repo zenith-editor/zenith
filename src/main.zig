@@ -101,6 +101,13 @@ const TextHandler = struct {
     }
   };
   
+  const Markers = struct {
+    /// Logical position of starting marker
+    start: u32,
+    /// Logical position of ending marker
+    end: u32,
+  };
+  
   file: ?std.fs.File = null,
   
   /// Buffer of characters. Logical text buffer is then:
@@ -128,6 +135,8 @@ const TextHandler = struct {
   
   cursor: TextPos = .{},
   scroll: TextPos = .{},
+  
+  markers: ?Markers = null,
   
   fn init(allocr: std.mem.Allocator) !TextHandler {
     var line_offsets = try std.ArrayListUnmanaged(u32).initCapacity(allocr, 1);
@@ -515,6 +524,36 @@ const TextHandler = struct {
 
     E.needs_redraw = true;
   }
+  
+  // markers
+  
+  pub fn markStart(self: *TextHandler) void {
+    var markidx: u32 = self.line_offsets.items[self.cursor.row] + self.cursor.col + 1;
+    const logical_len = self.getLogicalLength();
+    if (markidx >= logical_len) {
+      markidx = logical_len;
+    }
+    self.markers = .{
+      .start = markidx,
+      .end = markidx,
+    };
+  }
+  
+  pub fn markEnd(self: *TextHandler, E: *Editor) void {
+    const markidx: u32 = self.line_offsets.items[self.cursor.row] + self.cursor.col;
+    if (self.markers) |*markers| {
+      if (markidx > markers.start) {
+        markers.end = markidx;
+      } else {
+        const end: u32 = markers.start;
+        markers.start = markidx;
+        markers.end = end;
+      }
+    } else {
+      unreachable;
+    }
+    E.needs_redraw = true;
+  }
 
 };
 
@@ -524,6 +563,7 @@ const Editor = struct {
   const State = enum {
     text,
     command,
+    mark,
     quit,
     
     const INIT = State.text;
@@ -592,6 +632,9 @@ const Editor = struct {
           };
           self.setState(State.command);
         }
+        else if (keysym.ctrl_key and keysym.key == 'b') {
+          self.setState(State.mark);
+        }
         else if (keysym.raw == Keysym.BACKSPACE) {
           try self.text_handler.deleteChar(self, false);
         }
@@ -626,6 +669,7 @@ const Editor = struct {
         var cmd_data: *Editor.CommandData = &self.cmd_data.?;
         if (keysym.raw == Keysym.ESC) {
           self.setState(.text);
+          return;
         }
         
         if (cmd_data.onKey) |onKey| {
@@ -685,9 +729,52 @@ const Editor = struct {
     };
     const Command: StateHandler = _createStateHandler(CommandImpl);
     
+    const MarkImpl = struct {
+      fn onSet(self: *Editor) void {
+        self.text_handler.markStart();
+      }
+      
+      fn handleInput(self: *Editor, keysym: Keysym) !void {
+        if (keysym.raw == Keysym.ESC) {
+          self.setState(.text);
+          return;
+        }
+        if (keysym.raw == 0 and keysym.key == Keysym.UP) {
+          self.text_handler.goUp(self);
+        }
+        else if (keysym.raw == 0 and keysym.key == Keysym.DOWN) {
+          self.text_handler.goDown(self);
+        }
+        else if (keysym.raw == 0 and keysym.key == Keysym.LEFT) {
+          self.text_handler.goLeft(self);
+        }
+        else if (keysym.raw == 0 and keysym.key == Keysym.RIGHT) {
+          self.text_handler.goRight(self);
+        }
+        else if (keysym.raw == Keysym.NEWLINE) {
+          self.text_handler.markEnd(self);
+        }
+      }
+      
+      fn handleOutput(self: *Editor) !void {
+        if (self.needs_redraw) {
+          try self.refreshScreen();
+          try self.renderText();
+          self.needs_redraw = false;
+        }
+        if (self.needs_update_cursor) {
+          try self.renderStatus();
+          try self.updateCursorPos();
+          self.needs_update_cursor = false;
+        }
+      }
+    };
+    const Mark: StateHandler = _createStateHandler(MarkImpl);
+    
     const List = [_]*const StateHandler{
       &Text,
       &Command,
+      &Mark,
       &Text, // quit
     };
   };
@@ -846,6 +933,9 @@ const Editor = struct {
   }
   
   fn setState(self: *Editor, state: State) void {
+    if (state == self._state) {
+      return;
+    }
     if (state != State.command) {
       if (self.cmd_data != null) {
         self.cmd_data.?.deinit(self);
@@ -954,6 +1044,8 @@ const Editor = struct {
   const CLEAR_SCREEN = "\x1b[2J";
   const CLEAR_LINE = "\x1b[2K";
   const RESET_POS = "\x1b[H";
+  const COLOR_INVERT = "\x1b[7m";
+  const COLOR_DEFAULT = "\x1b[0m";
   
   fn writeAll(self: *Editor, bytes: []const u8) !void {
     return self.outw.writeAll(bytes);
@@ -1045,10 +1137,19 @@ const Editor = struct {
       try self.writeAll(lineno_slice);
       try self.outw.writeByte(' ');
       
-      var col: u32 = 0;
-      while (iter.nextUntil(offset_end)) |byte| {
-        if (!(try self.renderCharInLine(byte, &col))) {
-          break;
+      if (text_handler.markers) |*markers| {
+        var col: u32 = 0;
+        while (iter.nextUntil(offset_end)) |byte| {
+          if (!(try self.renderCharInLineMarked(byte, &col, markers, iter.pos))) {
+            break;
+          }
+        }
+      } else {
+        var col: u32 = 0;
+        while (iter.nextUntil(offset_end)) |byte| {
+          if (!(try self.renderCharInLine(byte, &col))) {
+            break;
+          }
         }
       }
       
@@ -1070,6 +1171,21 @@ const Editor = struct {
     try self.outw.writeByte(byte);
     colref.* += 1;
     return true;
+  }
+  
+  fn renderCharInLineMarked(
+    self: *Editor, byte: u8, colref: *u32,
+    markers: *const TextHandler.Markers,
+    pos: u32,
+  ) !bool {
+    if (pos >= markers.start and pos <= markers.end) {
+      try self.writeAll(COLOR_INVERT);
+      const ret = self.renderCharInLine(byte, colref);
+      try self.writeAll(COLOR_DEFAULT);
+      return ret;
+    } else {
+      return self.renderCharInLine(byte, colref);
+    }
   }
   
   fn renderStatus(self: *Editor) !void {
