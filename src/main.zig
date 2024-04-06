@@ -190,9 +190,13 @@ const TextHandler = struct {
     return @intCast(self.head_end + self.gap.len + (self.buffer.items.len - self.tail_start));
   }
   
+  fn getNoLines(self: *const TextHandler) u32 {
+    return @intCast(self.line_offsets.items.len);
+  }
+  
   fn getRowOffsetEnd(self: *const TextHandler, row: u32) u32 {
     // The newline character of the current line is not counted
-    return if ((row + 1) < self.line_offsets.items.len)
+    return if ((row + 1) < self.getNoLines())
       (self.line_offsets.items[row + 1] - 1)
     else
       self.getLogicalLength();
@@ -243,8 +247,8 @@ const TextHandler = struct {
       self.cursor.col = rowlen - 1;
     }
     const oldScrollCol = self.scroll.col;
-    if (self.cursor.col > E.w_width) {
-      self.scroll.col = self.cursor.col - E.w_width;
+    if (self.cursor.col > E.getTextWidth()) {
+      self.scroll.col = self.cursor.col - E.getTextWidth();
     } else {
       self.scroll.col = 0;
     }
@@ -267,12 +271,12 @@ const TextHandler = struct {
   }
   
   fn goDown(self: *TextHandler, E: *Editor) void {
-    if (self.cursor.row == self.line_offsets.items.len - 1) {
+    if (self.cursor.row == self.getNoLines() - 1) {
       return;
     }
     self.cursor.row += 1;
     self.syncColumnAfterCursor(E);
-    if ((self.scroll.row + E.textHeight()) <= self.cursor.row) {
+    if ((self.scroll.row + E.getTextHeight()) <= self.cursor.row) {
       self.scroll.row += 1;
       E.needs_redraw = true;
     }
@@ -296,7 +300,7 @@ const TextHandler = struct {
       return;
     }
     self.cursor.col += 1;
-    if ((self.cursor.col + self.scroll.col) >= E.w_width) {
+    if ((self.cursor.col + self.scroll.col) >= E.getTextWidth()) {
       self.scroll.col += 1;
       E.needs_redraw = true;
     }
@@ -320,7 +324,7 @@ const TextHandler = struct {
   }
   
   fn gotoLine(self: *TextHandler, E: *Editor, row: u32) !void {
-    if (row >= self.line_offsets.items.len) {
+    if (row >= self.getNoLines()) {
       return error.Overflow;
     }
     self.cursor.row = row;
@@ -331,18 +335,18 @@ const TextHandler = struct {
   
   fn syncColumnScroll(self: *TextHandler, E: *Editor) void {
     if (self.scroll.col > self.cursor.col) {
-      if (E.w_width < self.cursor.col) {
-        self.scroll.col = self.cursor.col - E.w_width + 1;
+      if (E.getTextWidth() < self.cursor.col) {
+        self.scroll.col = self.cursor.col - E.getTextWidth() + 1;
       } else if (self.cursor.col == 0) {
         self.scroll.col = 0;
       } else {
         self.scroll.col = self.cursor.col - 1;
       }
-    } else if ((self.scroll.col + self.cursor.col) > E.w_width) {
-      if (E.w_width > self.cursor.col) {
-        self.scroll.col = E.w_width - self.cursor.col + 1;
+    } else if ((self.scroll.col + self.cursor.col) > E.getTextWidth()) {
+      if (E.getTextWidth() > self.cursor.col) {
+        self.scroll.col = E.getTextWidth() - self.cursor.col + 1;
       } else {
-        self.scroll.col = self.cursor.col - E.w_width + 1;
+        self.scroll.col = self.cursor.col - E.getTextWidth() + 1;
       }
     } else {
       self.scroll.col = 0;
@@ -351,18 +355,18 @@ const TextHandler = struct {
   
   fn syncRowScroll(self: *TextHandler, E: *Editor) void {
     if (self.scroll.row > self.cursor.row) {
-      if (E.textHeight() < self.cursor.row) {
-        self.scroll.row = self.cursor.row - E.textHeight() + 1;
+      if (E.getTextHeight() < self.cursor.row) {
+        self.scroll.row = self.cursor.row - E.getTextHeight() + 1;
       } else if (self.cursor.row == 0) {
         self.scroll.row = 0;
       } else {
         self.scroll.row = self.cursor.row - 1;
       }
-    } else if ((self.scroll.row + self.cursor.row) > E.textHeight()) {
-      if (E.textHeight() > self.cursor.row) {
-        self.scroll.row = E.textHeight() - self.cursor.row + 1;
+    } else if ((self.scroll.row + self.cursor.row) > E.getTextHeight()) {
+      if (E.getTextHeight() > self.cursor.row) {
+        self.scroll.row = E.getTextHeight() - self.cursor.row + 1;
       } else {
-        self.scroll.row = self.cursor.row - E.textHeight() + 1;
+        self.scroll.row = self.cursor.row - E.getTextHeight() + 1;
       }
     } else { 
       self.scroll.row = 0;
@@ -407,7 +411,7 @@ const TextHandler = struct {
       
       self.cursor.row += 1;
       self.cursor.col = 0;
-      if ((self.scroll.row + self.cursor.row) > E.textHeight()) {
+      if ((self.scroll.row + self.cursor.row) > E.getTextHeight()) {
         self.scroll.row += 1;
       }
       E.needs_redraw = true;
@@ -613,7 +617,7 @@ const Editor = struct {
       }
       
       fn renderStatus(self: *Editor) !void {
-        try self.moveCursor(TextPos {.row = self.textHeight(), .col = 0});
+        try self.moveCursor(TextPos {.row = self.getTextHeight(), .col = 0});
         try self.writeAll(Editor.CLEAR_LINE);
         const cmd_data: *const Editor.CommandData = &self.cmd_data.?;
         if (cmd_data.promptoverlay) |promptoverlay| {
@@ -621,12 +625,12 @@ const Editor = struct {
         } else if (cmd_data.prompt) |prompt| {
           try self.writeAll(prompt);
         }
-        try self.moveCursor(TextPos {.row = (self.textHeight() + 1), .col = 0});
+        try self.moveCursor(TextPos {.row = (self.getTextHeight() + 1), .col = 0});
         try self.writeAll(Editor.CLEAR_LINE);
         try self.writeAll(" >");
         var col: u32 = 0;
         for (cmd_data.cmdinp.items) |byte| {
-          if (col > self.w_width) {
+          if (col > self.getTextWidth()) {
             return;
           }
           try self.outw.writeByte(byte);
@@ -741,7 +745,7 @@ const Editor = struct {
           } else if (keysym.key == 'G') {
             try self.text_handler.gotoLine(
               self,
-              @intCast(self.text_handler.line_offsets.items.len - 1)
+              @intCast(self.text_handler.getNoLines() - 1)
             );
             self.setState(State.text);
             self.needs_redraw = true;
@@ -919,7 +923,7 @@ const Editor = struct {
     var row = pos.row;
     if (row > self.w_height - 1) { row = self.w_height - 1; }
     var col = pos.col;
-    if (col > self.w_width - 1) { col = self.w_width - 1; }
+    if (col > self.getTextWidth() - 1) { col = self.getTextWidth() - 1; }
     return self.writeFmt("\x1b[{d};{d}H", .{row + 1, col + 1});
   }
   
@@ -940,7 +944,7 @@ const Editor = struct {
   
   fn updateWinSize(self: *Editor) !void {
     if (builtin.target.os.tag == .linux) {
-      const oldw = self.w_width;
+      const oldw = self.getTextWidth();
       const oldh = self.w_height;
       var wsz: std.os.linux.winsize = undefined;
       const rc = std.os.linux.ioctl(self.in.handle, std.os.linux.T.IOCGWINSZ, @intFromPtr(&wsz));
@@ -956,7 +960,11 @@ const Editor = struct {
     }
   }
   
-  fn textHeight(self: *Editor) u32 {
+  fn getTextWidth(self: *Editor) u32 {
+    return self.w_width;
+  }
+  
+  fn getTextHeight(self: *Editor) u32 {
     return self.w_height - STATUS_BAR_HEIGHT;
   }
   
@@ -975,7 +983,7 @@ const Editor = struct {
     const text_handler: *const TextHandler = &self.text_handler;
     var row: u32 = 0;
     const cursor_row: u32 = text_handler.cursor.row - text_handler.scroll.row;
-    for (text_handler.scroll.row..text_handler.line_offsets.items.len) |i| {
+    for (text_handler.scroll.row..text_handler.getNoLines()) |i| {
       const offset_start: u32 = text_handler.line_offsets.items[i];
       const offset_end: u32 = text_handler.getRowOffsetEnd(@intCast(i));
       
@@ -991,7 +999,7 @@ const Editor = struct {
       }
       
       row += 1;
-      if (row == self.textHeight()) {
+      if (row == self.getTextHeight()) {
         break;
       }
     }
@@ -999,7 +1007,7 @@ const Editor = struct {
   }
   
   fn renderCharInLine(self: *Editor, byte: u8, colref: *u32) !bool {
-    if (colref.* == self.w_width) {
+    if (colref.* == self.getTextWidth()) {
       return false;
     }
     if (std.ascii.isControl(byte)) {
@@ -1011,7 +1019,7 @@ const Editor = struct {
   }
   
   fn renderStatus(self: *Editor) !void {
-    try self.moveCursor(TextPos {.row = self.textHeight(), .col = 0});
+    try self.moveCursor(TextPos {.row = self.getTextHeight(), .col = 0});
     const text_handler: *const TextHandler = &self.text_handler;
     try self.writeAll(CLEAR_LINE);
     try self.writeFmt(" {}:{}", .{text_handler.cursor.row+1, text_handler.cursor.col+1});
