@@ -22,6 +22,7 @@ const Keysym = struct {
   const LEFT: u8 = 3;
   const HOME: u8 = 4;
   const END: u8 = 5;
+  const DEL: u8 = 6;
   
   fn init(raw: u8) Keysym {
     if (raw < std.ascii.control_code.us) {
@@ -420,7 +421,7 @@ const TextHandler = struct {
       
       self.cursor.row += 1;
       self.cursor.col = 0;
-      if ((self.scroll.row + self.cursor.row) > E.getTextHeight()) {
+      if ((self.scroll.row + E.getTextHeight()) <= self.cursor.row) {
         self.scroll.row += 1;
       }
       E.needs_redraw = true;
@@ -439,8 +440,14 @@ const TextHandler = struct {
     }
   }
   
-  fn deleteChar(self: *TextHandler, E: *Editor) !void {
+  fn deleteChar(self: *TextHandler, E: *Editor, deleteNextChar: bool) !void {
     var delidx: u32 = self.line_offsets.items[self.cursor.row] + self.cursor.col;
+    if (deleteNextChar) {
+      delidx += 1;
+      if (delidx > self.getLogicalLength()) {
+        return;
+      }
+    }
     if (delidx == 0) {
       return;
     }
@@ -479,16 +486,31 @@ const TextHandler = struct {
       deletedChar = self.gap.orderedRemove(gap_relidx);
     }
     
-    if (self.cursor.col == 0) {
-      std.debug.assert(deletedChar == '\n');
-      const deletedrowidx = self.cursor.row;
-      self.cursor.row -= 1;
-      self.goTail(E);
-      self.decrementLineOffsets(deletedrowidx);
-      _ = self.line_offsets.orderedRemove(deletedrowidx);
+    if (deleteNextChar) {
+      if (delidx == self.getRowOffsetEnd(self.cursor.row)) {
+        // deleting next line
+        if ((self.cursor.row + 1) == self.getNoLines()) {
+          // do nothing if deleting last line
+        } else {
+          const deletedrowidx = self.cursor.row + 1;
+          self.decrementLineOffsets(deletedrowidx);
+          _ = self.line_offsets.orderedRemove(deletedrowidx);
+        }
+      } else {
+        self.decrementLineOffsets(self.cursor.row);
+      }
     } else {
-      self.decrementLineOffsets(self.cursor.row);
-      self.goLeft(E);
+      if (self.cursor.col == 0) {
+        std.debug.assert(deletedChar == '\n');
+        const deletedrowidx = self.cursor.row;
+        self.cursor.row -= 1;
+        self.goTail(E);
+        self.decrementLineOffsets(deletedrowidx);
+        _ = self.line_offsets.orderedRemove(deletedrowidx);
+      } else {
+        self.decrementLineOffsets(self.cursor.row);
+        self.goLeft(E);
+      }
     }
 
     E.needs_redraw = true;
@@ -571,7 +593,10 @@ const Editor = struct {
           self.setState(State.command);
         }
         else if (keysym.raw == Keysym.BACKSPACE) {
-          try self.text_handler.deleteChar(self);
+          try self.text_handler.deleteChar(self, false);
+        }
+        else if (keysym.raw == 0 and keysym.key == Keysym.DEL) {
+          try self.text_handler.deleteChar(self, true);
         }
         else if (keysym.raw == Keysym.NEWLINE) {
           try self.text_handler.insertChar(self, '\n');
@@ -899,11 +924,21 @@ const Editor = struct {
             'D' => { return Keysym.initSpecial(Keysym.LEFT); },
             'F' => { return Keysym.initSpecial(Keysym.END); },
             'H' => { return Keysym.initSpecial(Keysym.HOME); },
+            '3' => {
+              switch (self.inr.readByte() catch 0) {
+                '~' => { return Keysym.initSpecial(Keysym.DEL); },
+                else => {
+                  self.flushConsoleInput();
+                  return null;
+                },
+              }
+            },
             else => |byte1| {
               // unknown escape sequence, empty the buffer
               _ = byte1;
               // std.debug.print("[{}]", .{byte1});
               self.flushConsoleInput();
+              return null;
             }
           }
         } else {
