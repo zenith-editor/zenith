@@ -125,6 +125,12 @@ const TextHandler = struct {
   cursor: TextPos = .{},
   scroll: TextPos = .{},
   
+  fn init(allocr: std.mem.Allocator) !TextHandler {
+    var line_offsets = try std.ArrayListUnmanaged(u32).initCapacity(allocr, 1);
+    try line_offsets.append(allocr, 0);
+    return TextHandler { .line_offsets = line_offsets, };
+  }
+  
   // io
   
   fn open(self: *TextHandler, E: *Editor, file: std.fs.File) !void {
@@ -180,12 +186,16 @@ const TextHandler = struct {
     return TextIterator { .text_handler = self, .pos = pos, };
   }
   
+  fn getLogicalLength(self: *const TextHandler) u32 {
+    return @intCast(self.head_end + self.gap.slice().len + (self.buffer.items.len - self.tail_start));
+  }
+  
   fn getRowOffsetEnd(self: *const TextHandler, row: u32) u32 {
     // The newline character of the current line is not counted
     return if ((row + 1) < self.line_offsets.items.len)
       (self.line_offsets.items[row + 1] - 1)
     else
-      @intCast(self.buffer.items.len + self.gap.slice().len);
+      self.getLogicalLength();
   }
   
   fn getRowLen(self: *const TextHandler, row: u32) u32 {
@@ -199,11 +209,21 @@ const TextHandler = struct {
   fn flushGapBuffer(self: *TextHandler, E: *Editor) !void {
     if (self.tail_start > self.head_end) {
       // buffer contains deleted characters
-      const deletedChars = self.tail_start - self.head_end;
-      const reservedChars = self.gap.slice().len - deletedChars;
-      _ = try self.buffer.addManyAt(E.allocr(), self.head_end, reservedChars);
-      const dest: []u8 = self.buffer.items[self.head_end..(self.head_end+self.gap.slice().len)];
-      @memcpy(dest, self.gap.slice());
+      std.debug.print("fl: {} {}\n", .{self.tail_start, self.head_end});
+      const deleted_chars = self.tail_start - self.head_end;
+      const logical_tail_start = self.head_end + self.gap.len;
+      if (deleted_chars > self.gap.len) {
+        const gapdest: []u8 = self.buffer.items[self.head_end..logical_tail_start];
+        @memcpy(gapdest, self.gap.slice());
+        const logical_len = self.getLogicalLength();
+        const taildest: []u8 = self.buffer.items[logical_tail_start..logical_len];
+        std.mem.copyForwards(u8, taildest, self.buffer.items[self.tail_start..]);
+      } else {
+        const reserved_chars = self.gap.len - deleted_chars;
+        _ = try self.buffer.addManyAt(E.allocr(), self.head_end, reserved_chars);
+        const dest: []u8 = self.buffer.items[self.head_end..logical_tail_start];
+        @memcpy(dest, self.gap.slice());
+      }
     } else {
       try self.buffer.insertSlice(E.allocr(), self.head_end, self.gap.slice());
     }
@@ -414,12 +434,13 @@ const TextHandler = struct {
         // deletion one char after gap
         deletedChar = self.buffer.items[real_tailidx];
         self.tail_start += 1;
+      } else {
+        // deletion after gap
+        deletedChar = self.buffer.orderedRemove(real_tailidx);
       }
-      // deletion after gap
-      deletedChar = self.buffer.orderedRemove(real_tailidx);
     } else {
       std.debug.print("3\n", .{});
-//       // deletion within gap
+      // deletion within gap
       const gap_relidx = delidx - self.head_end;
       deletedChar = self.gap.orderedRemove(gap_relidx);
     }
@@ -641,6 +662,8 @@ const Editor = struct {
   fn init() !Editor {
     const stdin: std.fs.File = std.io.getStdIn();
     const stdout: std.fs.File = std.io.getStdOut();
+    var alloc_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    const text_handler: TextHandler = try TextHandler.init(alloc_gpa.allocator());
     return Editor {
       .in = stdin,
       .inr = stdin.reader(),
@@ -651,11 +674,11 @@ const Editor = struct {
       .needs_update_cursor = true,
       ._state = State.INIT,
       .state_handler = &StateHandler.Text,
-      .alloc_gpa = .{},
+      .alloc_gpa = alloc_gpa,
       .w_width = 0,
       .w_height = 0,
       .buffered_byte = 0,
-      .text_handler = .{},
+      .text_handler = text_handler,
       .cmd_data = null,
     };
   }
