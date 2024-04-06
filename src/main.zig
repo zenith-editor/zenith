@@ -309,7 +309,7 @@ const TextHandler = struct {
       return;
     }
     self.cursor.col += 1;
-    if ((self.cursor.col + self.scroll.col) >= E.getTextWidth()) {
+    if ((self.scroll.col + E.getTextWidth()) <= self.cursor.col) {
       self.scroll.col += 1;
       E.needs_redraw = true;
     }
@@ -967,7 +967,7 @@ const Editor = struct {
     var row = pos.row;
     if (row > self.w_height - 1) { row = self.w_height - 1; }
     var col = pos.col;
-    if (col > self.getTextWidth() - 1) { col = self.getTextWidth() - 1; }
+    if (col > self.w_width - 1) { col = self.w_width - 1; }
     return self.writeFmt("\x1b[{d};{d}H", .{row + 1, col + 1});
   }
   
