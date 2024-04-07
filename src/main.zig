@@ -272,10 +272,10 @@ const TextHandler = struct {
     if (rowlen == 0) {
       self.cursor.col = 0;
     } else {
-      if (self.cursor.col <= rowlen - 1) {
+      if (self.cursor.col <= rowlen) {
         return;
       }
-      self.cursor.col = rowlen - 1;
+      self.cursor.col = rowlen;
     }
     const oldScrollCol = self.scroll.col;
     if (self.cursor.col > E.getTextWidth()) {
