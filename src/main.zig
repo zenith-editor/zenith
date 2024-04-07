@@ -83,6 +83,108 @@ const Keysym = struct {
   }
 };
 
+// undo+redo
+const UndoManager = struct {
+  const Action = union(enum) {
+    const Append = struct {
+      pos: u32,
+      len: u32,
+    };
+    
+    const Delete = struct {
+      pos: u32,
+      orig_buffer: String,
+      
+      fn deinit(self: *Delete, E: *Editor) void {
+        self.orig_buffer.deinit(E.allocr());
+      }
+    };
+    
+    append: Append,
+    delete: Delete,
+  };
+  
+  stack: std.ArrayListUnmanaged(Action) = .{},
+  
+  // actions
+  
+  fn do_append(self: *UndoManager, E: *Editor, pos: u32, len: u32) !void {
+    defer std.debug.print("{}\n", .{self.stack});
+    if (self.stack.items.len > 0) {
+      switch (self.stack.items[self.stack.items.len - 1]) {
+        Action.append => |*append| {
+          if (append.pos + append.len == pos) {
+            append.len += len;
+            return;
+          }
+        },
+        else => {},
+      }
+    }
+    try self.stack.append(E.allocr(), .{
+      .append = Action.Append {
+        .pos = pos,
+        .len = len,
+      },
+    });
+  }
+  
+  fn do_delete(self: *UndoManager, E: *Editor, pos: u32, len: u32) !void {
+    defer std.debug.print("{}\n", .{self.stack});
+    if (self.stack.items.len > 0) {
+      switch (self.stack.items[self.stack.items.len - 1]) {
+        .delete => |*delete| {
+          if (delete.pos + delete.orig_buffer.items.len == pos) {
+            try delete.orig_buffer.appendSlice(
+              E.allocr(),
+              E.text_handler.buffer.items[pos..(pos + len)],
+            );
+            return;
+          } else if (pos + len == delete.pos) {
+            delete.pos = pos;
+            try delete.orig_buffer.insertSlice(
+              E.allocr(), 0,
+              E.text_handler.buffer.items[pos..(pos + len)],
+            );
+            return;
+          }
+        },
+        else => {},
+      }
+    }
+    var orig_buffer: String = .{};
+    try orig_buffer.appendSlice(
+      E.allocr(),
+      E.text_handler.buffer.items[pos..(pos + len)],
+    );
+    try self.stack.append(E.allocr(), .{
+      .delete = Action.Delete {
+        .pos = pos,
+        .orig_buffer = orig_buffer,
+      },
+    });
+  }
+  
+  // undo
+  
+  fn undo(self: *UndoManager, E: *Editor) !void {
+    if (self.stack.items.len > 0) {
+      var act = self.stack.pop();
+      switch (act) {
+        .append => |*append| {
+          try E.text_handler.deleteRegionAtPos(E, append.pos, append.pos + append.len);
+        },
+        .delete => |*delete| {
+          defer delete.deinit(E);
+          try E.text_handler.insertSliceAtPos(E, delete.pos, delete.orig_buffer.items);
+        },
+      }
+      // act is deinit
+    }
+  }
+  
+};
+
 // text handling
 
 const TextPos = struct {
@@ -176,6 +278,8 @@ const TextHandler = struct {
   markers: ?Markers = null,
   
   clipboard: String = .{},
+  
+  undo_mgr: UndoManager = .{},
   
   fn init(allocr: std.mem.Allocator) !TextHandler {
     var line_offsets = try std.ArrayListUnmanaged(u32).initCapacity(allocr, 1);
@@ -442,6 +546,9 @@ const TextHandler = struct {
   
   fn insertChar(self: *TextHandler, E: *Editor, char: u8) !void {
     const insidx: u32 = self.line_offsets.items[self.cursor.row] + self.cursor.col;
+    
+    try self.undo_mgr.do_append(E, insidx, 1);
+    
     // std.debug.print("ins: {} {} {}\n", .{insidx, self.head_end, (self.head_end + self.gap.len)});
     if (insidx > self.head_end and insidx <= self.head_end + self.gap.len) {
       // insertion within gap
@@ -484,24 +591,21 @@ const TextHandler = struct {
     }
   }
   
-  fn insertSlice(self: *TextHandler, E: *Editor, slice: []const u8) !void {
-    // assume that the gap buffer is flushed to make it easier
-    // for us to delete the region
-    try self.flushGapBuffer(E);
-    
+  fn shiftAndInsertNewLines(
+    self: *TextHandler, E: *Editor,
+    slice: []const u8,
+    insidx: u32,
+    first_row_after_insidx: u32
+  ) !std.ArrayListUnmanaged(u32) {
     const allocr: std.mem.Allocator = E.allocr();
-    const insidx: u32 = self.line_offsets.items[self.cursor.row] + self.cursor.col;
-    try self.buffer.insertSlice(allocr, insidx, slice);
     
-    const from_row = self.cursor.row + 1;
-    if (from_row < self.getNoLines()) {
-      for (self.line_offsets.items[from_row..]) |*rowptr| {
+    if (first_row_after_insidx < self.getNoLines()) {
+      for (self.line_offsets.items[first_row_after_insidx..]) |*rowptr| {
         rowptr.* += @intCast(slice.len);
       }
     }
     
     var newlines: std.ArrayListUnmanaged(u32) = .{};
-    defer newlines.deinit(allocr);
     var absidx: u32 = insidx;
     for (slice) |byte| {
       if (byte == '\n') {
@@ -509,14 +613,59 @@ const TextHandler = struct {
       }
       absidx += 1;
     }
+    try self.buffer.insertSlice(allocr, insidx, slice);
     if (newlines.items.len > 0) {
-      try self.line_offsets.insertSlice(allocr, from_row, newlines.items);
+      try self.line_offsets.insertSlice(allocr, first_row_after_insidx, newlines.items);
       self.calcLineDigits();
-      
+    }
+    return newlines;
+  }
+  
+  fn insertSlice(self: *TextHandler, E: *Editor, slice: []const u8) !void {
+    const insidx: u32 = self.line_offsets.items[self.cursor.row] + self.cursor.col;
+    try self.undo_mgr.do_append(E, insidx, @intCast(slice.len));
+    
+    // assume that the gap buffer is flushed to make it easier
+    // for us to insert the region
+    try self.flushGapBuffer(E);
+    
+    const first_row_after_insidx: u32 = self.cursor.row + 1;
+    var newlines = try self.shiftAndInsertNewLines(E, slice, insidx, first_row_after_insidx);
+    defer newlines.deinit(E.allocr());
+    
+    if (newlines.items.len > 0) {
       self.cursor.row += @intCast(newlines.items.len);
       self.cursor.col = @intCast((insidx + slice.len) - newlines.items[newlines.items.len - 1]);
     } else {
       self.cursor.col += @intCast(slice.len);
+    }
+    E.needs_redraw = true;
+  }
+  
+  /// Inserts slice at specified position. Used by UndoManager.
+  fn insertSliceAtPos(self: *TextHandler, E: *Editor, insidx: u32, slice: []const u8) !void {
+    // assume that the gap buffer is flushed to make it easier
+    // for us to insert the region
+    try self.flushGapBuffer(E);
+    
+    // counting from zero, the first row AFTER where the slice is inserted
+    const first_row_after_insidx: u32 = @intCast(std.sort.upperBound(
+      u32,
+      insidx,
+      self.line_offsets.items,
+      {},
+      _Utils.lower_u32,
+    ));
+    var newlines = try self.shiftAndInsertNewLines(E, slice, insidx, first_row_after_insidx);
+    defer newlines.deinit(E.allocr());
+    
+    const row_at_end_of_slice: u32 = @intCast(first_row_after_insidx - 1 + newlines.items.len);
+    
+    self.cursor.row = row_at_end_of_slice;
+    if (newlines.items.len > 0) {
+      self.cursor.col = @intCast((insidx + slice.len) - newlines.items[newlines.items.len - 1]);
+    } else {
+      self.cursor.col = @intCast((insidx + slice.len) - self.line_offsets.items[self.cursor.row]);
     }
     E.needs_redraw = true;
   }
@@ -531,6 +680,7 @@ const TextHandler = struct {
   
   fn deleteChar(self: *TextHandler, E: *Editor, deleteNextChar: bool) !void {
     var delidx: u32 = self.line_offsets.items[self.cursor.row] + self.cursor.col;
+    
     if (deleteNextChar) {
       delidx += 1;
       if (delidx > self.getLogicalLength()) {
@@ -541,6 +691,7 @@ const TextHandler = struct {
       return;
     }
     delidx -= 1;
+    try self.undo_mgr.do_delete(E, delidx, 1);
     
     const logical_tail_start = self.head_end + self.gap.len;
     // std.debug.print("{}/h{}/t{}\n",.{delidx, self.head_end,logical_tail_start});
@@ -687,33 +838,49 @@ const TextHandler = struct {
     }
   }
   
+  /// Delete region at specified position. Used by UndoManager.
+  fn deleteRegionAtPos(self: *TextHandler, E: *Editor, delete_start: u32, delete_end: u32) !void {
+    // assume that the gap buffer is flushed to make it easier
+    // for us to delete the region
+    try self.flushGapBuffer(E);
+    
+    const n_deleted = delete_end - delete_start;
+    
+    if (delete_end >= self.buffer.items.len) {
+      const new_len = self.buffer.items.len - n_deleted;
+      self.buffer.shrinkRetainingCapacity(new_len);
+    } else {
+      // Remove chars from buffer
+      const new_len = self.buffer.items.len - n_deleted;
+      std.mem.copyForwards(
+        u8,
+        self.buffer.items[delete_start..new_len],
+        self.buffer.items[delete_end..]
+      );
+      self.buffer.shrinkRetainingCapacity(new_len);
+    }
+    
+    self.cleanupLineOffsetsAfterDeletion(
+      delete_start, delete_end, n_deleted
+    );
+    
+    const first_row_after_delete: u32 = @intCast(std.sort.upperBound(
+      u32,
+      delete_start,
+      self.line_offsets.items,
+      {},
+      _Utils.lower_u32,
+    ));
+    
+    self.cursor.row = first_row_after_delete - 1;
+    self.cursor.col = delete_start - self.line_offsets.items[self.cursor.row];
+    
+    E.needs_redraw = true;
+  }
+  
   fn deleteMarked(self: *TextHandler, E: *Editor) !void {
     if (self.markers) |markers| {
-      // assume that the gap buffer is flushed to make it easier
-      // for us to delete the region
-      try self.flushGapBuffer(E);
-      
-      const delete_start = markers.start;
-      const delete_end = markers.end;
-      
-      const n_deleted = delete_end - delete_start;
-      if (delete_end >= self.buffer.items.len) {
-        const new_len = self.buffer.items.len - n_deleted;
-        self.buffer.shrinkRetainingCapacity(new_len);
-      } else {
-        // Remove chars from buffer
-        const new_len = self.buffer.items.len - n_deleted;
-        std.mem.copyForwards(
-          u8,
-          self.buffer.items[delete_start..new_len],
-          self.buffer.items[delete_end..]
-        );
-        self.buffer.shrinkRetainingCapacity(new_len);
-      }
-      
-      self.cleanupLineOffsetsAfterDeletion(
-        delete_start, delete_end, n_deleted
-      );
+      try self.deleteRegionAtPos(E, markers.start, markers.end);
       
       self.cursor = markers.start_cur;
       if (self.cursor.row >= self.getNoLines()) {
@@ -722,8 +889,7 @@ const TextHandler = struct {
       }
       self.syncColumnScroll(E);
       self.syncRowScroll(E);
-
-      E.needs_redraw = true;
+      
       self.markers = null;
     }
   }
@@ -868,6 +1034,9 @@ const Editor = struct {
         }
         else if (keysym.ctrl_key and keysym.isChar('v')) {
           try self.text_handler.paste(self);
+        }
+        else if (keysym.ctrl_key and keysym.isChar('z')) {
+          try self.text_handler.undo_mgr.undo(self);
         }
         else if (keysym.raw == Keysym.BACKSPACE) {
           try self.text_handler.deleteChar(self, false);
