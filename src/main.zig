@@ -7,51 +7,79 @@ const String = std.ArrayListUnmanaged(u8);
 // keyboard event
 
 const Keysym = struct {
+  const Key = union(enum) {
+    normal: u8,
+    // special keys
+    up,
+    down,
+    left,
+    right,
+    home,
+    end,
+    del,
+  };
+  
   raw: u8,
-  key: u8,
+  key: Key,
   ctrl_key: bool = false,
   
   const ESC: u8 = std.ascii.control_code.esc;
   const BACKSPACE: u8 = std.ascii.control_code.del;
   const NEWLINE: u8 = std.ascii.control_code.cr;
   
-  const RAW_SPECIAL: u8 = 0;
-  const UP: u8 = 0;
-  const DOWN: u8 = 1;
-  const RIGHT: u8 = 2;
-  const LEFT: u8 = 3;
-  const HOME: u8 = 4;
-  const END: u8 = 5;
-  const DEL: u8 = 6;
-  
   fn init(raw: u8) Keysym {
     if (raw < std.ascii.control_code.us) {
       return Keysym {
         .raw = raw,
-        .key = raw | 0b1100000,
+        .key = .{ .normal = (raw | 0b1100000), },
         .ctrl_key = true,
       };
     } else {
       return Keysym {
         .raw = raw,
-        .key = raw,
+        .key = .{ .normal = raw, },
       };
     }
   }
   
-  fn initSpecial(key: u8) Keysym {
-    return Keysym {
-      .raw = 0,
-      .key = key,
-    };
+  fn initSpecial(comptime key: Key) Keysym {
+    switch(key) {
+      .normal => { @compileError("initSpecial requires special key"); },
+      else => {
+        return Keysym {
+          .raw = 0,
+          .key = key,
+        };
+      },
+      
+    }
   }
   
   fn isSpecial(self: Keysym) bool {
-    return (self.raw == @as(u8, 0)) or self.ctrl_key;
+    if (self.ctrl_key)
+      return true;
+    return switch(self.key) {
+      .normal => false,
+      else => true,
+    };
   }
   
-  fn isPrint(self: Keysym) bool {
-    return !self.isSpecial() and std.ascii.isPrint(self.raw);
+  fn getPrint(self: Keysym) ?u8 {
+    if (!self.isSpecial() and std.ascii.isPrint(self.raw)) {
+      return switch(self.key) {
+        .normal => |c| c,
+        else => null,
+      };
+    } else {
+      return null;
+    }
+  }
+  
+  fn isChar(self: Keysym, char: u8) bool {
+    return switch(self.key) {
+      .normal => |c| c == char,
+      else => false,
+    };
   }
 };
 
@@ -780,38 +808,38 @@ const Editor = struct {
     
     const TextImpl = struct {
       fn handleInput(self: *Editor, keysym: Keysym) !void {
-        if (keysym.raw == 0 and keysym.key == Keysym.UP) {
+        if (keysym.key == Keysym.Key.up) {
           self.text_handler.goUp(self);
         }
-        else if (keysym.raw == 0 and keysym.key == Keysym.DOWN) {
+        else if (keysym.key == Keysym.Key.down) {
           self.text_handler.goDown(self);
         }
-        else if (keysym.raw == 0 and keysym.key == Keysym.LEFT) {
+        else if (keysym.key == Keysym.Key.left) {
           self.text_handler.goLeft(self);
         }
-        else if (keysym.raw == 0 and keysym.key == Keysym.RIGHT) {
+        else if (keysym.key == Keysym.Key.right) {
           self.text_handler.goRight(self);
         }
-        else if (keysym.raw == 0 and keysym.key == Keysym.HOME) {
+        else if (keysym.key == Keysym.Key.home) {
           self.text_handler.goHead(self);
         }
-        else if (keysym.raw == 0 and keysym.key == Keysym.END) {
+        else if (keysym.key == Keysym.Key.end) {
           self.text_handler.goTail(self);
         }
-        else if (keysym.ctrl_key and keysym.key == 'q') {
+        else if (keysym.ctrl_key and keysym.isChar('q')) {
           self.setState(State.quit);
         }
-        else if (keysym.ctrl_key and keysym.key == 's') {
+        else if (keysym.ctrl_key and keysym.isChar('s')) {
           try self.text_handler.save();
         }
-        else if (keysym.ctrl_key and keysym.key == 'o') {
+        else if (keysym.ctrl_key and keysym.isChar('o')) {
           self.cmd_data = CommandData {
             .prompt = "Open file:",
             .onInputted = Commands.Open.onInputted,
           };
           self.setState(State.command);
         }
-        else if (keysym.ctrl_key and keysym.key == 'g') {
+        else if (keysym.ctrl_key and keysym.isChar('g')) {
           self.cmd_data = CommandData {
             .prompt = "Go to line (first = ^g, last = ^G):",
             .onInputted = Commands.GotoLine.onInputted,
@@ -819,23 +847,23 @@ const Editor = struct {
           };
           self.setState(State.command);
         }
-        else if (keysym.ctrl_key and keysym.key == 'b') {
+        else if (keysym.ctrl_key and keysym.isChar('b')) {
           self.setState(State.mark);
         }
-        else if (keysym.ctrl_key and keysym.key == 'v') {
+        else if (keysym.ctrl_key and keysym.isChar('v')) {
           try self.text_handler.paste(self);
         }
         else if (keysym.raw == Keysym.BACKSPACE) {
           try self.text_handler.deleteChar(self, false);
         }
-        else if (keysym.raw == 0 and keysym.key == Keysym.DEL) {
+        else if (keysym.key == Keysym.Key.del) {
           try self.text_handler.deleteChar(self, true);
         }
         else if (keysym.raw == Keysym.NEWLINE) {
           try self.text_handler.insertChar(self, '\n');
         }
-        else if (keysym.isPrint()) {
-          try self.text_handler.insertChar(self, keysym.key);
+        else if (keysym.getPrint()) |key| {
+          try self.text_handler.insertChar(self, key);
         }
       }
       
@@ -882,8 +910,8 @@ const Editor = struct {
         else if (keysym.raw == Keysym.NEWLINE) {
           try cmd_data.onInputted(self);
         }
-        else if (keysym.isPrint()) {
-          try cmd_data.cmdinp.append(self.allocr(), keysym.key);
+        else if (keysym.getPrint()) |key| {
+          try cmd_data.cmdinp.append(self.allocr(), key);
           if (cmd_data.promptoverlay != null) {
             cmd_data.promptoverlay = null;
           }
@@ -941,22 +969,22 @@ const Editor = struct {
           MarkImpl.resetState(self);
           return;
         }
-        if (keysym.raw == 0 and keysym.key == Keysym.UP) {
+        if (keysym.key == Keysym.Key.up) {
           self.text_handler.goUp(self);
         }
-        else if (keysym.raw == 0 and keysym.key == Keysym.DOWN) {
+        else if (keysym.key == Keysym.Key.down) {
           self.text_handler.goDown(self);
         }
-        else if (keysym.raw == 0 and keysym.key == Keysym.LEFT) {
+        else if (keysym.key == Keysym.Key.left) {
           self.text_handler.goLeft(self);
         }
-        else if (keysym.raw == 0 and keysym.key == Keysym.RIGHT) {
+        else if (keysym.key == Keysym.Key.right) {
           self.text_handler.goRight(self);
         }
-        else if (keysym.raw == 0 and keysym.key == Keysym.HOME) {
+        else if (keysym.key == Keysym.Key.home) {
           self.text_handler.goHead(self);
         }
-        else if (keysym.raw == 0 and keysym.key == Keysym.END) {
+        else if (keysym.key == Keysym.Key.end) {
           self.text_handler.goTail(self);
         }
         else if (keysym.raw == Keysym.NEWLINE) {
@@ -967,7 +995,7 @@ const Editor = struct {
           }
         }
         
-        else if (keysym.raw == 0 and keysym.key == Keysym.DEL) {
+        else if (keysym.key == Keysym.Key.del) {
           try self.text_handler.deleteMarked(self);
         }
         else if (keysym.raw == Keysym.BACKSPACE) {
@@ -975,11 +1003,11 @@ const Editor = struct {
           MarkImpl.resetState(self);
         }
         
-        else if (keysym.ctrl_key and keysym.key == 'c') {
+        else if (keysym.ctrl_key and keysym.isChar('c')) {
           try self.text_handler.copy(self);
           MarkImpl.resetState(self);
         }
-        else if (keysym.ctrl_key and keysym.key == 'x') {
+        else if (keysym.ctrl_key and keysym.isChar('x')) {
           try self.text_handler.copy(self);
           try self.text_handler.deleteMarked(self);
           MarkImpl.resetState(self);
@@ -1104,13 +1132,13 @@ const Editor = struct {
       }
       
       fn onKey(self: *Editor, keysym: Keysym) !bool {
-        if (keysym.isPrint()) {
-          if (keysym.key == 'g') {
+        if (keysym.getPrint()) |key| {
+          if (key == 'g') {
             try self.text_handler.gotoLine(self, 0);
             self.setState(State.text);
             self.needs_redraw = true;
             return true;
-          } else if (keysym.key == 'G') {
+          } else if (key == 'G') {
             try self.text_handler.gotoLine(
               self,
               @intCast(self.text_handler.getNoLines() - 1)
@@ -1255,15 +1283,15 @@ const Editor = struct {
       if (self.inr.readByte() catch null) |possibleEsc| {
         if (possibleEsc == '[') {
           switch (self.inr.readByte() catch 0) {
-            'A' => { return Keysym.initSpecial(Keysym.UP); },
-            'B' => { return Keysym.initSpecial(Keysym.DOWN); },
-            'C' => { return Keysym.initSpecial(Keysym.RIGHT); },
-            'D' => { return Keysym.initSpecial(Keysym.LEFT); },
-            'F' => { return Keysym.initSpecial(Keysym.END); },
-            'H' => { return Keysym.initSpecial(Keysym.HOME); },
+            'A' => { return Keysym.initSpecial(.up); },
+            'B' => { return Keysym.initSpecial(.down); },
+            'C' => { return Keysym.initSpecial(.right); },
+            'D' => { return Keysym.initSpecial(.left); },
+            'F' => { return Keysym.initSpecial(.end); },
+            'H' => { return Keysym.initSpecial(.home); },
             '3' => {
               switch (self.inr.readByte() catch 0) {
-                '~' => { return Keysym.initSpecial(Keysym.DEL); },
+                '~' => { return Keysym.initSpecial(.del); },
                 else => {
                   self.flushConsoleInput();
                   return null;
