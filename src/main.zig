@@ -172,7 +172,6 @@ const UndoManager = struct {
       var act = self.stack.pop();
       switch (act) {
         .append => |*append| {
-          std.debug.print("{}\n", .{append});
           try E.text_handler.deleteRegionAtPos(E, append.pos, append.pos + append.len, false);
         },
         .delete => |*delete| {
@@ -870,7 +869,7 @@ const TextHandler = struct {
           _ = self.line_offsets.orderedRemove(deletedrowidx);
         }
       } else {
-        self.line_offsets.decreaseOffsets(self.cursor.row, 1);
+        self.line_offsets.decreaseOffsets(self.cursor.row + 1, 1);
       }
     } else {
       if (self.cursor.col == 0) {
@@ -881,7 +880,7 @@ const TextHandler = struct {
         self.line_offsets.decreaseOffsets(deletedrowidx, 1);
         _ = self.line_offsets.orderedRemove(deletedrowidx);
       } else {
-        self.line_offsets.decreaseOffsets(self.cursor.row, 1);
+        self.line_offsets.decreaseOffsets(self.cursor.row + 1, 1);
         self.goLeft(E);
       }
     }
