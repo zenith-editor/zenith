@@ -109,7 +109,7 @@ const UndoManager = struct {
   // actions
   
   fn do_append(self: *UndoManager, E: *Editor, pos: u32, len: u32) !void {
-    defer std.debug.print("{}\n", .{self.stack});
+    // defer std.debug.print("{}\n", .{self.stack});
     if (self.stack.items.len > 0) {
       switch (self.stack.items[self.stack.items.len - 1]) {
         Action.append => |*append| {
@@ -130,7 +130,7 @@ const UndoManager = struct {
   }
   
   fn do_delete(self: *UndoManager, E: *Editor, pos: u32, len: u32) !void {
-    defer std.debug.print("{}\n", .{self.stack});
+    // defer std.debug.print("{}\n", .{self.stack});
     if (self.stack.items.len > 0) {
       switch (self.stack.items[self.stack.items.len - 1]) {
         .delete => |*delete| {
@@ -183,6 +183,151 @@ const UndoManager = struct {
     }
   }
   
+};
+
+// line offsets
+
+const LineOffsetList = struct {
+  const _Utils = struct {
+    fn lower_u32(context: void, lhs: u32, rhs: u32) bool {
+      _ = context;
+      return lhs < rhs;
+    }
+  };
+  
+  buf: std.ArrayListUnmanaged(u32),
+  alloc_gpa: std.heap.GeneralPurposeAllocator(.{}),
+  
+  fn init() !LineOffsetList {
+    // TODO custom page-based allocator
+    var alloc_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    var buf = try std.ArrayListUnmanaged(u32).initCapacity(alloc_gpa.allocator(), 1);
+    try buf.append(alloc_gpa.allocator(), 0);
+    return LineOffsetList {
+      .buf = buf,
+      .alloc_gpa = alloc_gpa,
+    };
+  }
+
+  fn allocr(self: *LineOffsetList) std.mem.Allocator {
+    return self.alloc_gpa.allocator();
+  }
+  
+  fn getLen(self: *const LineOffsetList) u32 {
+    return @intCast(self.buf.items.len);
+  }
+  
+  fn get(self: *const LineOffsetList, idx: u32) u32 {
+    return self.buf.items[idx];
+  }
+  
+  fn clear(self: *LineOffsetList) void {
+    self.buf.clearRetainingCapacity();
+  }
+  
+  fn orderedRemove(self: *LineOffsetList, idx: u32) u32 {
+    return self.buf.orderedRemove(idx);
+  }
+  
+  fn shrinkRetainingCapacity(self: *LineOffsetList, len: u32) void {
+    self.buf.shrinkRetainingCapacity(len);
+  }
+  
+  fn append(self: *LineOffsetList, offset: u32) !void {
+    try self.buf.append(self.allocr(), offset);
+  }
+  
+  fn insert(self: *LineOffsetList, idx: u32, offset: u32) !void {
+    try self.buf.insert(self.allocr(), idx, offset);
+  }
+  
+  fn insertSlice(self: *LineOffsetList, idx: u32, slice: []const u32) !void {
+    try self.buf.insertSlice(self.allocr(), idx, slice);
+  }
+  
+  fn increaseOffsets(self: *LineOffsetList, from: u32, delta: u32) void {
+    for (self.buf.items[from..]) |*offset| {
+       offset.* += delta;
+    }
+  }
+  
+  fn decreaseOffsets(self: *LineOffsetList, from: u32, delta: u32) void {
+    for (self.buf.items[from..]) |*offset| {
+       offset.* -= delta;
+    }
+  }
+  
+  fn findMaxLineBeforeOffset(self: *const LineOffsetList, offset: u32) u32 {
+    const idx = std.sort.lowerBound(
+      u32,
+      offset,
+      self.buf.items,
+      {},
+      _Utils.lower_u32,
+    );
+    if (idx >= self.buf.items.len) {
+      return @intCast(idx);
+    }
+    if (self.buf.items[idx] > offset) {
+      return @intCast(idx - 1);
+    }
+    return @intCast(idx);
+  }
+  
+  fn findMinLineAfterOffset(self: *const LineOffsetList, offset: u32) u32 {
+    return @intCast(std.sort.upperBound(
+      u32,
+      offset,
+      self.buf.items,
+      {},
+      _Utils.lower_u32,
+    ));
+  }
+  
+  fn removeLinesInRange(
+    self: *LineOffsetList,
+    delete_start: u32, delete_end: u32, line_start: u32, line_end: u32
+  ) void {
+    const n_deleted = delete_end - delete_start;
+    
+    // deleted region must lie between lines [line_start, line_end]
+    var opt_line_pivot_dest: ?u32 = null;
+    var opt_line_pivot_src: ?u32 = null;
+    for (self.buf.items[line_start..line_end], line_start..) |*line_offset, line| {
+      if (line_offset.* == delete_start) {
+        opt_line_pivot_dest = @intCast(line);
+        break;
+      } else if (line_offset.* < delete_start) {
+        opt_line_pivot_dest = @intCast(line + 1);
+        break;
+      }
+    }
+    for (self.buf.items[line_end..], line_end..) |*line_offset, line| {
+      if (line_offset.* >= delete_end) {
+        if (opt_line_pivot_src == null) {
+          opt_line_pivot_src = @intCast(line);
+        }
+        line_offset.* -= n_deleted;
+      }
+    }
+    // std.debug.print("{?} {?}\n", .{opt_line_pivot_dest, opt_line_pivot_src});
+    
+    if (opt_line_pivot_dest != null and opt_line_pivot_src != null) {
+      // moved region is within the text
+      const line_pivot_dest = opt_line_pivot_dest.?;
+      const line_pivot_src = opt_line_pivot_src.?;
+      if (line_pivot_dest < line_pivot_src) {
+        const new_len = self.buf.items.len - (line_pivot_src - line_pivot_dest);
+        std.mem.copyForwards(
+          u32,
+          self.buf.items[line_pivot_dest..new_len],
+          self.buf.items[line_pivot_src..]
+        );
+        self.buf.shrinkRetainingCapacity(new_len);
+        // std.debug.print("{}\n", .{self.buf});
+      }
+    }
+  }
 };
 
 // text handling
@@ -240,13 +385,6 @@ const TextHandler = struct {
     start_cur: TextPos,
   };
   
-  const _Utils = struct {
-    fn lower_u32(context: void, lhs: u32, rhs: u32) bool {
-      _ = context;
-      return lhs < rhs;
-    }
-  };
-  
   file: ?std.fs.File = null,
   
   /// Buffer of characters. Logical text buffer is then:
@@ -266,8 +404,8 @@ const TextHandler = struct {
   
   /// Logical offsets to start of lines. These offsets are defined based on
   /// positions within the logical text buffer above.
-  /// These offsets do not contain the newline character.
-  line_offsets: std.ArrayListUnmanaged(u32) = .{},
+  /// These offsets do contain the newline character.
+  line_offsets: LineOffsetList,
   
   /// Maximum number of digits needed to print line position (starting from 1)
   line_digits: u32 = 1,
@@ -281,10 +419,10 @@ const TextHandler = struct {
   
   undo_mgr: UndoManager = .{},
   
-  fn init(allocr: std.mem.Allocator) !TextHandler {
-    var line_offsets = try std.ArrayListUnmanaged(u32).initCapacity(allocr, 1);
-    try line_offsets.append(allocr, 0);
-    return TextHandler { .line_offsets = line_offsets, };
+  fn init() !TextHandler {
+    return TextHandler {
+      .line_offsets = try LineOffsetList.init(),
+    };
   }
   
   // io
@@ -297,7 +435,7 @@ const TextHandler = struct {
     self.scroll = TextPos {};
     self.file = file;
     self.buffer.clearAndFree(E.allocr());
-    self.line_offsets.clearAndFree(E.allocr());
+    self.line_offsets.clear();
     try self.readLines(E);
   }
   
@@ -326,11 +464,11 @@ const TextHandler = struct {
     const allocr: std.mem.Allocator = E.allocr();
     self.buffer = String.fromOwnedSlice(try file.readToEndAlloc(allocr, std.math.maxInt(u32)));
     // first line
-    try self.line_offsets.append(allocr, 0);
+    try self.line_offsets.append(0);
     var i: u32 = 0;
     for (self.buffer.items) |byte| {
       if (byte == '\n') {
-        try self.line_offsets.append(allocr, i + 1);
+        try self.line_offsets.append(i + 1);
       }
       i += 1;
     }
@@ -347,26 +485,26 @@ const TextHandler = struct {
     return @intCast(self.head_end + self.gap.len + (self.buffer.items.len - self.tail_start));
   }
   
-  fn getNoLines(self: *const TextHandler) u32 {
-    return @intCast(self.line_offsets.items.len);
-  }
-  
   fn calcLineDigits(self: *TextHandler) void {
-    self.line_digits = std.math.log10(self.getNoLines() + 1) + 1;
+    self.line_digits = std.math.log10(self.line_offsets.getLen() + 1) + 1;
   }
   
   fn getRowOffsetEnd(self: *const TextHandler, row: u32) u32 {
     // The newline character of the current line is not counted
-    return if ((row + 1) < self.getNoLines())
-      (self.line_offsets.items[row + 1] - 1)
+    return if ((row + 1) < self.line_offsets.getLen())
+      (self.line_offsets.get(row + 1) - 1)
     else
       self.getLogicalLength();
   }
   
   fn getRowLen(self: *const TextHandler, row: u32) u32 {
-    const offset_start: u32 = self.line_offsets.items[row];
+    const offset_start: u32 = self.line_offsets.get(row);
     const offset_end: u32 = self.getRowOffsetEnd(row);
     return offset_end - offset_start;
+  }
+  
+  fn calcOffsetFromCursor(self: *const TextHandler) u32 {
+    return self.line_offsets.get(self.cursor.row) + self.cursor.col;
   }
   
   // gap
@@ -434,7 +572,7 @@ const TextHandler = struct {
   }
   
   fn goDown(self: *TextHandler, E: *Editor) void {
-    if (self.cursor.row == self.getNoLines() - 1) {
+    if (self.cursor.row == self.line_offsets.getLen() - 1) {
       return;
     }
     self.cursor.row += 1;
@@ -487,7 +625,7 @@ const TextHandler = struct {
   }
   
   fn gotoLine(self: *TextHandler, E: *Editor, row: u32) !void {
-    if (row >= self.getNoLines()) {
+    if (row >= self.line_offsets.getLen()) {
       return error.Overflow;
     }
     self.cursor.row = row;
@@ -538,14 +676,8 @@ const TextHandler = struct {
   
   // append
   
-  fn incrementLineOffsets(self: *TextHandler, fromRow: u32) void {
-    for (self.line_offsets.items[(fromRow + 1)..]) |*rowptr| {
-      rowptr.* += 1;
-    }
-  }
-  
   fn insertChar(self: *TextHandler, E: *Editor, char: u8) !void {
-    const insidx: u32 = self.line_offsets.items[self.cursor.row] + self.cursor.col;
+    const insidx: u32 = self.calcOffsetFromCursor();
     
     try self.undo_mgr.do_append(E, insidx, 1);
     
@@ -573,8 +705,8 @@ const TextHandler = struct {
       try self.gap.append(char);
     }
     if (char == '\n') {
-      self.incrementLineOffsets(self.cursor.row);
-      try self.line_offsets.insert(E.allocr(), self.cursor.row + 1, insidx + 1);
+      self.line_offsets.increaseOffsets(self.cursor.row + 1, 1);
+      try self.line_offsets.insert(self.cursor.row + 1, insidx + 1);
       self.calcLineDigits();
       // std.debug.print("{any} {any}", .{self.gap.slice(), self.line_offsets.items});
       
@@ -585,7 +717,7 @@ const TextHandler = struct {
       }
       E.needs_redraw = true;
     } else {
-      self.incrementLineOffsets(self.cursor.row);
+      self.line_offsets.increaseOffsets(self.cursor.row + 1, 1);
       E.needs_redraw = true;
       self.goRight(E);
     }
@@ -599,10 +731,8 @@ const TextHandler = struct {
   ) !std.ArrayListUnmanaged(u32) {
     const allocr: std.mem.Allocator = E.allocr();
     
-    if (first_row_after_insidx < self.getNoLines()) {
-      for (self.line_offsets.items[first_row_after_insidx..]) |*rowptr| {
-        rowptr.* += @intCast(slice.len);
-      }
+    if (first_row_after_insidx < self.line_offsets.getLen()) {
+      self.line_offsets.increaseOffsets(first_row_after_insidx, @intCast(slice.len));
     }
     
     var newlines: std.ArrayListUnmanaged(u32) = .{};
@@ -615,14 +745,14 @@ const TextHandler = struct {
     }
     try self.buffer.insertSlice(allocr, insidx, slice);
     if (newlines.items.len > 0) {
-      try self.line_offsets.insertSlice(allocr, first_row_after_insidx, newlines.items);
+      try self.line_offsets.insertSlice(first_row_after_insidx, newlines.items);
       self.calcLineDigits();
     }
     return newlines;
   }
   
   fn insertSlice(self: *TextHandler, E: *Editor, slice: []const u8) !void {
-    const insidx: u32 = self.line_offsets.items[self.cursor.row] + self.cursor.col;
+    const insidx: u32 = self.calcOffsetFromCursor();
     try self.undo_mgr.do_append(E, insidx, @intCast(slice.len));
     
     // assume that the gap buffer is flushed to make it easier
@@ -649,13 +779,7 @@ const TextHandler = struct {
     try self.flushGapBuffer(E);
     
     // counting from zero, the first row AFTER where the slice is inserted
-    const first_row_after_insidx: u32 = @intCast(std.sort.upperBound(
-      u32,
-      insidx,
-      self.line_offsets.items,
-      {},
-      _Utils.lower_u32,
-    ));
+    const first_row_after_insidx: u32 = self.line_offsets.findMinLineAfterOffset(insidx);
     var newlines = try self.shiftAndInsertNewLines(E, slice, insidx, first_row_after_insidx);
     defer newlines.deinit(E.allocr());
     
@@ -665,21 +789,14 @@ const TextHandler = struct {
     if (newlines.items.len > 0) {
       self.cursor.col = @intCast((insidx + slice.len) - newlines.items[newlines.items.len - 1]);
     } else {
-      self.cursor.col = @intCast((insidx + slice.len) - self.line_offsets.items[self.cursor.row]);
+      self.cursor.col = @intCast((insidx + slice.len) - self.line_offsets.get(self.cursor.row));
     }
     E.needs_redraw = true;
   }
   
   // deletion
-  
-  fn decrementLineOffsets(self: *TextHandler, fromRow: u32) void {
-    for (self.line_offsets.items[(fromRow + 1)..]) |*rowptr| {
-      rowptr.* -= 1;
-    }
-  }
-  
   fn deleteChar(self: *TextHandler, E: *Editor, deleteNextChar: bool) !void {
-    var delidx: u32 = self.line_offsets.items[self.cursor.row] + self.cursor.col;
+    var delidx: u32 = self.calcOffsetFromCursor();
     
     if (deleteNextChar) {
       delidx += 1;
@@ -729,15 +846,15 @@ const TextHandler = struct {
     if (deleteNextChar) {
       if (delidx == self.getRowOffsetEnd(self.cursor.row)) {
         // deleting next line
-        if ((self.cursor.row + 1) == self.getNoLines()) {
+        if ((self.cursor.row + 1) == self.line_offsets.getLen()) {
           // do nothing if deleting last line
         } else {
           const deletedrowidx = self.cursor.row + 1;
-          self.decrementLineOffsets(deletedrowidx);
+          self.line_offsets.decreaseOffsets(deletedrowidx, 1);
           _ = self.line_offsets.orderedRemove(deletedrowidx);
         }
       } else {
-        self.decrementLineOffsets(self.cursor.row);
+        self.line_offsets.decreaseOffsets(self.cursor.row, 1);
       }
     } else {
       if (self.cursor.col == 0) {
@@ -745,10 +862,10 @@ const TextHandler = struct {
         const deletedrowidx = self.cursor.row;
         self.cursor.row -= 1;
         self.goTail(E);
-        self.decrementLineOffsets(deletedrowidx);
+        self.line_offsets.decreaseOffsets(deletedrowidx, 1);
         _ = self.line_offsets.orderedRemove(deletedrowidx);
       } else {
-        self.decrementLineOffsets(self.cursor.row);
+        self.line_offsets.decreaseOffsets(self.cursor.row, 1);
         self.goLeft(E);
       }
     }
@@ -760,82 +877,25 @@ const TextHandler = struct {
     self: *TextHandler,
     delete_start: u32,
     delete_end: u32,
-    n_deleted: u32,
   ) void {
     // (estimated) line that contains the first character of the deleted region
-    var line_start = std.sort.lowerBound(
-      u32,
-      delete_start,
-      self.line_offsets.items,
-      {},
-      _Utils.lower_u32,
-    );
-    if (line_start >= self.getNoLines()) {
+    const line_start = self.line_offsets.findMaxLineBeforeOffset(delete_start);
+    if (line_start >= self.line_offsets.getLen()) {
       // region starts in last line
       return;
     }
     
-    if (self.line_offsets.items[line_start] > delete_start) {
-      // line_start is after current marker
-      line_start -= 1;
-    }
-    
     // (estimated) line that contains the last character of the deleted region
-    var line_end = std.sort.lowerBound(
-      u32,
-      delete_end,
-      self.line_offsets.items,
-      {},
-      _Utils.lower_u32,
-    );
+    const line_end = self.line_offsets.findMaxLineBeforeOffset(delete_end);
     // std.debug.print("delete line: {} {}\n", .{line_start, line_end});
     // std.debug.print("{}\n", .{self.line_offsets});
-    if (line_end == self.getNoLines()) {
+    if (line_end == self.line_offsets.getLen()) {
       // region ends at last line
       self.line_offsets.shrinkRetainingCapacity(line_start + 1);
       return;
-    } else if (self.line_offsets.items[line_end] > delete_end) {
-      // line_end is after current marker
-      line_end -= 1;
     }
     
-    // deleted region must lie between lines [line_start, line_end]
-    var opt_line_pivot_dest: ?u32 = null;
-    var opt_line_pivot_src: ?u32 = null;
-    for (self.line_offsets.items[line_start..line_end], line_start..) |*line_offset, line| {
-      if (line_offset.* == delete_start) {
-        opt_line_pivot_dest = @intCast(line);
-        break;
-      } else if (line_offset.* < delete_start) {
-        opt_line_pivot_dest = @intCast(line + 1);
-        break;
-      }
-    }
-    for (self.line_offsets.items[line_end..], line_end..) |*line_offset, line| {
-      if (line_offset.* >= delete_end) {
-        if (opt_line_pivot_src == null) {
-          opt_line_pivot_src = @intCast(line);
-        }
-        line_offset.* -= n_deleted;
-      }
-    }
-    // std.debug.print("{?} {?}\n", .{opt_line_pivot_dest, opt_line_pivot_src});
-    
-    if (opt_line_pivot_dest != null and opt_line_pivot_src != null) {
-      // moved region is within the text
-      const line_pivot_dest = opt_line_pivot_dest.?;
-      const line_pivot_src = opt_line_pivot_src.?;
-      if (line_pivot_dest < line_pivot_src) {
-        const new_len = self.line_offsets.items.len - (line_pivot_src - line_pivot_dest);
-        std.mem.copyForwards(
-          u32,
-          self.line_offsets.items[line_pivot_dest..new_len],
-          self.line_offsets.items[line_pivot_src..]
-        );
-        self.line_offsets.shrinkRetainingCapacity(new_len);
-        // std.debug.print("{}\n", .{self.line_offsets});
-      }
-    }
+    self.line_offsets.removeLinesInRange(delete_start, delete_end, line_start, line_end);
   }
   
   /// Delete region at specified position. Used by UndoManager.
@@ -860,31 +920,24 @@ const TextHandler = struct {
       self.buffer.shrinkRetainingCapacity(new_len);
     }
     
-    self.cleanupLineOffsetsAfterDeletion(
-      delete_start, delete_end, n_deleted
-    );
+    self.cleanupLineOffsetsAfterDeletion(delete_start, delete_end);
     
-    const first_row_after_delete: u32 = @intCast(std.sort.upperBound(
-      u32,
-      delete_start,
-      self.line_offsets.items,
-      {},
-      _Utils.lower_u32,
-    ));
+    const first_row_after_delete: u32 = self.line_offsets.findMinLineAfterOffset(delete_start);
     
     self.cursor.row = first_row_after_delete - 1;
-    self.cursor.col = delete_start - self.line_offsets.items[self.cursor.row];
+    self.cursor.col = delete_start - self.line_offsets.get(self.cursor.row);
     
     E.needs_redraw = true;
   }
   
   fn deleteMarked(self: *TextHandler, E: *Editor) !void {
     if (self.markers) |markers| {
+      try self.undo_mgr.do_delete(E, markers.start, markers.end - markers.start);
       try self.deleteRegionAtPos(E, markers.start, markers.end);
       
       self.cursor = markers.start_cur;
-      if (self.cursor.row >= self.getNoLines()) {
-        self.cursor.row = self.getNoLines() - 1;
+      if (self.cursor.row >= self.line_offsets.getLen()) {
+        self.cursor.row = self.line_offsets.getLen() - 1;
         self.cursor.col = self.getRowLen(self.cursor.row);
       }
       self.syncColumnScroll(E);
@@ -897,7 +950,7 @@ const TextHandler = struct {
   // markers
   
   fn markStart(self: *TextHandler, E: *Editor) void {
-    var markidx: u32 = self.line_offsets.items[self.cursor.row] + self.cursor.col;
+    var markidx: u32 = self.calcOffsetFromCursor();
     const logical_len = self.getLogicalLength();
     if (markidx >= logical_len) {
       markidx = logical_len;
@@ -912,7 +965,7 @@ const TextHandler = struct {
   }
   
   fn markEnd(self: *TextHandler, E: *Editor) void {
-    var markidx: u32 = self.line_offsets.items[self.cursor.row] + self.cursor.col;
+    var markidx: u32 = self.calcOffsetFromCursor();
     const logical_len = self.getLogicalLength();
     if (markidx >= logical_len) {
       markidx = logical_len;
@@ -1326,7 +1379,7 @@ const Editor = struct {
           } else if (key == 'G') {
             try self.text_handler.gotoLine(
               self,
-              @intCast(self.text_handler.getNoLines() - 1)
+              @intCast(self.text_handler.line_offsets.getLen() - 1)
             );
             self.setState(State.text);
             self.needs_redraw = true;
@@ -1367,8 +1420,8 @@ const Editor = struct {
   fn init() !Editor {
     const stdin: std.fs.File = std.io.getStdIn();
     const stdout: std.fs.File = std.io.getStdOut();
-    var alloc_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
-    const text_handler: TextHandler = try TextHandler.init(alloc_gpa.allocator());
+    const alloc_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    const text_handler: TextHandler = try TextHandler.init();
     return Editor {
       .in = stdin,
       .inr = stdin.reader(),
@@ -1580,9 +1633,8 @@ const Editor = struct {
     var row: u32 = 0;
     const cursor_row: u32 = text_handler.cursor.row - text_handler.scroll.row;
     var lineno: [16]u8 = undefined;
-    for (text_handler.scroll.row..text_handler.getNoLines()) |i| {
-      
-      const offset_start: u32 = text_handler.line_offsets.items[i];
+    for (text_handler.scroll.row..text_handler.line_offsets.getLen()) |i| {
+      const offset_start: u32 = text_handler.line_offsets.get(@intCast(i));
       const offset_end: u32 = text_handler.getRowOffsetEnd(@intCast(i));
       
       const colOffset: u32 = if (row == cursor_row) text_handler.scroll.col else 0;
