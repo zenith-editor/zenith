@@ -605,6 +605,88 @@ const TextHandler = struct {
     E.needs_redraw = true;
   }
   
+  fn cleanupLineOffsetsAfterDeletion(
+    self: *TextHandler,
+    delete_start: u32,
+    delete_end: u32,
+    n_deleted: u32,
+  ) void {
+    // (estimated) line that contains the first character of the deleted region
+    var line_start = std.sort.lowerBound(
+      u32,
+      delete_start,
+      self.line_offsets.items,
+      {},
+      _Utils.lower_u32,
+    );
+    if (line_start >= self.getNoLines()) {
+      // region starts in last line
+      return;
+    }
+    
+    if (self.line_offsets.items[line_start] > delete_start) {
+      // line_start is after current marker
+      line_start -= 1;
+    }
+    
+    // (estimated) line that contains the last character of the deleted region
+    var line_end = std.sort.lowerBound(
+      u32,
+      delete_end,
+      self.line_offsets.items,
+      {},
+      _Utils.lower_u32,
+    );
+    // std.debug.print("delete line: {} {}\n", .{line_start, line_end});
+    // std.debug.print("{}\n", .{self.line_offsets});
+    if (line_end == self.getNoLines()) {
+      // region ends at last line
+      self.line_offsets.shrinkRetainingCapacity(line_start + 1);
+      return;
+    } else if (self.line_offsets.items[line_end] > delete_end) {
+      // line_end is after current marker
+      line_end -= 1;
+    }
+    
+    // deleted region must lie between lines [line_start, line_end]
+    var opt_line_pivot_dest: ?u32 = null;
+    var opt_line_pivot_src: ?u32 = null;
+    for (self.line_offsets.items[line_start..line_end], line_start..) |*line_offset, line| {
+      if (line_offset.* == delete_start) {
+        opt_line_pivot_dest = @intCast(line);
+        break;
+      } else if (line_offset.* < delete_start) {
+        opt_line_pivot_dest = @intCast(line + 1);
+        break;
+      }
+    }
+    for (self.line_offsets.items[line_end..], line_end..) |*line_offset, line| {
+      if (line_offset.* >= delete_end) {
+        if (opt_line_pivot_src == null) {
+          opt_line_pivot_src = @intCast(line);
+        }
+        line_offset.* -= n_deleted;
+      }
+    }
+    // std.debug.print("{?} {?}\n", .{opt_line_pivot_dest, opt_line_pivot_src});
+    
+    if (opt_line_pivot_dest != null and opt_line_pivot_src != null) {
+      // moved region is within the text
+      const line_pivot_dest = opt_line_pivot_dest.?;
+      const line_pivot_src = opt_line_pivot_src.?;
+      if (line_pivot_dest < line_pivot_src) {
+        const new_len = self.line_offsets.items.len - (line_pivot_src - line_pivot_dest);
+        std.mem.copyForwards(
+          u32,
+          self.line_offsets.items[line_pivot_dest..new_len],
+          self.line_offsets.items[line_pivot_src..]
+        );
+        self.line_offsets.shrinkRetainingCapacity(new_len);
+        // std.debug.print("{}\n", .{self.line_offsets});
+      }
+    }
+  }
+  
   fn deleteMarked(self: *TextHandler, E: *Editor) !void {
     if (self.markers) |markers| {
       // assume that the gap buffer is flushed to make it easier
@@ -628,76 +710,10 @@ const TextHandler = struct {
         );
         self.buffer.shrinkRetainingCapacity(new_len);
       }
-      // std.debug.print("{} {} ---\n{s}\n---\n", .{delete_start, delete_end, self.buffer.items});
       
-      // (estimated) line that contains the first character of the deleted region
-      var line_start = std.sort.lowerBound(
-        u32,
-        delete_start,
-        self.line_offsets.items,
-        {},
-        _Utils.lower_u32,
+      self.cleanupLineOffsetsAfterDeletion(
+        delete_start, delete_end, n_deleted
       );
-      if (line_start < self.getNoLines()) {
-        // region doesnt start in last line
-        if (self.line_offsets.items[line_start] > delete_start) {
-          // line_start is after current marker
-          line_start -= 1;
-        }
-        
-        // (estimated) line that contains the last character of the deleted region
-        var line_end = std.sort.lowerBound(
-          u32,
-          delete_end,
-          self.line_offsets.items,
-          {},
-          _Utils.lower_u32,
-        );
-        // std.debug.print("delete line: {} {}\n", .{line_start, line_end});
-        // std.debug.print("{}\n", .{self.line_offsets});
-        if (line_end == self.getNoLines()) {
-          // region ends at last line, do nothing
-        } else if (self.line_offsets.items[line_end] > delete_end) {
-          // line_end is after current marker
-          line_end -= 1;
-        }
-        
-        // deleted region must lie between lines [line_start, line_end]
-        var opt_line_pivot_dest: ?u32 = null;
-        var opt_line_pivot_src: ?u32 = null;
-        for (self.line_offsets.items[line_start..line_end], line_start..) |*line_offset, line| {
-          if (line_offset.* == delete_start) {
-            opt_line_pivot_dest = @intCast(line);
-            break;
-          } else if (line_offset.* < delete_start) {
-            opt_line_pivot_dest = @intCast(line + 1);
-            break;
-          }
-        }
-        for (self.line_offsets.items[line_end..], line_end..) |*line_offset, line| {
-          if (line_offset.* >= delete_end) {
-            if (opt_line_pivot_src == null) {
-              opt_line_pivot_src = @intCast(line);
-            }
-            line_offset.* -= n_deleted;
-          }
-        }
-        if (opt_line_pivot_dest != null and opt_line_pivot_src != null) {
-          const line_pivot_dest = opt_line_pivot_dest.?;
-          const line_pivot_src = opt_line_pivot_src.?;
-          // std.debug.print("{} {}\n", .{line_pivot_dest, line_pivot_src});
-          if (line_pivot_dest < line_pivot_src) {
-            const new_len = self.line_offsets.items.len - (line_pivot_src - line_pivot_dest);
-            std.mem.copyForwards(
-              u32,
-              self.line_offsets.items[line_pivot_dest..new_len],
-              self.line_offsets.items[line_pivot_src..]
-            );
-            self.line_offsets.shrinkRetainingCapacity(new_len);
-            // std.debug.print("{}\n", .{self.line_offsets});
-          }
-        }
-      }
       
       self.cursor = markers.start_cur;
       if (self.cursor.row >= self.getNoLines()) {
