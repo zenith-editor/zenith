@@ -95,23 +95,63 @@ const UndoManager = struct {
       pos: u32,
       orig_buffer: String,
       
-      fn deinit(self: *Delete, E: *Editor) void {
-        self.orig_buffer.deinit(E.allocr());
+      fn deinit(self: *Delete, U: *UndoManager) void {
+        self.orig_buffer.deinit(U.allocr());
       }
     };
     
     append: Append,
     delete: Delete,
+    
+    fn deinit(self: *Action, U: *UndoManager) void {
+      switch(self.*) {
+        .delete => |*delete| { delete.deinit(U); },
+        else => {},
+      }
+    }
   };
   
-  stack: std.ArrayListUnmanaged(Action) = .{},
+  const ActionStack = std.DoublyLinkedList(Action);
+  
+  const AllocGPAConfig: std.heap.GeneralPurposeAllocatorConfig = .{
+    .enable_memory_limit = true,
+  };
+  
+  const DEFAULT_MEM_LIMIT: usize = 32768;
+  
+  stack: ActionStack = .{},
+  alloc_gpa: std.heap.GeneralPurposeAllocator(AllocGPAConfig) = .{
+    .requested_memory_limit = DEFAULT_MEM_LIMIT,
+  },
+
+  fn allocr(self: *UndoManager) std.mem.Allocator {
+    return self.alloc_gpa.allocator();
+  }
+  
+  fn appendAction(self: *UndoManager, action: Action) !void {
+    var alloc_gpa = &self.alloc_gpa;
+    const allocator = alloc_gpa.allocator();
+    while (alloc_gpa.total_requested_bytes > alloc_gpa.requested_memory_limit) {
+      const opt_action_ptr = self.stack.popFirst();
+      if (opt_action_ptr) |action_ptr| {
+        self.destroyActionNode(action_ptr);
+      }
+    }
+    const action_node: *ActionStack.Node = try allocator.create(ActionStack.Node);
+    action_node.* = ActionStack.Node { .data = action, };
+    self.stack.append(action_node);
+  } 
+  
+  fn destroyActionNode(self: *UndoManager, node: *ActionStack.Node) void {
+    node.data.deinit(self);
+    self.allocr().destroy(node);
+  }
   
   // actions
   
-  fn doAppend(self: *UndoManager, E: *Editor, pos: u32, len: u32) !void {
-    // defer std.debug.print("{}\n", .{self.stack});
-    if (self.stack.items.len > 0) {
-      switch (self.stack.items[self.stack.items.len - 1]) {
+  fn doAppend(self: *UndoManager, pos: u32, len: u32) !void {
+    if (self.stack.last) |node| {
+      switch (node.data) {
         Action.append => |*append| {
           if (append.pos + append.len == pos) {
             append.len += len;
@@ -121,7 +161,7 @@ const UndoManager = struct {
         else => {},
       }
     }
-    try self.stack.append(E.allocr(), .{
+    try self.appendAction(.{
       .append = Action.Append {
         .pos = pos,
         .len = len,
@@ -129,23 +169,16 @@ const UndoManager = struct {
     });
   }
   
-  fn doDelete(self: *UndoManager, E: *Editor, pos: u32, del_contents: []const u8) !void {
-    // defer std.debug.print("{}\n", .{self.stack});
-    if (self.stack.items.len > 0) {
-      switch (self.stack.items[self.stack.items.len - 1]) {
+  fn doDelete(self: *UndoManager, pos: u32, del_contents: []const u8) !void {
+    if (self.stack.last) |node| {
+      switch (node.data) {
         .delete => |*delete| {
           if (delete.pos + delete.orig_buffer.items.len == pos) {
-            try delete.orig_buffer.appendSlice(
-              E.allocr(),
-              del_contents,
-            );
+            try delete.orig_buffer.appendSlice(self.allocr(), del_contents);
             return;
           } else if (pos + del_contents.len == delete.pos) {
             delete.pos = pos;
-            try delete.orig_buffer.insertSlice(
-              E.allocr(), 0,
-              del_contents,
-            );
+            try delete.orig_buffer.insertSlice(self.allocr(), 0, del_contents);
             return;
           }
         },
@@ -154,10 +187,10 @@ const UndoManager = struct {
     }
     var orig_buffer: String = .{};
     try orig_buffer.appendSlice(
-      E.allocr(),
+      self.allocr(),
       del_contents,
     );
-    try self.stack.append(E.allocr(), .{
+    try self.appendAction(.{
       .delete = Action.Delete {
         .pos = pos,
         .orig_buffer = orig_buffer,
@@ -168,18 +201,16 @@ const UndoManager = struct {
   // undo
   
   fn undo(self: *UndoManager, E: *Editor) !void {
-    if (self.stack.items.len > 0) {
-      var act = self.stack.pop();
-      switch (act) {
+    if (self.stack.pop()) |act| {
+      defer self.destroyActionNode(act);
+      switch (act.data) {
         .append => |*append| {
           try E.text_handler.deleteRegionAtPos(E, append.pos, append.pos + append.len, false);
         },
         .delete => |*delete| {
-          defer delete.deinit(E);
           try E.text_handler.insertSliceAtPos(E, delete.pos, delete.orig_buffer.items);
         },
       }
-      // act is deinit
     }
   }
   
@@ -687,7 +718,7 @@ const TextHandler = struct {
     
     const insidx: u32 = self.calcOffsetFromCursor();
     
-    try self.undo_mgr.doAppend(E, insidx, 1);
+    try self.undo_mgr.doAppend(insidx, 1);
     
     // std.debug.print("ins: {} {} {}\n", .{insidx, self.head_end, (self.head_end + self.gap.len)});
     if (insidx > self.head_end and insidx <= self.head_end + self.gap.len) {
@@ -763,7 +794,7 @@ const TextHandler = struct {
     self.buffer_changed = true;
     
     const insidx: u32 = self.calcOffsetFromCursor();
-    try self.undo_mgr.doAppend(E, insidx, @intCast(slice.len));
+    try self.undo_mgr.doAppend(insidx, @intCast(slice.len));
     
     // assume that the gap buffer is flushed to make it easier
     // for us to insert the region
@@ -856,7 +887,7 @@ const TextHandler = struct {
       deletedChar = self.gap.orderedRemove(gap_relidx);
     }
     
-    try self.undo_mgr.doDelete(E, delidx, &[1]u8{deletedChar});
+    try self.undo_mgr.doDelete(delidx, &[1]u8{deletedChar});
     
     if (deleteNextChar) {
       if (delidx == self.getRowOffsetEnd(self.cursor.row)) {
@@ -902,7 +933,7 @@ const TextHandler = struct {
     try self.flushGapBuffer(E);
     
     if (record_as_undo) {
-      try self.undo_mgr.doDelete(E, delete_start, self.buffer.items[delete_start..delete_end]);
+      try self.undo_mgr.doDelete(delete_start, self.buffer.items[delete_start..delete_end]);
     }
     
     const n_deleted = delete_end - delete_start;
