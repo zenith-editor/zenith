@@ -576,19 +576,20 @@ const TextHandler = struct {
   
   fn syncColumnAfterCursor(self: *TextHandler, E: *Editor) void {
     const rowlen: u32 = self.getRowLen(self.cursor.row);
+    const oldScrollCol = self.scroll.col;
     if (rowlen == 0) {
       self.cursor.col = 0;
+      self.scroll.col = 0;
     } else {
       if (self.cursor.col <= rowlen) {
         return;
       }
       self.cursor.col = rowlen;
-    }
-    const oldScrollCol = self.scroll.col;
-    if (self.cursor.col > E.getTextWidth()) {
-      self.scroll.col = self.cursor.col - E.getTextWidth();
-    } else {
-      self.scroll.col = 0;
+      if (self.cursor.col > E.getTextWidth()) {
+        self.scroll.col = self.cursor.col - E.getTextWidth();
+      } else {
+        self.scroll.col = 0;
+      }
     }
     if (oldScrollCol != self.scroll.col) {
       E.needs_redraw = true;
@@ -754,6 +755,7 @@ const TextHandler = struct {
       if ((self.scroll.row + E.getTextHeight()) <= self.cursor.row) {
         self.scroll.row += 1;
       }
+      self.scroll.col = 0;
       E.needs_redraw = true;
     } else {
       self.line_offsets.increaseOffsets(self.cursor.row + 1, 1);
