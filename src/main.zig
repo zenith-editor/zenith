@@ -1163,6 +1163,7 @@ const Editor = struct {
           self.setCmdData(CommandData {
             .prompt = "Find (next = Enter):",
             .onInputted = Commands.Find.onInputted,
+            .onKey = Commands.Find.onKey,
           });
         }
         else if (keysym.raw == Keysym.BACKSPACE) {
@@ -1214,6 +1215,11 @@ const Editor = struct {
           return;
         }
         
+        if (cmd_data.promptoverlay != null) {
+          cmd_data.promptoverlay.?.deinit(self.allocr());
+          cmd_data.promptoverlay = null;
+        }
+        
         if (cmd_data.onKey) |onKey| {
           if (try onKey(self, keysym)) {
             return;
@@ -1229,9 +1235,6 @@ const Editor = struct {
         }
         else if (keysym.getPrint()) |key| {
           try cmd_data.cmdinp.append(self.allocr(), key);
-          if (cmd_data.promptoverlay != null) {
-            cmd_data.promptoverlay = null;
-          }
           self.needs_update_cursor = true;
         }
       }
@@ -1513,11 +1516,8 @@ const Editor = struct {
     };
     
     const Find = struct {
-      fn onInputted(self: *Editor) !void {
-        self.needs_update_cursor = true;
-        try self.text_handler.flushGapBuffer(self);
-        var text_handler: *TextHandler = &self.text_handler;
-        const cmd_data: *Editor.CommandData = self.getCmdData();
+      fn findForwards(self: *Editor, cmd_data: *Editor.CommandData) !void {
+        var text_handler = &self.text_handler;
         const opt_pos = std.mem.indexOfPos(
           u8,
           text_handler.buffer.items,
@@ -1529,6 +1529,41 @@ const Editor = struct {
         } else {
           cmd_data.promptoverlay = .{ .static = "Not found!", };
         }
+      }
+      
+      fn findBackwards(self: *Editor, cmd_data: *Editor.CommandData) !void {
+        var text_handler = &self.text_handler;
+        const opt_pos = std.mem.lastIndexOf(
+          u8,
+          text_handler.buffer.items[0..text_handler.calcOffsetFromCursor()],
+          cmd_data.cmdinp.items,
+        );
+        if (opt_pos) |pos| {
+          try text_handler.gotoPos(self, @intCast(pos));
+        } else {
+          cmd_data.promptoverlay = .{ .static = "Not found!", };
+        }
+      }
+      
+      fn onInputted(self: *Editor) !void {
+        self.needs_update_cursor = true;
+        try self.text_handler.flushGapBuffer(self);
+        const cmd_data: *Editor.CommandData = self.getCmdData();
+        try Find.findForwards(self, cmd_data);
+      }
+      
+      fn onKey(self: *Editor, keysym: Keysym) !bool {
+        self.needs_update_cursor = true;
+        const cmd_data: *Editor.CommandData = self.getCmdData();
+        if (keysym.key == Keysym.Key.up) {
+          try self.text_handler.flushGapBuffer(self);
+          try Find.findBackwards(self, cmd_data);
+        }
+        else if (keysym.key == Keysym.Key.down) {
+          try self.text_handler.flushGapBuffer(self);
+          try Find.findForwards(self, cmd_data);
+        }
+        return false;
       }
     };
   };
