@@ -350,9 +350,6 @@ const LineOffsetList = struct {
     
     const chars_deleted = delete_end - delete_start;
     
-    // std.debug.print("{?}-{}, {}\n", .{
-    //  line_start, line_end, self.buf});
-    
     for (self.buf.items[line_end..]) |*offset| {
       offset.* -= chars_deleted;
     }
@@ -721,11 +718,9 @@ const TextHandler = struct {
     
     try self.undo_mgr.doAppend(insidx, 1);
     
-    // std.debug.print("ins: {} {} {}\n", .{insidx, self.head_end, (self.head_end + self.gap.len)});
     if (insidx > self.head_end and insidx <= self.head_end + self.gap.len) {
       // insertion within gap
       const gap_relidx = insidx - self.head_end;
-      // std.debug.print("ins gap: {}\n", .{gap_relidx});
       if (gap_relidx == self.gap.len) {
         try self.gap.append(char);
       } else {
@@ -739,7 +734,6 @@ const TextHandler = struct {
     } else {
       // insertion outside of gap
       try self.flushGapBuffer(E);
-      // std.debug.print("ins out of gap: {s}\n", .{self.buffer.items});
       self.head_end = insidx;
       self.tail_start = insidx;
       try self.gap.append(char);
@@ -748,7 +742,6 @@ const TextHandler = struct {
       self.line_offsets.increaseOffsets(self.cursor.row + 1, 1);
       try self.line_offsets.insert(self.cursor.row + 1, insidx + 1);
       self.calcLineDigits();
-      // std.debug.print("{any} {any}", .{self.gap.slice(), self.line_offsets.items});
       
       self.cursor.row += 1;
       self.cursor.col = 0;
@@ -857,7 +850,6 @@ const TextHandler = struct {
     delidx -= 1;
     
     const logical_tail_start = self.head_end + self.gap.len;
-    // std.debug.print("{}/h{}/t{}\n",.{delidx, self.head_end,logical_tail_start});
 
     var deletedChar: u8 = undefined;
     if (delidx < self.head_end) {
@@ -1543,8 +1535,7 @@ const Editor = struct {
   fn flushConsoleInput(self: *Editor) void {
     while (true) {
       const byte = self.inr.readByte() catch break;
-      _ = byte;
-      // std.debug.print("[{}]", .{byte});
+      std.debug.print("readKey: unk [{}]", .{byte});
     }
   }
   
@@ -1576,8 +1567,7 @@ const Editor = struct {
             },
             else => |byte1| {
               // unknown escape sequence, empty the buffer
-              _ = byte1;
-              // std.debug.print("[{}]", .{byte1});
+              std.debug.print("readKey: unk [{}]", .{byte1});
               self.flushConsoleInput();
               return null;
             }
@@ -1659,7 +1649,6 @@ const Editor = struct {
   
   fn handleInput(self: *Editor) !void {
     if (self.readKey()) |keysym| {
-      // std.debug.print("{}\n", .{keysym});
       try self.state_handler.handleInput(self, keysym);
     }
   }
