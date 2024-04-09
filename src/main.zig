@@ -713,7 +713,7 @@ const TextHandler = struct {
       } else {
         self.scroll.row = self.cursor.row - 1;
       }
-    } else if ((self.scroll.row + self.cursor.row) > E.getTextHeight()) {
+    } else if ((self.scroll.row + self.cursor.row) >= E.getTextHeight()) {
       if (E.getTextHeight() > self.cursor.row) {
         self.scroll.row = E.getTextHeight() - self.cursor.row + 1;
       } else {
@@ -1132,7 +1132,7 @@ const Editor = struct {
         else if (keysym.ctrl_key and keysym.isChar('g')) {
           self.setState(State.command);
           self.setCmdData(CommandData {
-            .prompt = "Go to line (first = ^g, last = ^G):",
+            .prompt = "Go to line (first = g, last = G):",
             .onInputted = Commands.GotoLine.onInputted,
             .onKey = Commands.GotoLine.onKey,
           });
