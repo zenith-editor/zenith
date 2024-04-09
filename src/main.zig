@@ -384,7 +384,7 @@ const TextPos = struct {
 };
 
 const TextHandler = struct {
-  const GAP_SIZE = 128;
+  const GAP_SIZE = 512;
   
   const TextIterator = struct {
     text_handler: *const TextHandler,
