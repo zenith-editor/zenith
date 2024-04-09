@@ -1618,7 +1618,7 @@ const Editor = struct {
   fn flushConsoleInput(self: *Editor) void {
     while (true) {
       const byte = self.inr.readByte() catch break;
-      std.debug.print("readKey: unk [{}]", .{byte});
+      std.debug.print("readKey: unk [{}]\n", .{byte});
     }
   }
   
@@ -1650,7 +1650,7 @@ const Editor = struct {
             },
             else => |byte1| {
               // unknown escape sequence, empty the buffer
-              std.debug.print("readKey: unk [{}]", .{byte1});
+              std.debug.print("readKey: unk [{}]\n", .{byte1});
               self.flushConsoleInput();
               return null;
             }
