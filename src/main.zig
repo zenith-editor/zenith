@@ -1193,7 +1193,7 @@ const Editor = struct {
       }
       
       fn renderStatus(self: *Editor) !void {
-        try self.moveCursor(TextPos {.row = self.getTextHeight(), .col = 0});
+        try self.moveCursor(self.getTextHeight(), 0);
         const text_handler: *const TextHandler = &self.text_handler;
         try self.writeAll(CLEAR_LINE);
         if (text_handler.buffer_changed) {
@@ -1237,7 +1237,7 @@ const Editor = struct {
       }
       
       fn renderStatus(self: *Editor) !void {
-        try self.moveCursor(TextPos {.row = self.getTextHeight(), .col = 0});
+        try self.moveCursor(self.getTextHeight(), 0);
         try self.writeAll(Editor.CLEAR_LINE);
         const cmd_data: *Editor.CommandData = self.getCmdData();
         if (cmd_data.promptoverlay) |promptoverlay| {
@@ -1245,7 +1245,7 @@ const Editor = struct {
         } else if (cmd_data.prompt) |prompt| {
           try self.writeAll(prompt);
         }
-        try self.moveCursor(TextPos {.row = (self.getTextHeight() + 1), .col = 0});
+        try self.moveCursor((self.getTextHeight() + 1), 0);
         try self.writeAll(Editor.CLEAR_LINE);
         try self.writeAll(" >");
         var col: u32 = 0;
@@ -1345,7 +1345,7 @@ const Editor = struct {
       }
       
       fn renderStatus(self: *Editor) !void {
-        try self.moveCursor(TextPos {.row = self.getTextHeight(), .col = 0});
+        try self.moveCursor(self.getTextHeight(), 0);
         try self.writeAll(CLEAR_LINE);
         try self.writeAll("Enter: mark end, Del: delete");
         var status: [32]u8 = undefined;
@@ -1354,10 +1354,10 @@ const Editor = struct {
           "{d}:{d}",
           .{self.text_handler.cursor.row,self.text_handler.cursor.col}, 
         );
-        try self.moveCursor(TextPos {
-          .row = self.getTextHeight() + 1,
-          .col = @intCast(self.w_width - status_slice.len),
-        });
+        try self.moveCursor(
+          self.getTextHeight() + 1,
+          @intCast(self.w_width - status_slice.len),
+        );
         try self.writeAll(status_slice);
       }
     };
@@ -1715,20 +1715,20 @@ const Editor = struct {
     return std.fmt.format(self.outw, fmt, args);
   }
   
-  fn moveCursor(self: *Editor, pos: TextPos) !void {
-    var row = pos.row;
+  fn moveCursor(self: *Editor, p_row: u32, p_col: u32) !void {
+    var row = p_row;
     if (row > self.w_height - 1) { row = self.w_height - 1; }
-    var col = pos.col;
+    var col = p_col;
     if (col > self.w_width - 1) { col = self.w_width - 1; }
     return self.writeFmt("\x1b[{d};{d}H", .{row + 1, col + 1});
   }
   
   fn updateCursorPos(self: *Editor) !void {
     const text_handler: *TextHandler = &self.text_handler;
-    try self.moveCursor(TextPos {
-      .row = text_handler.cursor.row - text_handler.scroll.row,
-      .col = (text_handler.cursor.col - text_handler.scroll.col) + text_handler.line_digits + 1,
-    });
+    try self.moveCursor(
+      text_handler.cursor.row - text_handler.scroll.row,
+      (text_handler.cursor.col - text_handler.scroll.col) + text_handler.line_digits + 1,
+    );
   }
   
   fn refreshScreen(self: *Editor) !void {
@@ -1786,7 +1786,7 @@ const Editor = struct {
       const colOffset: u32 = if (row == cursor_row) text_handler.scroll.col else 0;
       var iter = text_handler.iterate(offset_start + colOffset);
       
-      try self.moveCursor(TextPos {.row = row, .col = 0});
+      try self.moveCursor(row, 0);
       
       const lineno_slice = try std.fmt.bufPrint(&lineno, "{d}", .{i+1});
       for(0..(self.text_handler.line_digits - lineno_slice.len)) |_| {
