@@ -1780,19 +1780,31 @@ fn handle_sigwinch(signal: c_int) callconv(.C) void {
   resized = true;
 }
 
+fn showHelp(program_name: []const u8) !void {
+  const writer = std.io.getStdOut().writer();
+  try writer.print(
+    \\Usage: {s} [options] [file]
+    \\
+    \\Options:
+    \\  -h/--help: Show this help message
+    \\
+  , .{program_name});
+}
+
 pub fn main() !void {
   var opened_file: ?std.fs.File = null;
   {
     // arguments
     var args = std.process.args();
-    _ = args.skip();
+    const program_name = args.next() orelse unreachable;
     const cwd = std.fs.cwd();
     while (args.next()) |arg| {
+      if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
+        return showHelp(program_name);
+      }
       if (opened_file != null) {
-        // TODO
         return;
       }
-      // std.debug.print("{}", .{arg});
       opened_file = try cwd.openFile(
         arg,
         std.fs.File.OpenFlags {
