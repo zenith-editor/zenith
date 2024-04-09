@@ -4,6 +4,25 @@ const builtin = @import("builtin");
 // types
 const String = std.ArrayListUnmanaged(u8);
 
+const MaybeOwnedSlice = union(enum) {
+  owned: []u8,
+  static: []const u8,
+  
+  fn slice(self: *const MaybeOwnedSlice) []const u8 {
+    switch(self.*) {
+      .owned => |owned| { return owned; },
+      .static => |static| { return static; }
+    }
+  }
+  
+  fn deinit(self: *MaybeOwnedSlice, allocator: std.mem.Allocator) void {
+    switch(self.*) {
+      .owned => |owned| { allocator.free(owned); },
+      else => {},
+    }
+  }
+};
+
 // keyboard event
 
 const Keysym = struct {
@@ -1192,7 +1211,7 @@ const Editor = struct {
         try self.writeAll(Editor.CLEAR_LINE);
         const cmd_data: *const Editor.CommandData = &self.cmd_data.?;
         if (cmd_data.promptoverlay) |promptoverlay| {
-          try self.writeAll(promptoverlay);
+          try self.writeAll(promptoverlay.slice());
         } else if (cmd_data.prompt) |prompt| {
           try self.writeAll(prompt);
         }
@@ -1324,7 +1343,7 @@ const Editor = struct {
   
   const CommandData = struct {
     prompt: ?[]const u8 = null,
-    promptoverlay: ?[]const u8 = null,
+    promptoverlay: ?MaybeOwnedSlice = null,
     cmdinp: String = .{},
     onInputted: *const fn (self: *Editor) anyerror!void,
     
@@ -1332,6 +1351,9 @@ const Editor = struct {
     onKey: ?*const fn (self: *Editor, keysym: Keysym) anyerror!bool = null,
     
     fn deinit(self: *CommandData, E: *Editor) void {
+      if (self.promptoverlay) |*promptoverlay| {
+        promptoverlay.deinit(E.allocr());
+      }
       self.cmdinp.deinit(E.allocr());
     }
   };
@@ -1351,14 +1373,24 @@ const Editor = struct {
               .read = true,
               .truncate = false
             }) catch |create_err| {
-              std.debug.print("create file: {}", .{create_err});
-              cmd_data.promptoverlay = "Unable to create new file!";
+              cmd_data.promptoverlay = .{
+                .owned = try std.fmt.allocPrint(
+                  self.allocr(),
+                  "Unable to create new file! (ERR: {})",
+                  .{create_err}
+                ),
+              };
               return;
             };
           },
           else => {
-            std.debug.print("access: {}", .{err});
-            cmd_data.promptoverlay = "Unable to open file!";
+            cmd_data.promptoverlay = .{
+              .owned = try std.fmt.allocPrint(
+                self.allocr(),
+                "Unable to open file! (ERR: {})",
+                .{err}
+              ),
+            };
             return;
           },
         };
@@ -1367,8 +1399,13 @@ const Editor = struct {
             .mode = .read_write,
             .lock = .shared,
           }) catch |err| {
-            std.debug.print("w: {}", .{err});
-            cmd_data.promptoverlay = "Unable to open file!";
+            cmd_data.promptoverlay = .{
+              .owned = try std.fmt.allocPrint(
+                self.allocr(),
+                "Unable to open file! (ERR: {})",
+                .{err}
+              ),
+            };
             return;
           };
         }
@@ -1384,15 +1421,15 @@ const Editor = struct {
         var text_handler: *TextHandler = &self.text_handler;
         var cmd_data: *Editor.CommandData = &self.cmd_data.?;
         const line: u32 = std.fmt.parseInt(u32, cmd_data.cmdinp.items, 10) catch {
-          cmd_data.promptoverlay = "Invalid integer!";
+          cmd_data.promptoverlay = .{ .static = "Invalid integer!", };
           return;
         };
         if (line == 0) {
-          cmd_data.promptoverlay = "Lines start at 1!";
+          cmd_data.promptoverlay = .{ .static = "Lines start at 1!" };
           return;
         }
         text_handler.gotoLine(self, line - 1) catch {
-          cmd_data.promptoverlay = "Out of bounds!";
+          cmd_data.promptoverlay = .{ .static = "Out of bounds!" };
           return;
         };
         self.setState(State.text);
