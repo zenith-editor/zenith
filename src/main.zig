@@ -349,14 +349,12 @@ const LineOffsetList = struct {
     self: *LineOffsetList,
     delete_start: u32, delete_end: u32
   ) void {
-    // successor to the line that contains the first character of the deleted region
     const line_start = self.findMinLineAfterOffset(delete_start);
     if (line_start == self.getLen()) {
       // region starts in last line
       return;
     }
     
-    // successor to the line that contains the last character of the deleted region
     const line_end = self.findMinLineAfterOffset(delete_end);
     if (line_end == self.getLen()) {
       // region ends at last line
@@ -477,23 +475,21 @@ const TextHandler = struct {
   
   // io
   
-  fn open(self: *TextHandler, E: *Editor, file: std.fs.File) !void {
+  fn open(self: *TextHandler, E: *Editor, file: std.fs.File, flush_buffer: bool) !void {
     if (self.file != null) {
       self.file.?.close();
     }
-    self.cursor = TextPos {};
-    self.scroll = TextPos {};
     self.file = file;
-    self.buffer.clearAndFree(E.allocr());
-    self.line_offsets.clear();
-    try self.readLines(E);
+    if (flush_buffer) {
+      self.cursor = TextPos {};
+      self.scroll = TextPos {};
+      self.buffer.clearAndFree(E.allocr());
+      self.line_offsets.clear();
+      try self.readLines(E);
+    }
   }
   
   fn save(self: *TextHandler, E: *Editor) !void {
-    if (self.file == null) {
-      // TODO
-      return;
-    }
     const file: std.fs.File = self.file.?;
     try file.seekTo(0);
     try file.setEndPos(0);
@@ -1109,22 +1105,37 @@ const Editor = struct {
           self.setState(State.quit);
         }
         else if (keysym.ctrl_key and keysym.isChar('s')) {
-          try self.text_handler.save(self);
+          if (self.text_handler.file == null) {
+            self.setState(State.command);
+            self.setCmdData(CommandData {
+              .prompt = "Save file:",
+              .onInputted = Commands.Open.onInputtedTryToSave,
+            });
+          } else {
+            self.text_handler.save(self) catch |err| {
+              self.setState(State.command);
+              self.setCmdData(CommandData {
+                .prompt = "Save file to new location:",
+                .onInputted = Commands.Open.onInputtedTryToSave,
+              });
+              try Commands.Open.setupUnableToSavePrompt(self, err);
+            };
+          }
         }
         else if (keysym.ctrl_key and keysym.isChar('o')) {
-          self.cmd_data = CommandData {
+          self.setState(State.command);
+          self.setCmdData(CommandData {
             .prompt = "Open file:",
             .onInputted = Commands.Open.onInputted,
-          };
-          self.setState(State.command);
+          });
         }
         else if (keysym.ctrl_key and keysym.isChar('g')) {
-          self.cmd_data = CommandData {
+          self.setState(State.command);
+          self.setCmdData(CommandData {
             .prompt = "Go to line (first = ^g, last = ^G):",
             .onInputted = Commands.GotoLine.onInputted,
             .onKey = Commands.GotoLine.onKey,
-          };
-          self.setState(State.command);
+          });
         }
         else if (keysym.ctrl_key and keysym.isChar('b')) {
           self.setState(State.mark);
@@ -1178,7 +1189,7 @@ const Editor = struct {
     
     const CommandImpl = struct {
       fn handleInput(self: *Editor, keysym: Keysym) !void {
-        var cmd_data: *Editor.CommandData = &self.cmd_data.?;
+        var cmd_data: *Editor.CommandData = self.getCmdData();
         if (keysym.raw == Keysym.ESC) {
           self.setState(.text);
           return;
@@ -1209,7 +1220,7 @@ const Editor = struct {
       fn renderStatus(self: *Editor) !void {
         try self.moveCursor(TextPos {.row = self.getTextHeight(), .col = 0});
         try self.writeAll(Editor.CLEAR_LINE);
-        const cmd_data: *const Editor.CommandData = &self.cmd_data.?;
+        const cmd_data: *Editor.CommandData = self.getCmdData();
         if (cmd_data.promptoverlay) |promptoverlay| {
           try self.writeAll(promptoverlay.slice());
         } else if (cmd_data.prompt) |prompt| {
@@ -1361,10 +1372,10 @@ const Editor = struct {
   // commands
   const Commands = struct {
     const Open = struct {
-      fn onInputted(self: *Editor) !void {
+      fn onInputtedGeneric(self: *Editor) !?std.fs.File {
         self.needs_update_cursor = true;
         const cwd = std.fs.cwd();
-        var cmd_data: *Editor.CommandData = &self.cmd_data.?;
+        var cmd_data: *Editor.CommandData = self.getCmdData();
         const path: []const u8 = cmd_data.cmdinp.items;
         var opened_file: ?std.fs.File = null;
         cwd.access(path, .{}) catch |err| switch(err) {
@@ -1380,7 +1391,7 @@ const Editor = struct {
                   .{create_err}
                 ),
               };
-              return;
+              return null;
             };
           },
           else => {
@@ -1391,7 +1402,7 @@ const Editor = struct {
                 .{err}
               ),
             };
-            return;
+            return null;
           },
         };
         if (opened_file == null) {
@@ -1406,12 +1417,40 @@ const Editor = struct {
                 .{err}
               ),
             };
-            return;
+            return null;
           };
         }
-        try self.text_handler.open(self, opened_file.?);
-        self.setState(State.text);
-        self.needs_redraw = true;
+        return opened_file;
+      }
+      
+      fn onInputted(self: *Editor) !void {
+        if (try Open.onInputtedGeneric(self)) |opened_file| {
+          try self.text_handler.open(self, opened_file, true);
+          self.setState(State.text);
+          self.needs_redraw = true;
+        }
+      }
+      
+      fn setupUnableToSavePrompt(self: *Editor, err: anyerror) !void {
+        self.getCmdData().promptoverlay = .{
+          .owned = try std.fmt.allocPrint(
+            self.allocr(),
+            "Unable to save file, try saving to another location! (ERR: {})",
+            .{err}
+          ),
+        };
+      }
+      
+      fn onInputtedTryToSave(self: *Editor) !void {
+        if (try Open.onInputtedGeneric(self)) |opened_file| {
+          try self.text_handler.open(self, opened_file, false);
+          self.text_handler.save(self) catch |err| {
+            try Open.setupUnableToSavePrompt(self, err);
+            return;
+          };
+          self.setState(State.text);
+          self.needs_redraw = true;
+        }
       }
     };
     
@@ -1419,7 +1458,7 @@ const Editor = struct {
       fn onInputted(self: *Editor) !void {
         self.needs_update_cursor = true;
         var text_handler: *TextHandler = &self.text_handler;
-        var cmd_data: *Editor.CommandData = &self.cmd_data.?;
+        var cmd_data: *Editor.CommandData = self.getCmdData();
         const line: u32 = std.fmt.parseInt(u32, cmd_data.cmdinp.items, 10) catch {
           cmd_data.promptoverlay = .{ .static = "Invalid integer!", };
           return;
@@ -1482,7 +1521,7 @@ const Editor = struct {
   
   text_handler: TextHandler,
   
-  cmd_data: ?CommandData,
+  _cmd_data: ?CommandData,
   
   fn init() !Editor {
     const stdin: std.fs.File = std.io.getStdIn();
@@ -1504,7 +1543,7 @@ const Editor = struct {
       .w_height = 0,
       .buffered_byte = 0,
       .text_handler = text_handler,
-      .cmd_data = null,
+      ._cmd_data = null,
     };
   }
   
@@ -1516,13 +1555,9 @@ const Editor = struct {
     if (state == self._state) {
       return;
     }
-    if (state != State.command) {
-      if (self.cmd_data != null) {
-        self.cmd_data.?.deinit(self);
-        self.cmd_data = null;
-      }
-    } else {
-      std.debug.assert(self.cmd_data != null);
+    if (self._state == .command) {
+      self._cmd_data.?.deinit(self);
+      self._cmd_data = null;
     }
     self._state = state;
     const state_handler = StateHandler.List[@intFromEnum(state)];
@@ -1532,6 +1567,17 @@ const Editor = struct {
     }
     self.needs_redraw = true;
     self.needs_update_cursor = true;
+  }
+  
+  // command data
+  
+  fn getCmdData(self: *Editor) *CommandData {
+    return &self._cmd_data.?;
+  }
+  
+  fn setCmdData(self: *Editor, cmd_data: CommandData) void {
+    std.debug.assert(self._cmd_data == null);
+    self._cmd_data = cmd_data;
   }
   
   // raw mode
@@ -1783,7 +1829,6 @@ const Editor = struct {
     try self.updateWinSize();
     try self.enableRawMode();
     self.needs_redraw = true;
-    self.setState(State.INIT);
     while (self._state != State.quit) {
       if (resized) {
         try self.updateWinSize();
@@ -1818,26 +1863,19 @@ fn showHelp(program_name: []const u8) !void {
 }
 
 pub fn main() !void {
-  var opened_file: ?std.fs.File = null;
+  var opt_opened_file: ?[]const u8 = null;
   {
     // arguments
     var args = std.process.args();
     const program_name = args.next() orelse unreachable;
-    const cwd = std.fs.cwd();
     while (args.next()) |arg| {
       if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
         return showHelp(program_name);
       }
-      if (opened_file != null) {
+      if (opt_opened_file != null) {
         return;
       }
-      opened_file = try cwd.openFile(
-        arg,
-        std.fs.File.OpenFlags {
-          .mode = .read_write,
-          .lock = .shared,
-        }
-      );
+      opt_opened_file = arg;
     }
   }
   if (builtin.target.os.tag == .linux) {
@@ -1850,8 +1888,16 @@ pub fn main() !void {
     // TODO log if sigaction fails
   }
   var E = try Editor.init();
-  if (opened_file != null) {
-    try E.text_handler.open(&E, opened_file.?);
+  if (opt_opened_file) |opened_file| {
+    var opened_file_str: String = .{};
+    try opened_file_str.appendSlice(E.allocr(), opened_file);
+    E.setState(Editor.State.command);
+    E.setCmdData(Editor.CommandData {
+      .prompt = "Open file:",
+      .onInputted = Editor.Commands.Open.onInputted,
+      .cmdinp = opened_file_str,
+    });
+    try Editor.Commands.Open.onInputted(&E);
   }
   try E.run();
 }
