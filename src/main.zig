@@ -682,6 +682,18 @@ const TextHandler = struct {
     self.syncRowScroll(E);
     self.cursor.col = 0;
     self.scroll.col = 0;
+    E.needs_redraw = true;
+  }
+  
+  fn gotoPos(self: *TextHandler, E: *Editor, pos: u32) !void {
+    if (pos >= self.getLogicalLength()) {
+      return error.Overflow;
+    }
+    self.cursor.row = self.line_offsets.findMaxLineBeforeOffset(pos);
+    self.cursor.col = pos - self.line_offsets.get(self.cursor.row);
+    self.syncColumnScroll(E);
+    self.syncRowScroll(E);
+    E.needs_redraw = true;
   }
   
   fn syncColumnScroll(self: *TextHandler, E: *Editor) void {
@@ -1146,6 +1158,13 @@ const Editor = struct {
         else if (keysym.ctrl_key and keysym.isChar('z')) {
           try self.text_handler.undo_mgr.undo(self);
         }
+        else if (keysym.ctrl_key and keysym.isChar('f')) {
+          self.setState(State.command);
+          self.setCmdData(CommandData {
+            .prompt = "Find (next = Enter):",
+            .onInputted = Commands.Find.onInputted,
+          });
+        }
         else if (keysym.raw == Keysym.BACKSPACE) {
           try self.text_handler.deleteChar(self, false);
         }
@@ -1472,7 +1491,6 @@ const Editor = struct {
           return;
         };
         self.setState(State.text);
-        self.needs_redraw = true;
       }
       
       fn onKey(self: *Editor, keysym: Keysym) !bool {
@@ -1480,7 +1498,6 @@ const Editor = struct {
           if (key == 'g') {
             try self.text_handler.gotoLine(self, 0);
             self.setState(State.text);
-            self.needs_redraw = true;
             return true;
           } else if (key == 'G') {
             try self.text_handler.gotoLine(
@@ -1488,11 +1505,30 @@ const Editor = struct {
               @intCast(self.text_handler.line_offsets.getLen() - 1)
             );
             self.setState(State.text);
-            self.needs_redraw = true;
             return true;
           }
         }
         return false;
+      }
+    };
+    
+    const Find = struct {
+      fn onInputted(self: *Editor) !void {
+        self.needs_update_cursor = true;
+        try self.text_handler.flushGapBuffer(self);
+        var text_handler: *TextHandler = &self.text_handler;
+        const cmd_data: *Editor.CommandData = self.getCmdData();
+        const opt_pos = std.mem.indexOfPos(
+          u8,
+          text_handler.buffer.items,
+          text_handler.calcOffsetFromCursor() + 1,
+          cmd_data.cmdinp.items,
+        );
+        if (opt_pos) |pos| {
+          try text_handler.gotoPos(self, @intCast(pos));
+        } else {
+          cmd_data.promptoverlay = .{ .static = "Not found!", };
+        }
       }
     };
   };
