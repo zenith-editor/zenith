@@ -846,6 +846,8 @@ const TextHandler = struct {
     } else {
       self.cursor.col += @intCast(slice.len);
     }
+    self.syncColumnScroll(E);
+    self.syncRowScroll(E);
     E.needs_redraw = true;
   }
   
@@ -870,6 +872,8 @@ const TextHandler = struct {
     } else {
       self.cursor.col = @intCast((insidx + slice.len) - self.line_offsets.get(self.cursor.row));
     }
+    self.syncColumnScroll(E);
+    self.syncRowScroll(E);
     E.needs_redraw = true;
   }
   
@@ -1703,7 +1707,7 @@ const Editor = struct {
   fn flushConsoleInput(self: *Editor) void {
     while (true) {
       const byte = self.inr.readByte() catch break;
-      std.debug.print("readKey: unk [{}]\n", .{byte});
+      std.log.debug("readKey: unk [{}]\n", .{byte});
     }
   }
   
@@ -1735,7 +1739,7 @@ const Editor = struct {
             },
             else => |byte1| {
               // unknown escape sequence, empty the buffer
-              std.debug.print("readKey: unk [{}]\n", .{byte1});
+              std.log.debug("readKey: unk [{}]\n", .{byte1});
               self.flushConsoleInput();
               return null;
             }
@@ -1949,6 +1953,7 @@ fn showHelp(program_name: []const u8) !void {
     \\ ^v: paste
     \\ ^g: goto line (cmd)
     \\ ^f: find (cmd)
+    \\ ^z: undo
     \\
     \\ Within cmd mode:
     \\  esc: change to text mode
