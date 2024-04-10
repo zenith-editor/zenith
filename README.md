@@ -1,5 +1,8 @@
 # zed  
 
+
+![](/docs/preview.jpg)
+
 A very minimal console text editor written in Zig.
 
 ## Build
