@@ -1,3 +1,18 @@
+// zed - a console editor in Zig in ~2k lines of code
+// inspired by https://github.com/antirez/kilo
+//
+// ----
+//
+// Copyright (c) 2024 T. M. <pm2mtr@gmail.com>.
+// 
+// Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+// 
+// 1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+// 2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+// 3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+//
 const std = @import("std");
 const builtin = @import("builtin");
 
@@ -249,7 +264,6 @@ const LineOffsetList = struct {
   alloc_gpa: std.heap.GeneralPurposeAllocator(.{}),
   
   fn init() !LineOffsetList {
-    // TODO custom page-based allocator
     var alloc_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
     var buf = try std.ArrayListUnmanaged(u32).initCapacity(alloc_gpa.allocator(), 1);
     try buf.append(alloc_gpa.allocator(), 0);
@@ -530,7 +544,7 @@ const TextHandler = struct {
     return TextIterator { .text_handler = self, .pos = pos, };
   }
   
-  fn getLogicalLength(self: *const TextHandler) u32 {
+  fn getLogicalLen(self: *const TextHandler) u32 {
     return @intCast(self.head_end + self.gap.len + (self.buffer.items.len - self.tail_start));
   }
   
@@ -543,7 +557,7 @@ const TextHandler = struct {
     return if ((row + 1) < self.line_offsets.getLen())
       (self.line_offsets.get(row + 1) - 1)
     else
-      self.getLogicalLength();
+      self.getLogicalLen();
   }
   
   fn getRowLen(self: *const TextHandler, row: u32) u32 {
@@ -563,7 +577,7 @@ const TextHandler = struct {
       // buffer contains deleted characters
       const deleted_chars = self.tail_start - self.head_end;
       const logical_tail_start = self.head_end + self.gap.len;
-      const logical_len = self.getLogicalLength();
+      const logical_len = self.getLogicalLen();
       if (deleted_chars > self.gap.len) {
         const gapdest: []u8 = self.buffer.items[self.head_end..logical_tail_start];
         @memcpy(gapdest, self.gap.slice());
@@ -686,7 +700,7 @@ const TextHandler = struct {
   }
   
   fn gotoPos(self: *TextHandler, E: *Editor, pos: u32) !void {
-    if (pos >= self.getLogicalLength()) {
+    if (pos >= self.getLogicalLen()) {
       return error.Overflow;
     }
     self.cursor.row = self.line_offsets.findMaxLineBeforeOffset(pos);
@@ -867,7 +881,7 @@ const TextHandler = struct {
     
     if (deleteNextChar) {
       delidx += 1;
-      if (delidx > self.getLogicalLength()) {
+      if (delidx > self.getLogicalLen()) {
         return;
       }
     }
@@ -1003,7 +1017,7 @@ const TextHandler = struct {
   
   fn markStart(self: *TextHandler, E: *Editor) void {
     var markidx: u32 = self.calcOffsetFromCursor();
-    const logical_len = self.getLogicalLength();
+    const logical_len = self.getLogicalLen();
     if (markidx >= logical_len) {
       markidx = logical_len;
     }
@@ -1018,7 +1032,7 @@ const TextHandler = struct {
   
   fn markEnd(self: *TextHandler, E: *Editor) void {
     var markidx: u32 = self.calcOffsetFromCursor();
-    const logical_len = self.getLogicalLength();
+    const logical_len = self.getLogicalLen();
     if (markidx >= logical_len) {
       markidx = logical_len;
     }
@@ -1968,7 +1982,6 @@ pub fn main() !void {
       .flags = 0,
     };
     _ = std.os.linux.sigaction(std.os.linux.SIG.WINCH, &sigaction, null);
-    // TODO log if sigaction fails
   }
   var E = try Editor.init();
   if (opt_opened_file) |opened_file| {
