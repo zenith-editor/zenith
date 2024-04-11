@@ -115,6 +115,9 @@ const StateHandler = struct {
           .onKey = Commands.Find.onKey,
         });
       }
+      else if (keysym.ctrl_key and keysym.isChar('y')) {
+        try self.text_handler.undo_mgr.redo(self);
+      }
       else if (keysym.raw == kbd.Keysym.BACKSPACE) {
         try self.text_handler.deleteChar(self, false);
       }

@@ -17,6 +17,11 @@ pub const TextPos = struct {
   col: u32 = 0,
 };
 
+pub const RecordAction = enum {
+  record_action,
+  record_by_undo_mgr,
+};
+
 pub const TextHandler = struct {
   const GAP_SIZE = 512;
   
@@ -583,17 +588,25 @@ pub const TextHandler = struct {
     self: *TextHandler,
     E: *Editor,
     delete_start: u32, delete_end: u32,
-    record_as_undo: bool,
-  ) !void {
+    record_undoable_action: bool,
+    copy_orig_slice_to_undo_heap: bool,
+  ) !?[]const u8 {
     self.buffer_changed = true;
     
     // assume that the gap buffer is flushed to make it easier
     // for us to delete the region
     try self.flushGapBuffer(E);
     
-    if (record_as_undo) {
-      try self.undo_mgr.doDelete(delete_start, self.buffer.items[delete_start..delete_end]);
+    if (record_undoable_action) {
+      try self.undo_mgr.doDelete(
+        delete_start, self.buffer.items[delete_start..delete_end]
+      );
     }
+    
+    const retval: ?[]const u8 = if (copy_orig_slice_to_undo_heap)
+      try self.undo_mgr.copySlice(self.buffer.items[delete_start..delete_end])
+    else
+      null;
     
     const n_deleted = delete_end - delete_start;
     
@@ -619,11 +632,13 @@ pub const TextHandler = struct {
     self.cursor.col = delete_start - self.line_offsets.get(self.cursor.row);
     
     E.needs_redraw = true;
+    
+    return retval;
   }
   
   pub fn deleteMarked(self: *TextHandler, E: *Editor) !void {
     if (self.markers) |markers| {
-      try self.deleteRegionAtPos(E, markers.start, markers.end, true);
+      _ = try self.deleteRegionAtPos(E, markers.start, markers.end, false, false);
       
       self.cursor = markers.start_cur;
       if (self.cursor.row >= self.line_offsets.getLen()) {
