@@ -45,8 +45,8 @@ pub const LineInfoList = struct {
     self.offsets.clearRetainingCapacity();
   }
   
-  pub fn orderedRemove(self: *LineInfoList, idx: u32) u32 {
-    return self.offsets.orderedRemove(idx);
+  pub fn remove (self: *LineInfoList, idx: u32) void {
+    _ = self.offsets.orderedRemove(idx);
   }
   
   pub fn shrinkRetainingCapacity(self: *LineInfoList, len: u32) void {

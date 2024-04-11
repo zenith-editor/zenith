@@ -558,7 +558,7 @@ pub const TextHandler = struct {
         } else {
           const deletedrowidx = self.cursor.row + 1;
           self.lineinfo.decreaseOffsets(deletedrowidx, 1);
-          _ = self.lineinfo.orderedRemove(deletedrowidx);
+          self.lineinfo.remove(deletedrowidx);
         }
       } else {
         self.lineinfo.decreaseOffsets(self.cursor.row + 1, 1);
@@ -570,7 +570,7 @@ pub const TextHandler = struct {
         self.cursor.row -= 1;
         self.goTail(E);
         self.lineinfo.decreaseOffsets(deletedrowidx, 1);
-        _ = self.lineinfo.orderedRemove(deletedrowidx);
+        self.lineinfo.remove(deletedrowidx);
       } else {
         self.lineinfo.decreaseOffsets(self.cursor.row + 1, 1);
         self.goLeft(E);
