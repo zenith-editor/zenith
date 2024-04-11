@@ -457,7 +457,7 @@ const Commands = struct {
         } else if (key == 'G') {
           try self.text_handler.gotoLine(
             self,
-            @intCast(self.text_handler.line_offsets.getLen() - 1)
+            @intCast(self.text_handler.lineinfo.getLen() - 1)
           );
           self.setState(State.text);
           return true;
@@ -769,8 +769,8 @@ pub const Editor = struct {
     var row: u32 = 0;
     const cursor_row: u32 = text_handler.cursor.row - text_handler.scroll.row;
     var lineno: [16]u8 = undefined;
-    for (text_handler.scroll.row..text_handler.line_offsets.getLen()) |i| {
-      const offset_start: u32 = text_handler.line_offsets.get(@intCast(i));
+    for (text_handler.scroll.row..text_handler.lineinfo.getLen()) |i| {
+      const offset_start: u32 = text_handler.lineinfo.get(@intCast(i));
       const offset_end: u32 = text_handler.getRowOffsetEnd(@intCast(i));
       
       const colOffset: u32 = if (row == cursor_row) text_handler.scroll.col else 0;

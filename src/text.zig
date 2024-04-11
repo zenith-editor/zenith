@@ -7,7 +7,7 @@ const std = @import("std");
 
 const str = @import("./str.zig");
 const undo = @import("./undo.zig");
-const line_offsets = @import("./line_offsets.zig");
+const lineinfo = @import("./lineinfo.zig");
 
 const Editor = @import("./editor.zig").Editor;
 
@@ -86,10 +86,8 @@ pub const TextHandler = struct {
   /// Gap buffer
   gap: std.BoundedArray(u8, GAP_SIZE) = .{},
   
-  /// Logical offsets to start of lines. These offsets are defined based on
-  /// positions within the logical text buffer above.
-  /// These offsets do contain the newline character.
-  line_offsets: line_offsets.LineOffsetList,
+  /// Line information
+  lineinfo: lineinfo.LineInfoList,
   
   /// Maximum number of digits needed to print line position (starting from 1)
   line_digits: u32 = 1,
@@ -107,7 +105,7 @@ pub const TextHandler = struct {
   
   pub fn init() !TextHandler {
     return TextHandler {
-      .line_offsets = try line_offsets.LineOffsetList.init(),
+      .lineinfo = try lineinfo.LineInfoList.init(),
     };
   }
   
@@ -122,7 +120,7 @@ pub const TextHandler = struct {
       self.cursor = TextPos {};
       self.scroll = TextPos {};
       self.buffer.clearAndFree(E.allocr());
-      self.line_offsets.clear();
+      self.lineinfo.clear();
       try self.readLines(E);
     }
   }
@@ -151,11 +149,11 @@ pub const TextHandler = struct {
     const allocr: std.mem.Allocator = E.allocr();
     self.buffer = str.String.fromOwnedSlice(try file.readToEndAlloc(allocr, std.math.maxInt(u32)));
     // first line
-    try self.line_offsets.append(0);
+    try self.lineinfo.append(0);
     var i: u32 = 0;
     for (self.buffer.items) |byte| {
       if (byte == '\n') {
-        try self.line_offsets.append(i + 1);
+        try self.lineinfo.append(i + 1);
       }
       i += 1;
     }
@@ -173,25 +171,25 @@ pub const TextHandler = struct {
   }
   
   fn calcLineDigits(self: *TextHandler) void {
-    self.line_digits = std.math.log10(self.line_offsets.getLen() + 1) + 1;
+    self.line_digits = std.math.log10(self.lineinfo.getLen() + 1) + 1;
   }
   
   pub fn getRowOffsetEnd(self: *const TextHandler, row: u32) u32 {
     // The newline character of the current line is not counted
-    return if ((row + 1) < self.line_offsets.getLen())
-      (self.line_offsets.get(row + 1) - 1)
+    return if ((row + 1) < self.lineinfo.getLen())
+      (self.lineinfo.get(row + 1) - 1)
     else
       self.getLogicalLen();
   }
   
   pub fn getRowLen(self: *const TextHandler, row: u32) u32 {
-    const offset_start: u32 = self.line_offsets.get(row);
+    const offset_start: u32 = self.lineinfo.get(row);
     const offset_end: u32 = self.getRowOffsetEnd(row);
     return offset_end - offset_start;
   }
   
   pub fn calcOffsetFromCursor(self: *const TextHandler) u32 {
-    return self.line_offsets.get(self.cursor.row) + self.cursor.col;
+    return self.lineinfo.get(self.cursor.row) + self.cursor.col;
   }
   
   // gap
@@ -260,7 +258,7 @@ pub const TextHandler = struct {
   }
   
   pub fn goDown(self: *TextHandler, E: *Editor) void {
-    if (self.cursor.row == self.line_offsets.getLen() - 1) {
+    if (self.cursor.row == self.lineinfo.getLen() - 1) {
       return;
     }
     self.cursor.row += 1;
@@ -313,7 +311,7 @@ pub const TextHandler = struct {
   }
   
   pub fn gotoLine(self: *TextHandler, E: *Editor, row: u32) !void {
-    if (row >= self.line_offsets.getLen()) {
+    if (row >= self.lineinfo.getLen()) {
       return error.Overflow;
     }
     self.cursor.row = row;
@@ -327,8 +325,8 @@ pub const TextHandler = struct {
     if (pos >= self.getLogicalLen()) {
       return error.Overflow;
     }
-    self.cursor.row = self.line_offsets.findMaxLineBeforeOffset(pos);
-    self.cursor.col = pos - self.line_offsets.get(self.cursor.row);
+    self.cursor.row = self.lineinfo.findMaxLineBeforeOffset(pos);
+    self.cursor.col = pos - self.lineinfo.get(self.cursor.row);
     self.syncColumnScroll(E);
     self.syncRowScroll(E);
     E.needs_redraw = true;
@@ -404,8 +402,8 @@ pub const TextHandler = struct {
       try self.gap.append(char);
     }
     if (char == '\n') {
-      self.line_offsets.increaseOffsets(self.cursor.row + 1, 1);
-      try self.line_offsets.insert(self.cursor.row + 1, insidx + 1);
+      self.lineinfo.increaseOffsets(self.cursor.row + 1, 1);
+      try self.lineinfo.insert(self.cursor.row + 1, insidx + 1);
       self.calcLineDigits();
       
       self.cursor.row += 1;
@@ -416,7 +414,7 @@ pub const TextHandler = struct {
       self.scroll.col = 0;
       E.needs_redraw = true;
     } else {
-      self.line_offsets.increaseOffsets(self.cursor.row + 1, 1);
+      self.lineinfo.increaseOffsets(self.cursor.row + 1, 1);
       E.needs_redraw = true;
       self.goRight(E);
     }
@@ -430,8 +428,8 @@ pub const TextHandler = struct {
   ) !std.ArrayListUnmanaged(u32) {
     const allocr: std.mem.Allocator = E.allocr();
     
-    if (first_row_after_insidx < self.line_offsets.getLen()) {
-      self.line_offsets.increaseOffsets(first_row_after_insidx, @intCast(slice.len));
+    if (first_row_after_insidx < self.lineinfo.getLen()) {
+      self.lineinfo.increaseOffsets(first_row_after_insidx, @intCast(slice.len));
     }
     
     var newlines: std.ArrayListUnmanaged(u32) = .{};
@@ -444,7 +442,7 @@ pub const TextHandler = struct {
     }
     try self.buffer.insertSlice(allocr, insidx, slice);
     if (newlines.items.len > 0) {
-      try self.line_offsets.insertSlice(first_row_after_insidx, newlines.items);
+      try self.lineinfo.insertSlice(first_row_after_insidx, newlines.items);
       self.calcLineDigits();
     }
     return newlines;
@@ -484,7 +482,7 @@ pub const TextHandler = struct {
     try self.flushGapBuffer(E);
     
     // counting from zero, the first row AFTER where the slice is inserted
-    const first_row_after_insidx: u32 = self.line_offsets.findMinLineAfterOffset(insidx);
+    const first_row_after_insidx: u32 = self.lineinfo.findMinLineAfterOffset(insidx);
     var newlines = try self.shiftAndInsertNewLines(E, slice, insidx, first_row_after_insidx);
     defer newlines.deinit(E.allocr());
     
@@ -494,7 +492,7 @@ pub const TextHandler = struct {
     if (newlines.items.len > 0) {
       self.cursor.col = @intCast((insidx + slice.len) - newlines.items[newlines.items.len - 1]);
     } else {
-      self.cursor.col = @intCast((insidx + slice.len) - self.line_offsets.get(self.cursor.row));
+      self.cursor.col = @intCast((insidx + slice.len) - self.lineinfo.get(self.cursor.row));
     }
     self.syncColumnScroll(E);
     self.syncRowScroll(E);
@@ -555,15 +553,15 @@ pub const TextHandler = struct {
     if (deleteNextChar) {
       if (delidx == self.getRowOffsetEnd(self.cursor.row)) {
         // deleting next line
-        if ((self.cursor.row + 1) == self.line_offsets.getLen()) {
+        if ((self.cursor.row + 1) == self.lineinfo.getLen()) {
           // do nothing if deleting last line
         } else {
           const deletedrowidx = self.cursor.row + 1;
-          self.line_offsets.decreaseOffsets(deletedrowidx, 1);
-          _ = self.line_offsets.orderedRemove(deletedrowidx);
+          self.lineinfo.decreaseOffsets(deletedrowidx, 1);
+          _ = self.lineinfo.orderedRemove(deletedrowidx);
         }
       } else {
-        self.line_offsets.decreaseOffsets(self.cursor.row + 1, 1);
+        self.lineinfo.decreaseOffsets(self.cursor.row + 1, 1);
       }
     } else {
       if (self.cursor.col == 0) {
@@ -571,10 +569,10 @@ pub const TextHandler = struct {
         const deletedrowidx = self.cursor.row;
         self.cursor.row -= 1;
         self.goTail(E);
-        self.line_offsets.decreaseOffsets(deletedrowidx, 1);
-        _ = self.line_offsets.orderedRemove(deletedrowidx);
+        self.lineinfo.decreaseOffsets(deletedrowidx, 1);
+        _ = self.lineinfo.orderedRemove(deletedrowidx);
       } else {
-        self.line_offsets.decreaseOffsets(self.cursor.row + 1, 1);
+        self.lineinfo.decreaseOffsets(self.cursor.row + 1, 1);
         self.goLeft(E);
       }
     }
@@ -623,12 +621,12 @@ pub const TextHandler = struct {
       self.buffer.shrinkRetainingCapacity(new_len);
     }
     
-    self.line_offsets.removeLinesInRange(delete_start, delete_end);
+    self.lineinfo.removeLinesInRange(delete_start, delete_end);
     
-    const first_row_after_delete: u32 = self.line_offsets.findMinLineAfterOffset(delete_start);
+    const first_row_after_delete: u32 = self.lineinfo.findMinLineAfterOffset(delete_start);
     
     self.cursor.row = first_row_after_delete - 1;
-    self.cursor.col = delete_start - self.line_offsets.get(self.cursor.row);
+    self.cursor.col = delete_start - self.lineinfo.get(self.cursor.row);
     
     E.needs_redraw = true;
     
@@ -640,8 +638,8 @@ pub const TextHandler = struct {
       _ = try self.deleteRegionAtPos(E, markers.start, markers.end, false, false);
       
       self.cursor = markers.start_cur;
-      if (self.cursor.row >= self.line_offsets.getLen()) {
-        self.cursor.row = self.line_offsets.getLen() - 1;
+      if (self.cursor.row >= self.lineinfo.getLen()) {
+        self.cursor.row = self.lineinfo.getLen() - 1;
         self.cursor.col = self.getRowLen(self.cursor.row);
       }
       self.syncColumnScroll(E);
