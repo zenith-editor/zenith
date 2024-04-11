@@ -4,7 +4,6 @@
 // This work is licensed under the BSD 3-Clause License.
 //
 const std = @import("std");
-const builtin = @import("builtin");
 
 fn lower_u32(context: void, lhs: u32, rhs: u32) bool {
   _ = context;

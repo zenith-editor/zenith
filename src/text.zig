@@ -4,7 +4,6 @@
 // This work is licensed under the BSD 3-Clause License.
 //
 const std = @import("std");
-const builtin = @import("builtin");
 
 const str = @import("./str.zig");
 const undo = @import("./undo.zig");
