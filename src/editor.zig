@@ -510,10 +510,12 @@ const Commands = struct {
       if (keysym.key == kbd.Keysym.Key.up) {
         try self.text_handler.flushGapBuffer(self);
         try Find.findBackwards(self, cmd_data);
+        return true;
       }
       else if (keysym.key == kbd.Keysym.Key.down) {
         try self.text_handler.flushGapBuffer(self);
         try Find.findForwards(self, cmd_data);
+        return true;
       }
       return false;
     }
