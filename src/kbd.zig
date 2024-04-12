@@ -9,6 +9,7 @@ const builtin = @import("builtin");
 pub const Keysym = struct {
   pub const Key = union(enum) {
     normal: u8,
+    multibyte: [4]u8,
     // special keys
     up,
     down,
@@ -44,15 +45,23 @@ pub const Keysym = struct {
   
   pub fn initSpecial(comptime key: Key) Keysym {
     switch(key) {
-      .normal => { @compileError("initSpecial requires special key"); },
+      .normal, .multibyte => { @compileError("initSpecial requires special key"); },
       else => {
         return Keysym {
           .raw = 0,
           .key = key,
         };
       },
-      
     }
+  }
+  
+  pub fn initMultibyte(multibyte: []const u8) Keysym {
+    var multibyte_copy = [4]u8{0,0,0,0};
+    std.mem.copyForwards(u8, multibyte_copy[0..multibyte.len], multibyte);
+    return Keysym {
+      .raw = 0,
+      .key = .{ .multibyte = multibyte_copy, },
+    };
   }
   
   pub fn isSpecial(self: Keysym) bool {
@@ -73,6 +82,22 @@ pub const Keysym = struct {
     } else {
       return null;
     }
+  }
+  
+  pub fn getMultibyte(self: *const Keysym) ?[]const u8 {
+    return switch(self.key) {
+      .multibyte => |*s| {
+        if (s[1] == 0) {
+          return s[0..1];
+        } else if (s[2] == 0) {
+          return s[0..2];
+        } else if (s[3] == 0) {
+          return s[0..3];
+        }
+        return s;
+      },
+      else => null,
+    };
   }
   
   pub fn isChar(self: Keysym, char: u8) bool {

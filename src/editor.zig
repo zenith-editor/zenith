@@ -60,7 +60,7 @@ const StateHandler = struct {
         self.text_handler.goHead(self);
       }
       else if (keysym.key == kbd.Keysym.Key.end) {
-        self.text_handler.goTail(self);
+        try self.text_handler.goTail(self);
       }
       else if (keysym.ctrl_key and keysym.isChar('q')) {
         self.setState(State.quit);
@@ -125,10 +125,13 @@ const StateHandler = struct {
         try self.text_handler.deleteChar(self, true);
       }
       else if (keysym.raw == kbd.Keysym.NEWLINE) {
-        try self.text_handler.insertChar(self, '\n');
+        try self.text_handler.insertChar(self, "\n");
       }
       else if (keysym.getPrint()) |key| {
-        try self.text_handler.insertChar(self, key);
+        try self.text_handler.insertChar(self, &[_]u8{key});
+      }
+      else if (keysym.getMultibyte()) |seq| {
+        try self.text_handler.insertChar(self, seq);
       }
     }
     
@@ -187,6 +190,10 @@ const StateHandler = struct {
       }
       else if (keysym.getPrint()) |key| {
         try cmd_data.cmdinp.append(self.allocr(), key);
+        self.needs_update_cursor = true;
+      }
+      else if (keysym.getMultibyte()) |seq| {
+        try cmd_data.cmdinp.appendSlice(self.allocr(), seq);
         self.needs_update_cursor = true;
       }
     }
@@ -257,7 +264,7 @@ const StateHandler = struct {
         self.text_handler.goHead(self);
       }
       else if (keysym.key == kbd.Keysym.Key.end) {
-        self.text_handler.goTail(self);
+        try self.text_handler.goTail(self);
       }
       else if (keysym.raw == kbd.Keysym.NEWLINE) {
         if (self.text_handler.markers == null) {
@@ -617,6 +624,7 @@ pub const Editor = struct {
     termios.iflag.INPCK = false;
     termios.iflag.ISTRIP = false;
     termios.iflag.IXON = false;
+    termios.iflag.IUTF8 = false;
     
     termios.oflag.OPOST = false;
     
@@ -686,6 +694,21 @@ pub const Editor = struct {
         }
       }
     }
+    if (text.Encoding.sequenceLen(raw)) |seqlen| {
+      if (seqlen > 1) {
+        var seq = std.BoundedArray(u8, 4).init(0) catch unreachable;
+        seq.append(raw) catch unreachable;
+        for (1..seqlen) |_| {
+          const cont = self.inr.readByte() catch {
+            return null;
+          };
+          seq.append(cont) catch {
+            return null;
+          };
+        }
+        return kbd.Keysym.initMultibyte(seq.constSlice());
+      }
+    }
     return kbd.Keysym.init(raw);
   }
   
@@ -717,7 +740,7 @@ pub const Editor = struct {
     const text_handler: *text.TextHandler = &self.text_handler;
     try self.moveCursor(
       text_handler.cursor.row - text_handler.scroll.row,
-      (text_handler.cursor.col - text_handler.scroll.col) + text_handler.line_digits + 1,
+      (text_handler.cursor.gfx_col - text_handler.scroll.gfx_col) + text_handler.line_digits + 1,
     );
   }
   
@@ -770,7 +793,7 @@ pub const Editor = struct {
     const cursor_row: u32 = text_handler.cursor.row - text_handler.scroll.row;
     var lineno: [16]u8 = undefined;
     for (text_handler.scroll.row..text_handler.lineinfo.getLen()) |i| {
-      const offset_start: u32 = text_handler.lineinfo.get(@intCast(i));
+      const offset_start: u32 = text_handler.lineinfo.getOffset(@intCast(i));
       const offset_end: u32 = text_handler.getRowOffsetEnd(@intCast(i));
       
       const colOffset: u32 = if (row == cursor_row) text_handler.scroll.col else 0;
@@ -782,7 +805,16 @@ pub const Editor = struct {
       for(0..(self.text_handler.line_digits - lineno_slice.len)) |_| {
         try self.outw.writeByte(' ');
       }
-      try self.writeAll(lineno_slice);
+      if (
+        (comptime builtin.mode == .Debug) and
+        self.text_handler.lineinfo.checkIsMultibyte(@intCast(i))
+      ) {
+        try self.writeAll(COLOR_INVERT);
+        try self.writeAll(lineno_slice);
+        try self.writeAll(COLOR_DEFAULT);
+      } else {
+        try self.writeAll(lineno_slice);
+      }
       try self.outw.writeByte(' ');
       
       if (text_handler.markers) |*markers| {
@@ -791,8 +823,8 @@ pub const Editor = struct {
         if (pos > markers.start and pos < markers.end) {
           try self.writeAll(COLOR_INVERT);
         }
-        while (iter.nextUntil(offset_end)) |byte| {
-          if (!(try self.renderCharInLineMarked(byte, &col, markers, pos))) {
+        while (iter.nextCharUntil(offset_end)) |bytes| {
+          if (!(try self.renderCharInLineMarked(bytes, &col, markers, pos))) {
             break;
           }
           pos += 1;
@@ -800,8 +832,8 @@ pub const Editor = struct {
         try self.writeAll(COLOR_DEFAULT);
       } else {
         var col: u32 = 0;
-        while (iter.nextUntil(offset_end)) |byte| {
-          if (!(try self.renderCharInLine(byte, &col))) {
+        while (iter.nextCharUntil(offset_end)) |bytes| {
+          if (!(try self.renderCharInLine(bytes, &col))) {
             break;
           }
         }
@@ -815,31 +847,31 @@ pub const Editor = struct {
     self.needs_update_cursor = true;
   }
   
-  fn renderCharInLine(self: *Editor, byte: u8, colref: *u32) !bool {
+  fn renderCharInLine(self: *Editor, bytes: []const u8, colref: *u32) !bool {
     if (colref.* == self.getTextWidth()) {
       return false;
     }
-    if (std.ascii.isControl(byte)) {
+    if (bytes.len == 1 and std.ascii.isControl(bytes[0])) {
       return true;
     }
-    try self.outw.writeByte(byte);
+    try self.outw.writeAll(bytes);
     colref.* += 1;
     return true;
   }
   
   fn renderCharInLineMarked(
-    self: *Editor, byte: u8, colref: *u32,
+    self: *Editor, bytes: []const u8, colref: *u32,
     markers: *const text.TextHandler.Markers,
     pos: u32,
   ) !bool {
     if (pos == markers.start) {
       try self.writeAll(COLOR_INVERT);
-      return self.renderCharInLine(byte, colref);
+      return self.renderCharInLine(bytes, colref);
     } else if (pos >= markers.end) {
       try self.writeAll(COLOR_DEFAULT);
-      return self.renderCharInLine(byte, colref);
+      return self.renderCharInLine(bytes, colref);
     } else {
-      return self.renderCharInLine(byte, colref);
+      return self.renderCharInLine(bytes, colref);
     }
   }
   
