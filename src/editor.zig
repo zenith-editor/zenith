@@ -11,7 +11,7 @@ const str = @import("./str.zig");
 const text = @import("./text.zig");
 const sig = @import("./sig.zig");
 
-const State = enum {
+pub const State = enum {
   text,
   command,
   mark,
@@ -42,293 +42,13 @@ const StateHandler = struct {
     };
   }
   
-  const TextImpl = struct {
-    fn handleInput(self: *Editor, keysym: kbd.Keysym) !void {
-      if (keysym.key == kbd.Keysym.Key.up) {
-        self.text_handler.goUp(self);
-      }
-      else if (keysym.key == kbd.Keysym.Key.down) {
-        self.text_handler.goDown(self);
-      }
-      else if (keysym.key == kbd.Keysym.Key.left) {
-        self.text_handler.goLeft(self);
-      }
-      else if (keysym.key == kbd.Keysym.Key.right) {
-        self.text_handler.goRight(self);
-      }
-      else if (keysym.key == kbd.Keysym.Key.pgup) {
-        self.text_handler.goPgUp(self);
-      }
-      else if (keysym.key == kbd.Keysym.Key.pgdown) {
-        self.text_handler.goPgDown(self);
-      }
-      else if (keysym.key == kbd.Keysym.Key.home) {
-        self.text_handler.goHead(self);
-      }
-      else if (keysym.key == kbd.Keysym.Key.end) {
-        try self.text_handler.goTail(self);
-      }
-      else if (keysym.ctrl_key and keysym.isChar('q')) {
-        self.setState(State.quit);
-      }
-      else if (keysym.ctrl_key and keysym.isChar('s')) {
-        if (self.text_handler.file == null) {
-          self.setState(State.command);
-          self.setCmdData(CommandData {
-            .prompt = "Save file:",
-            .onInputted = Commands.Open.onInputtedTryToSave,
-          });
-        } else {
-          self.text_handler.save(self) catch |err| {
-            self.setState(State.command);
-            self.setCmdData(CommandData {
-              .prompt = "Save file to new location:",
-              .onInputted = Commands.Open.onInputtedTryToSave,
-            });
-            try Commands.Open.setupUnableToSavePrompt(self, err);
-          };
-        }
-      }
-      else if (keysym.ctrl_key and keysym.isChar('o')) {
-        self.setState(State.command);
-        self.setCmdData(CommandData {
-          .prompt = "Open file:",
-          .onInputted = Commands.Open.onInputted,
-        });
-      }
-      else if (keysym.ctrl_key and keysym.isChar('g')) {
-        self.setState(State.command);
-        self.setCmdData(CommandData {
-          .prompt = "Go to line (first = g, last = G):",
-          .onInputted = Commands.GotoLine.onInputted,
-          .onKey = Commands.GotoLine.onKey,
-        });
-      }
-      else if (keysym.ctrl_key and keysym.isChar('b')) {
-        self.setState(State.mark);
-      }
-      else if (keysym.ctrl_key and keysym.isChar('v')) {
-        try self.text_handler.paste(self);
-      }
-      else if (keysym.ctrl_key and keysym.isChar('z')) {
-        try self.text_handler.undo_mgr.undo(self);
-      }
-      else if (keysym.ctrl_key and keysym.isChar('f')) {
-        self.setState(State.command);
-        self.setCmdData(CommandData {
-          .prompt = "Find (next = Enter):",
-          .onInputted = Commands.Find.onInputted,
-          .onKey = Commands.Find.onKey,
-        });
-      }
-      else if (keysym.ctrl_key and keysym.isChar('y')) {
-        try self.text_handler.undo_mgr.redo(self);
-      }
-      else if (keysym.raw == kbd.Keysym.BACKSPACE) {
-        try self.text_handler.deleteChar(self, false);
-      }
-      else if (keysym.key == kbd.Keysym.Key.del) {
-        try self.text_handler.deleteChar(self, true);
-      }
-      else if (keysym.raw == kbd.Keysym.NEWLINE) {
-        try self.text_handler.insertChar(self, "\n");
-      }
-      else if (keysym.getPrint()) |key| {
-        try self.text_handler.insertChar(self, &[_]u8{key});
-      }
-      else if (keysym.getMultibyte()) |seq| {
-        try self.text_handler.insertChar(self, seq);
-      }
-    }
-    
-    fn handleOutput(self: *Editor) !void {
-      if (self.needs_redraw) {
-        try self.refreshScreen();
-        try self.renderText();
-        self.needs_redraw = false;
-      }
-      if (self.needs_update_cursor) {
-        try TextImpl.renderStatus(self);
-        try self.updateCursorPos();
-        self.needs_update_cursor = false;
-      }
-    }
-    
-    fn renderStatus(self: *Editor) !void {
-      try self.moveCursor(self.getTextHeight(), 0);
-      const text_handler: *const text.TextHandler = &self.text_handler;
-      try self.writeAll(Editor.CLEAR_LINE);
-      if (text_handler.buffer_changed) {
-        try self.writeAll("[*]");
-      } else {
-        try self.writeAll("[ ]");
-      }
-      try self.writeFmt(" {}:{}", .{text_handler.cursor.row+1, text_handler.cursor.col+1});
-    }
-  };
+  const TextImpl = @import("./states/text.zig");
   const Text: StateHandler = _createStateHandler(TextImpl);
   
-  const CommandImpl = struct {
-    fn handleInput(self: *Editor, keysym: kbd.Keysym) !void {
-      var cmd_data: *CommandData = self.getCmdData();
-      if (keysym.raw == kbd.Keysym.ESC) {
-        self.setState(.text);
-        return;
-      }
-      
-      if (cmd_data.promptoverlay != null) {
-        cmd_data.promptoverlay.?.deinit(self.allocr());
-        cmd_data.promptoverlay = null;
-      }
-      
-      if (cmd_data.onKey) |onKey| {
-        if (try onKey(self, keysym)) {
-          return;
-        }
-      }
-      
-      if (keysym.raw == kbd.Keysym.BACKSPACE) {
-        _ = cmd_data.cmdinp.popOrNull();
-        self.needs_update_cursor = true;
-      }
-      else if (keysym.raw == kbd.Keysym.NEWLINE) {
-        try cmd_data.onInputted(self);
-      }
-      else if (keysym.getPrint()) |key| {
-        try cmd_data.cmdinp.append(self.allocr(), key);
-        self.needs_update_cursor = true;
-      }
-      else if (keysym.getMultibyte()) |seq| {
-        try cmd_data.cmdinp.appendSlice(self.allocr(), seq);
-        self.needs_update_cursor = true;
-      }
-    }
-    
-    fn renderStatus(self: *Editor) !void {
-      try self.moveCursor(self.getTextHeight(), 0);
-      try self.writeAll(Editor.CLEAR_LINE);
-      const cmd_data: *CommandData = self.getCmdData();
-      if (cmd_data.promptoverlay) |promptoverlay| {
-        try self.writeAll(promptoverlay.slice());
-      } else if (cmd_data.prompt) |prompt| {
-        try self.writeAll(prompt);
-      }
-      try self.moveCursor((self.getTextHeight() + 1), 0);
-      try self.writeAll(Editor.CLEAR_LINE);
-      try self.writeAll(" >");
-      var col: u32 = 0;
-      for (cmd_data.cmdinp.items) |byte| {
-        if (col > self.getTextWidth()) {
-          return;
-        }
-        try self.outw.writeByte(byte);
-        col += 1;
-      }
-    }
-    
-    fn handleOutput(self: *Editor) !void {
-      if (self.needs_redraw) {
-        try self.refreshScreen();
-        try self.renderText();
-      }
-      if (self.needs_update_cursor) {
-        try CommandImpl.renderStatus(self);
-        self.needs_update_cursor = false;
-      }
-    }
-  };
+  const CommandImpl = @import("./states/command.zig");
   const Command: StateHandler = _createStateHandler(CommandImpl);
   
-  const MarkImpl = struct {
-    fn onSet(self: *Editor) void {
-      self.text_handler.markStart(self);
-    }
-    
-    fn resetState(self: *Editor) void {
-      self.text_handler.markers = null;
-      self.setState(.text);
-    }
-    
-    fn handleInput(self: *Editor, keysym: kbd.Keysym) !void {
-      if (keysym.raw == kbd.Keysym.ESC) {
-        MarkImpl.resetState(self);
-        return;
-      }
-      if (keysym.key == kbd.Keysym.Key.up) {
-        self.text_handler.goUp(self);
-      }
-      else if (keysym.key == kbd.Keysym.Key.down) {
-        self.text_handler.goDown(self);
-      }
-      else if (keysym.key == kbd.Keysym.Key.left) {
-        self.text_handler.goLeft(self);
-      }
-      else if (keysym.key == kbd.Keysym.Key.right) {
-        self.text_handler.goRight(self);
-      }
-      else if (keysym.key == kbd.Keysym.Key.home) {
-        self.text_handler.goHead(self);
-      }
-      else if (keysym.key == kbd.Keysym.Key.end) {
-        try self.text_handler.goTail(self);
-      }
-      else if (keysym.raw == kbd.Keysym.NEWLINE) {
-        if (self.text_handler.markers == null) {
-          self.text_handler.markStart(self);
-        } else {
-          self.text_handler.markEnd(self);
-        }
-      }
-      
-      else if (keysym.key == kbd.Keysym.Key.del) {
-        try self.text_handler.deleteMarked(self);
-      }
-      else if (keysym.raw == kbd.Keysym.BACKSPACE) {
-        try self.text_handler.deleteMarked(self);
-        MarkImpl.resetState(self);
-      }
-      
-      else if (keysym.ctrl_key and keysym.isChar('c')) {
-        try self.text_handler.copy(self);
-        MarkImpl.resetState(self);
-      }
-      else if (keysym.ctrl_key and keysym.isChar('x')) {
-        try self.text_handler.copy(self);
-        try self.text_handler.deleteMarked(self);
-        MarkImpl.resetState(self);
-      }
-    }
-    
-    fn handleOutput(self: *Editor) !void {
-      if (self.needs_redraw) {
-        try self.refreshScreen();
-        try self.renderText();
-        self.needs_redraw = false;
-      }
-      if (self.needs_update_cursor) {
-        try MarkImpl.renderStatus(self);
-        try self.updateCursorPos();
-        self.needs_update_cursor = false;
-      }
-    }
-    
-    fn renderStatus(self: *Editor) !void {
-      try self.moveCursor(self.getTextHeight(), 0);
-      try self.writeAll(Editor.CLEAR_LINE);
-      try self.writeAll("Enter: mark end, Del: delete");
-      var status: [32]u8 = undefined;
-      const status_slice = try std.fmt.bufPrint(
-        &status,
-        "{d}:{d}",
-        .{self.text_handler.cursor.row,self.text_handler.cursor.col}, 
-      );
-      try self.moveCursor(
-        self.getTextHeight() + 1,
-        @intCast(self.w_width - status_slice.len),
-      );
-      try self.writeAll(status_slice);
-    }
-  };
+  const MarkImpl = @import("./states/mark.zig");
   const Mark: StateHandler = _createStateHandler(MarkImpl);
   
   const List = [_]*const StateHandler{
@@ -339,7 +59,7 @@ const StateHandler = struct {
   };
 };
 
-const CommandData = struct {
+pub const CommandData = struct {
   prompt: ?[]const u8 = null,
   promptoverlay: ?str.MaybeOwnedSlice = null,
   cmdinp: str.String = .{},
@@ -357,9 +77,9 @@ const CommandData = struct {
 };
 
 // commands
-const Commands = struct {
-  const Open = struct {
-    fn onInputtedGeneric(self: *Editor) !?std.fs.File {
+pub const Commands = struct {
+  pub const Open = struct {
+    pub fn onInputtedGeneric(self: *Editor) !?std.fs.File {
       self.needs_update_cursor = true;
       const cwd = std.fs.cwd();
       var cmd_data: *CommandData = self.getCmdData();
@@ -410,7 +130,7 @@ const Commands = struct {
       return opened_file;
     }
     
-    fn onInputted(self: *Editor) !void {
+    pub fn onInputted(self: *Editor) !void {
       if (try Open.onInputtedGeneric(self)) |opened_file| {
         try self.text_handler.open(self, opened_file, true);
         self.setState(State.text);
@@ -418,7 +138,7 @@ const Commands = struct {
       }
     }
     
-    fn setupUnableToSavePrompt(self: *Editor, err: anyerror) !void {
+    pub fn setupUnableToSavePrompt(self: *Editor, err: anyerror) !void {
       self.getCmdData().promptoverlay = .{
         .owned = try std.fmt.allocPrint(
           self.allocr(),
@@ -428,7 +148,7 @@ const Commands = struct {
       };
     }
     
-    fn onInputtedTryToSave(self: *Editor) !void {
+    pub fn onInputtedTryToSave(self: *Editor) !void {
       if (try Open.onInputtedGeneric(self)) |opened_file| {
         try self.text_handler.open(self, opened_file, false);
         self.text_handler.save(self) catch |err| {
@@ -441,8 +161,8 @@ const Commands = struct {
     }
   };
   
-  const GotoLine = struct {
-    fn onInputted(self: *Editor) !void {
+  pub const GotoLine = struct {
+    pub fn onInputted(self: *Editor) !void {
       self.needs_update_cursor = true;
       var text_handler: *text.TextHandler = &self.text_handler;
       var cmd_data: *CommandData = self.getCmdData();
@@ -461,7 +181,7 @@ const Commands = struct {
       self.setState(State.text);
     }
     
-    fn onKey(self: *Editor, keysym: kbd.Keysym) !bool {
+    pub fn onKey(self: *Editor, keysym: kbd.Keysym) !bool {
       if (keysym.getPrint()) |key| {
         if (key == 'g') {
           try self.text_handler.gotoLine(self, 0);
@@ -480,8 +200,8 @@ const Commands = struct {
     }
   };
   
-  const Find = struct {
-    fn findForwards(self: *Editor, cmd_data: *CommandData) !void {
+  pub const Find = struct {
+    pub fn findForwards(self: *Editor, cmd_data: *CommandData) !void {
       var text_handler = &self.text_handler;
       const opt_pos = std.mem.indexOfPos(
         u8,
@@ -496,7 +216,7 @@ const Commands = struct {
       }
     }
     
-    fn findBackwards(self: *Editor, cmd_data: *CommandData) !void {
+    pub fn findBackwards(self: *Editor, cmd_data: *CommandData) !void {
       var text_handler = &self.text_handler;
       const opt_pos = std.mem.lastIndexOf(
         u8,
@@ -510,14 +230,14 @@ const Commands = struct {
       }
     }
     
-    fn onInputted(self: *Editor) !void {
+    pub fn onInputted(self: *Editor) !void {
       self.needs_update_cursor = true;
       try self.text_handler.flushGapBuffer(self);
       const cmd_data: *CommandData = self.getCmdData();
       try Find.findForwards(self, cmd_data);
     }
     
-    fn onKey(self: *Editor, keysym: kbd.Keysym) !bool {
+    pub fn onKey(self: *Editor, keysym: kbd.Keysym) !bool {
       self.needs_update_cursor = true;
       const cmd_data: *CommandData = self.getCmdData();
       if (keysym.key == kbd.Keysym.Key.up) {
@@ -590,7 +310,7 @@ pub const Editor = struct {
     return self.alloc_gpa.allocator();
   }
   
-  fn setState(self: *Editor, state: State) void {
+  pub fn setState(self: *Editor, state: State) void {
     if (state == self._state) {
       return;
     }
@@ -610,11 +330,11 @@ pub const Editor = struct {
   
   // command data
   
-  fn getCmdData(self: *Editor) *CommandData {
+  pub fn getCmdData(self: *Editor) *CommandData {
     return &self._cmd_data.?;
   }
   
-  fn setCmdData(self: *Editor, cmd_data: CommandData) void {
+  pub fn setCmdData(self: *Editor, cmd_data: CommandData) void {
     std.debug.assert(self._cmd_data == null);
     self._cmd_data = cmd_data;
   }
@@ -738,21 +458,21 @@ pub const Editor = struct {
   
   // console output
   
-  const CLEAR_SCREEN = "\x1b[2J";
-  const CLEAR_LINE = "\x1b[2K";
-  const RESET_POS = "\x1b[H";
-  const COLOR_INVERT = "\x1b[7m";
-  const COLOR_DEFAULT = "\x1b[0m";
+  pub const CLEAR_SCREEN = "\x1b[2J";
+  pub const CLEAR_LINE = "\x1b[2K";
+  pub const RESET_POS = "\x1b[H";
+  pub const COLOR_INVERT = "\x1b[7m";
+  pub const COLOR_DEFAULT = "\x1b[0m";
   
-  fn writeAll(self: *Editor, bytes: []const u8) !void {
+  pub fn writeAll(self: *Editor, bytes: []const u8) !void {
     return self.outw.writeAll(bytes);
   }
   
-  fn writeFmt(self: *Editor, comptime fmt: []const u8, args: anytype,) !void {
+  pub fn writeFmt(self: *Editor, comptime fmt: []const u8, args: anytype,) !void {
     return std.fmt.format(self.outw, fmt, args);
   }
   
-  fn moveCursor(self: *Editor, p_row: u32, p_col: u32) !void {
+  pub fn moveCursor(self: *Editor, p_row: u32, p_col: u32) !void {
     var row = p_row;
     if (row > self.w_height - 1) { row = self.w_height - 1; }
     var col = p_col;
@@ -760,7 +480,7 @@ pub const Editor = struct {
     return self.writeFmt("\x1b[{d};{d}H", .{row + 1, col + 1});
   }
   
-  fn updateCursorPos(self: *Editor) !void {
+  pub fn updateCursorPos(self: *Editor) !void {
     const text_handler: *text.TextHandler = &self.text_handler;
     try self.moveCursor(
       text_handler.cursor.row - text_handler.scroll.row,
@@ -768,7 +488,7 @@ pub const Editor = struct {
     );
   }
   
-  fn refreshScreen(self: *Editor) !void {
+  pub fn refreshScreen(self: *Editor) !void {
     try self.writeAll(Editor.CLEAR_SCREEN);
     try self.writeAll(Editor.RESET_POS);
   }
@@ -811,7 +531,7 @@ pub const Editor = struct {
   
   // handle output
   
-  fn renderText(self: *Editor) !void {
+  pub fn renderText(self: *Editor) !void {
     const text_handler: *const text.TextHandler = &self.text_handler;
     var row: u32 = 0;
     const cursor_row: u32 = text_handler.cursor.row - text_handler.scroll.row;
