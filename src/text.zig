@@ -675,28 +675,10 @@ pub const TextHandler = struct {
   }
   
   pub fn insertSlice(self: *TextHandler, E: *Editor, slice: []const u8) !void {
-    self.buffer_changed = true;
-    
     const insidx: u32 = self.calcOffsetFromCursor();
     try self.undo_mgr.doAppend(insidx, @intCast(slice.len));
     
-    // assume that the gap buffer is flushed to make it easier
-    // for us to insert the region
-    try self.flushGapBuffer(E);
-    
-    const first_row_after_insidx: u32 = self.cursor.row + 1;
-    var newlines = try self.shiftAndInsertNewLines(E, slice, insidx, first_row_after_insidx);
-    defer newlines.deinit(E.allocr());
-    
-    if (newlines.items.len > 0) {
-      self.cursor.row += @intCast(newlines.items.len);
-      self.cursor.col = @intCast((insidx + slice.len) - newlines.items[newlines.items.len - 1]);
-    } else {
-      self.cursor.col += @intCast(slice.len);
-    }
-    self.syncColumnScroll(E);
-    self.syncRowScroll(E);
-    E.needs_redraw = true;
+    return self.insertSliceAtPos(E, insidx, slice);
   }
   
   /// Inserts slice at specified position. Used by UndoManager.
