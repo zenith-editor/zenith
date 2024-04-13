@@ -809,35 +809,69 @@ pub const TextHandler = struct {
   ) !?[]const u8 {
     self.buffer_changed = true;
     
-    // assume that the gap buffer is flushed to make it easier
-    // for us to delete the region
-    try self.flushGapBuffer(E);
+    const logical_tail_start = self.head_end + self.gap.len;
     
-    if (record_undoable_action) {
-      try self.undo_mgr.doDelete(
-        delete_start, self.buffer.items[delete_start..delete_end]
-      );
-    }
+    var retval: ?[]const u8 = null;
     
-    const retval: ?[]const u8 = if (copy_orig_slice_to_undo_heap)
-      try self.undo_mgr.copySlice(self.buffer.items[delete_start..delete_end])
-    else
-      null;
-    
-    const n_deleted = delete_end - delete_start;
-    
-    if (delete_end >= self.buffer.items.len) {
-      const new_len = self.buffer.items.len - n_deleted;
-      self.buffer.shrinkRetainingCapacity(new_len);
-    } else {
-      // Remove chars from buffer
-      const new_len = self.buffer.items.len - n_deleted;
+    if (delete_start >= self.head_end and delete_end < logical_tail_start) {
+      // deletion within gap buffer
+      const gap_delete_start = delete_start - self.head_end;
+      const gap_delete_end = delete_end - self.head_end;
+      
+      if (record_undoable_action) {
+        try self.undo_mgr.doDelete(
+          delete_start, self.gap.slice()[gap_delete_start..gap_delete_end]
+        );
+      }
+      
+      retval = if (copy_orig_slice_to_undo_heap)
+        try self.undo_mgr.copySlice(self.gap.slice()[gap_delete_start..gap_delete_end])
+      else
+        null;
+      
+      const n_deleted = gap_delete_end - gap_delete_start;
+      
+      // Remove chars from gap
+      const new_len = self.gap.len - n_deleted;
       std.mem.copyForwards(
         u8,
-        self.buffer.items[delete_start..new_len],
-        self.buffer.items[delete_end..]
+        self.gap.slice()[gap_delete_start..new_len],
+        self.gap.slice()[gap_delete_end..]
       );
-      self.buffer.shrinkRetainingCapacity(new_len);
+      try self.gap.resize(new_len);
+    } else {
+      // deletion outside, or between gap buffer
+      
+      // assume that the gap buffer is flushed to make it easier
+      // for us to delete the region
+      try self.flushGapBuffer(E);
+      
+      if (record_undoable_action) {
+        try self.undo_mgr.doDelete(
+          delete_start, self.buffer.items[delete_start..delete_end]
+        );
+      }
+      
+      retval = if (copy_orig_slice_to_undo_heap)
+        try self.undo_mgr.copySlice(self.buffer.items[delete_start..delete_end])
+      else
+        null;
+      
+      const n_deleted = delete_end - delete_start;
+      
+      if (delete_end >= self.buffer.items.len) {
+        const new_len = self.buffer.items.len - n_deleted;
+        self.buffer.shrinkRetainingCapacity(new_len);
+      } else {
+        // Remove chars from buffer
+        const new_len = self.buffer.items.len - n_deleted;
+        std.mem.copyForwards(
+          u8,
+          self.buffer.items[delete_start..new_len],
+          self.buffer.items[delete_end..]
+        );
+        self.buffer.shrinkRetainingCapacity(new_len);
+      }
     }
     
     const removed_line_start = self.lineinfo.removeLinesInRange(delete_start, delete_end);
