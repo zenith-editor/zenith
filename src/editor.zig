@@ -398,7 +398,7 @@ pub const Editor = struct {
           if (!(try self.renderCharInLineMarked(bytes, &col, markers, pos))) {
             break;
           }
-          pos += 1;
+          pos += @intCast(bytes.len);
         }
         try self.writeAll(COLOR_DEFAULT);
       } else {
