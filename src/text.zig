@@ -644,7 +644,7 @@ pub const TextHandler = struct {
     slice: []const u8,
     insidx: u32,
     first_row_after_insidx: u32
-  ) !std.ArrayListUnmanaged(u32) {
+  ) !u32 {
     const allocr: std.mem.Allocator = E.allocr();
     
     if (first_row_after_insidx < self.lineinfo.getLen()) {
@@ -652,7 +652,7 @@ pub const TextHandler = struct {
     }
     
     var newlines: std.ArrayListUnmanaged(u32) = .{};
-    errdefer newlines.deinit(allocr);
+    defer newlines.deinit(allocr);
     
     var absidx: u32 = insidx;
     
@@ -671,7 +671,7 @@ pub const TextHandler = struct {
     for ((first_row_after_insidx - 1)..(first_row_after_insidx + newlines.items.len)) |i| {
       try self.recheckIsMultibyte(@intCast(i));
     }
-    return newlines;
+    return @intCast(newlines.items.len);
   }
   
   pub fn insertSlice(self: *TextHandler, E: *Editor, slice: []const u8) !void {
@@ -689,19 +689,28 @@ pub const TextHandler = struct {
     // for us to insert the region
     try self.flushGapBuffer(E);
     
-    // counting from zero, the first row AFTER where the slice is inserted
     const first_row_after_insidx: u32 = self.lineinfo.findMinLineAfterOffset(insidx);
-    var newlines = try self.shiftAndInsertNewLines(E, slice, insidx, first_row_after_insidx);
-    defer newlines.deinit(E.allocr());
+    const num_newlines = try self.shiftAndInsertNewLines(E, slice, insidx, first_row_after_insidx);
     
-    const row_at_end_of_slice: u32 = @intCast(first_row_after_insidx - 1 + newlines.items.len);
-    
+    const row_at_end_of_slice: u32 = @intCast(first_row_after_insidx - 1 + num_newlines);
     self.cursor.row = row_at_end_of_slice;
-    if (newlines.items.len > 0) {
-      self.cursor.col = @intCast((insidx + slice.len) - newlines.items[newlines.items.len - 1]);
+    
+    const offset_start: u32 = self.lineinfo.getOffset(self.cursor.row);
+    const insidx_end: u32 = @intCast(insidx + slice.len);
+    self.cursor.col = insidx_end - offset_start;
+    
+    if (!self.lineinfo.checkIsMultibyte(self.cursor.row)) {
+      self.cursor.gfx_col = self.cursor.col;
     } else {
-      self.cursor.col = @intCast((insidx + slice.len) - self.lineinfo.getOffset(self.cursor.row));
+      self.cursor.gfx_col = 0;
+      var i: u32 = offset_start;
+      while (i < insidx_end) {
+        const seqlen = Encoding.sequenceLen(self.buffer.items[i]);
+        i += @intCast(seqlen.?);
+        self.cursor.gfx_col += 1;
+      }
     }
+    
     self.syncColumnScroll(E);
     self.syncRowScroll(E);
     E.needs_redraw = true;
