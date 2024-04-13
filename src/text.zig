@@ -251,14 +251,23 @@ pub const TextHandler = struct {
   fn recheckIsMultibyte(self: *TextHandler, row: u32) !void {
     const offset_start: u32 = self.lineinfo.getOffset(row);
     const offset_end: u32 = self.getRowOffsetEnd(row);
-    try self.lineinfo.setMultibyte(row, false);
+    var is_mb = false;
     var iter = self.iterate(offset_start);
     while (iter.nextCharUntil(offset_end)) |char| {
       if (char.len > 1) {
-        try self.lineinfo.setMultibyte(row, true);
+        is_mb = true;
         break;
       }
     }
+    try self.lineinfo.setMultibyte(row, is_mb);
+  }
+  
+  fn recheckIsMultibyteAfterDelete(self: *TextHandler, row: u32, deleted_char_is_mb: bool) !void {
+    if (!self.lineinfo.checkIsMultibyte(row) and !deleted_char_is_mb) {
+      // fast path to avoid looping through the string
+      return;
+    }
+    return self.recheckIsMultibyte(row);
   }
   
   // gap
@@ -717,82 +726,127 @@ pub const TextHandler = struct {
   }
   
   // deletion
-  pub fn deleteChar(self: *TextHandler, E: *Editor, deleteNextChar: bool) !void {
-    self.buffer_changed = true;
-    
+  pub fn deleteChar(self: *TextHandler, E: *Editor, delete_next_char: bool) !void {
     var delidx: u32 = self.calcOffsetFromCursor();
     
-    if (deleteNextChar) {
-      delidx += 1;
-      if (delidx > self.getLogicalLen()) {
-        return;
-      }
-    }
-    if (delidx == 0) {
+    if (delete_next_char and delidx == self.getLogicalLen()) {
+      return;
+    } else if (!delete_next_char and delidx == 0) {
       return;
     }
-    delidx -= 1;
+    
+    self.buffer_changed = true;
+    var deleted_char = [4]u8{0,0,0,0};
+    var seqlen: u32 = 0;
+    
+    // Delete the character and record the deleted char
+    
+    if (delete_next_char) {
+      const bytes_starting = self.getBytesStartingAt(delidx).?;
+      seqlen = @intCast(Encoding.sequenceLen(bytes_starting[0]).?);
+      @memcpy(deleted_char[0..seqlen], bytes_starting[0..seqlen]);
+    } else {
+      delidx -= 1;
+      while (true) {
+        const byte = self.getByte(delidx).?;
+        if (Encoding.isContByte(byte)) {
+          seqlen += 1;
+          delidx -= 1;
+          // shift to right
+          std.mem.copyBackwards(u8, deleted_char[1..], deleted_char[0..3]);
+          deleted_char[0] = byte;
+        } else {
+          seqlen += 1;
+          std.mem.copyBackwards(u8, deleted_char[1..], deleted_char[0..3]);
+          deleted_char[0] = byte;
+          break;
+        }
+      }
+    }
+    
+    // Move the cursor to the previous char, if we are backspacing
+    
+    const cur_at_deleted_char = self.cursor;
+    if (!delete_next_char) {
+      if (self.cursor.col == 0) {
+        self.cursor.row -= 1;
+        try self.goTail(E);
+      } else {
+        self.goLeft(E);
+      }
+    }
+    
+    // Update line offset info
     
     const logical_tail_start = self.head_end + self.gap.len;
 
-    var deletedChar: u8 = undefined;
     if (delidx < self.head_end) {
-      if (delidx == (self.head_end - 1)) {
+      if (delidx == (self.head_end - seqlen)) {
         // deletion exactly before gap
-        deletedChar = self.buffer.items[self.head_end - 1];
-        self.head_end -= 1;
+        self.head_end -= seqlen;
       } else {
         // deletion before gap
-        const dest: []u8 = self.buffer.items[delidx..(self.head_end-1)];
-        const src: []const u8 = self.buffer.items[(delidx+1)..self.head_end];
-        deletedChar = self.buffer.items[delidx];
+        const dest: []u8 = self.buffer.items[delidx..(self.head_end-seqlen)];
+        const src: []const u8 = self.buffer.items[(delidx+seqlen)..self.head_end];
         std.mem.copyForwards(u8, dest, src);
-        self.head_end -= 1;
+        self.head_end -= seqlen;
       }
     } else if (delidx >= logical_tail_start) {
       const real_tailidx = self.tail_start + (delidx - logical_tail_start);
       if (delidx == logical_tail_start) {
         // deletion one char after gap
-        deletedChar = self.buffer.items[real_tailidx];
-        self.tail_start += 1;
+        self.tail_start += seqlen;
       } else {
         // deletion after gap
-        deletedChar = self.buffer.orderedRemove(real_tailidx);
+        const newlen = self.buffer.items.len - seqlen;
+        const dest: []u8 = self.buffer.items[real_tailidx..newlen];
+        const src: []const u8 = self.buffer.items[(real_tailidx+seqlen)..];
+        std.mem.copyForwards(u8, dest, src);
+        self.buffer.shrinkRetainingCapacity(newlen);
       }
     } else {
       // deletion within gap
+      const gap: []u8 = self.gap.slice();
+      const newlen = gap.len - seqlen;
       const gap_relidx = delidx - self.head_end;
-      deletedChar = self.gap.orderedRemove(gap_relidx);
+      const dest: []u8 = gap[gap_relidx..newlen];
+      const src: []const u8 = gap[(gap_relidx+seqlen)..];
+      std.mem.copyForwards(u8, dest, src);
+      try self.gap.resize(newlen);
     }
     
-    try self.undo_mgr.doDelete(delidx, &[1]u8{deletedChar});
+    try self.undo_mgr.doDelete(delidx, deleted_char[0..seqlen]);
     
-    if (deleteNextChar) {
-      if (delidx == self.getRowOffsetEnd(self.cursor.row)) {
+    const deleted_char_is_mb = seqlen > 1;
+    
+    // checkIsMultibyte is done after decreaseOffsets
+    // because if not then the bounds of the line would not be updated
+    
+    if (delete_next_char) {
+      if (cur_at_deleted_char.col == self.getRowLen(cur_at_deleted_char.row)) {
         // deleting next line
-        if ((self.cursor.row + 1) == self.lineinfo.getLen()) {
+        std.debug.assert(deleted_char[0] == '\n');
+        const deletedrowidx = cur_at_deleted_char.row + 1;
+        if (deletedrowidx == self.lineinfo.getLen()) {
           // do nothing if deleting last line
         } else {
-          const deletedrowidx = self.cursor.row + 1;
           self.lineinfo.decreaseOffsets(deletedrowidx, 1);
           self.lineinfo.remove(deletedrowidx);
-          try self.recheckIsMultibyte(deletedrowidx - 1);
+          try self.recheckIsMultibyteAfterDelete(cur_at_deleted_char.row, deleted_char_is_mb);
         }
       } else {
-        self.lineinfo.decreaseOffsets(self.cursor.row + 1, 1);
+        self.lineinfo.decreaseOffsets(cur_at_deleted_char.row + 1, seqlen);
+        try self.recheckIsMultibyteAfterDelete(cur_at_deleted_char.row, deleted_char_is_mb);
       }
     } else {
-      if (self.cursor.col == 0) {
-        std.debug.assert(deletedChar == '\n');
-        const deletedrowidx = self.cursor.row;
-        self.cursor.row -= 1;
-        try self.goTail(E);
-        self.lineinfo.decreaseOffsets(deletedrowidx, 1);
-        self.lineinfo.remove(deletedrowidx);
-        try self.recheckIsMultibyte(deletedrowidx - 1);
+      if (cur_at_deleted_char.col == 0) {
+        std.debug.assert(deleted_char[0] == '\n');
+        self.lineinfo.decreaseOffsets(cur_at_deleted_char.row, 1);
+        self.lineinfo.remove(cur_at_deleted_char.row);
+        try self.recheckIsMultibyteAfterDelete(cur_at_deleted_char.row - 1, deleted_char_is_mb);
       } else {
-        self.lineinfo.decreaseOffsets(self.cursor.row + 1, 1);
-        self.goLeft(E);
+        self.lineinfo.decreaseOffsets(cur_at_deleted_char.row + 1, seqlen);
+        try self.recheckIsMultibyteAfterDelete(cur_at_deleted_char.row, deleted_char_is_mb);
       }
     }
 
