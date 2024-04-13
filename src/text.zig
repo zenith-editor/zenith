@@ -364,6 +364,29 @@ pub const TextHandler = struct {
     E.needs_update_cursor = true;
   }
   
+  pub fn goPgUp(self: *TextHandler, E: *Editor) void {
+    if (self.cursor.row < E.getTextHeight()) {
+      self.cursor.row = 0;
+    } else {
+      self.cursor.row -= E.getTextHeight() + 1;
+    }
+    self.syncColumnAfterCursor(E);
+    self.syncRowScroll(E);
+    E.needs_redraw = true;
+    E.needs_update_cursor = true;
+  }
+  
+  pub fn goPgDown(self: *TextHandler, E: *Editor) void {
+    self.cursor.row += E.getTextHeight() + 1;
+    if (self.cursor.row >= self.lineinfo.getLen()) {
+      self.cursor.row = self.lineinfo.getLen() - 1;
+    }
+    self.syncColumnAfterCursor(E);
+    self.syncRowScroll(E);
+    E.needs_redraw = true;
+    E.needs_update_cursor = true;
+  }
+  
   fn goLeftTextPos(self: *const TextHandler, pos_in: TextPos, row_start: u32) TextPos {
     var pos = pos_in;
     pos.col -= 1;

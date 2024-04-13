@@ -18,6 +18,8 @@ pub const Keysym = struct {
     home,
     end,
     del,
+    pgup,
+    pgdown,
   };
   
   raw: u8,

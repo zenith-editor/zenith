@@ -56,6 +56,12 @@ const StateHandler = struct {
       else if (keysym.key == kbd.Keysym.Key.right) {
         self.text_handler.goRight(self);
       }
+      else if (keysym.key == kbd.Keysym.Key.pgup) {
+        self.text_handler.goPgUp(self);
+      }
+      else if (keysym.key == kbd.Keysym.Key.pgdown) {
+        self.text_handler.goPgDown(self);
+      }
       else if (keysym.key == kbd.Keysym.Key.home) {
         self.text_handler.goHead(self);
       }
@@ -676,6 +682,24 @@ pub const Editor = struct {
             '3' => {
               switch (self.inr.readByte() catch 0) {
                 '~' => { return kbd.Keysym.initSpecial(.del); },
+                else => {
+                  self.flushConsoleInput();
+                  return null;
+                },
+              }
+            },
+            '5' => {
+              switch (self.inr.readByte() catch 0) {
+                '~' => { return kbd.Keysym.initSpecial(.pgup); },
+                else => {
+                  self.flushConsoleInput();
+                  return null;
+                },
+              }
+            },
+            '6' => {
+              switch (self.inr.readByte() catch 0) {
+                '~' => { return kbd.Keysym.initSpecial(.pgdown); },
                 else => {
                   self.flushConsoleInput();
                   return null;
