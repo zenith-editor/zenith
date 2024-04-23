@@ -965,7 +965,9 @@ pub const TextHandler = struct {
     // because if not then the bounds of the line would not be updated
     
     if (delete_next_char) {
-      if (cur_at_deleted_char.col == self.getRowLen(cur_at_deleted_char.row)) {
+      if (cur_at_deleted_char.row == self.lineinfo.getLen() - 1) {
+        // do nothing if deleting character of last line
+      } else if (cur_at_deleted_char.col == self.getRowLen(cur_at_deleted_char.row)) {
         // deleting next line
         std.debug.assert(deleted_char[0] == '\n');
         const deletedrowidx = cur_at_deleted_char.row + 1;
