@@ -32,13 +32,26 @@ const Action = union(enum) {
     }
   };
   
+  const Replace = struct {
+    pos: u32,
+    orig_buffer: []const u8,
+    new_buffer: []const u8,
+    
+    fn deinit(self: *Replace, allocr: std.mem.Allocator) void {
+      allocr.free(self.orig_buffer);
+      allocr.free(self.new_buffer);
+    }
+  };
+  
   append: Append,
   delete: Delete,
+  replace: Replace,
   
   fn deinit(self: *Action, allocr: std.mem.Allocator) void {
     switch(self.*) {
       .append => |*e| { e.deinit(allocr); },
       .delete => |*e| { e.deinit(allocr); },
+      .replace => |*e| { e.deinit(allocr); },
     }
   }
 };
@@ -128,25 +141,48 @@ pub const UndoManager = struct {
         .delete => |*delete| {
           if (delete.pos + delete.orig_buffer.items.len == pos) {
             try delete.orig_buffer.appendSlice(self.allocr(), del_contents);
+            errdefer self.clearUndoStack();
             return;
           } else if (pos + del_contents.len == delete.pos) {
             delete.pos = pos;
             try delete.orig_buffer.insertSlice(self.allocr(), 0, del_contents);
+            errdefer self.clearUndoStack();
             return;
           }
         },
         else => {},
       }
     }
+    
     var orig_buffer: str.String = .{};
     try orig_buffer.appendSlice(
       self.allocr(),
       del_contents,
     );
+    errdefer orig_buffer.deinit(self.allocr());
+    
     try self.appendAction(.{
       .delete = Action.Delete {
         .pos = pos,
         .orig_buffer = orig_buffer,
+      },
+    });
+  }
+  
+  pub fn doReplace(self: *UndoManager, pos: u32, orig_buffer: []const u8, new_buffer: []const u8) !void {
+    self.clearRedoStack();
+    
+    const a_orig_buffer = try self.allocr().dupe(u8, orig_buffer);
+    errdefer self.allocr().free(a_orig_buffer);
+    
+    const a_new_buffer = try self.allocr().dupe(u8, new_buffer);
+    errdefer self.allocr().free(a_new_buffer);
+    
+    try self.appendAction(.{
+      .replace = Action.Replace {
+        .pos = pos,
+        .orig_buffer = a_orig_buffer,
+        .new_buffer = a_new_buffer,
       },
     });
   }
@@ -182,6 +218,15 @@ pub const UndoManager = struct {
             delete.orig_buffer.items
           );
         },
+        .replace => |*replace| {
+          try E.text_handler.replaceRegion(
+            E,
+            replace.pos,
+            @intCast(replace.pos + replace.new_buffer.len),
+            replace.orig_buffer,
+            false, // record_undoable_action
+          );
+        },
       }
       self.redo_stack.append(act);
     }
@@ -202,6 +247,15 @@ pub const UndoManager = struct {
             @intCast(delete.pos + delete.orig_buffer.items.len),
             false, // record_undoable_action
             false, // copy_orig_slice_to_undo_heap
+          );
+        },
+        .replace => |*replace| {
+          try E.text_handler.replaceRegion(
+            E,
+            replace.pos,
+            @intCast(replace.pos + replace.orig_buffer.len),
+            replace.new_buffer,
+            false, // record_undoable_action
           );
         },
       }

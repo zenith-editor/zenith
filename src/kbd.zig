@@ -29,9 +29,10 @@ pub const Keysym = struct {
   pub const ESC: u8 = std.ascii.control_code.esc;
   pub const BACKSPACE: u8 = std.ascii.control_code.del;
   pub const NEWLINE: u8 = std.ascii.control_code.cr;
+  pub const TAB: u8 = std.ascii.control_code.ht;
   
   pub fn init(raw: u8) Keysym {
-    if (raw < std.ascii.control_code.us) {
+    if (raw < std.ascii.control_code.us and raw != ESC) {
       return Keysym {
         .raw = raw,
         .key = .{ .normal = (raw | 0b1100000), },
@@ -58,7 +59,7 @@ pub const Keysym = struct {
   }
   
   pub fn initMultibyte(multibyte: []const u8) Keysym {
-    var multibyte_copy = [4]u8{0,0,0,0};
+    var multibyte_copy = [_]u8{0} ** 4;
     std.mem.copyForwards(u8, multibyte_copy[0..multibyte.len], multibyte);
     return Keysym {
       .raw = 0,

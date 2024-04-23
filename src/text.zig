@@ -535,9 +535,8 @@ pub const TextHandler = struct {
       } else {
         self.scroll.gfx_col = self.cursor.gfx_col - E.getTextWidth() + 1;
       }
-    } else {
-      self.scroll.gfx_col = 0;
     }
+    
     if (!self.lineinfo.checkIsMultibyte(self.cursor.row)) {
       self.scroll.col = self.scroll.gfx_col;
     } else {
@@ -567,20 +566,18 @@ pub const TextHandler = struct {
       } else {
         self.scroll.row = self.cursor.row - 1;
       }
-    } else if ((self.scroll.row + self.cursor.row) >= E.getTextHeight()) {
+    } else if ((self.cursor.row - self.scroll.row) >= E.getTextHeight()) {
       if (E.getTextHeight() > self.cursor.row) {
         self.scroll.row = E.getTextHeight() - self.cursor.row + 1;
       } else {
         self.scroll.row = self.cursor.row - E.getTextHeight() + 1;
       }
-    } else { 
-      self.scroll.row = 0;
     }
   }
   
   // append
   
-  pub fn insertChar(self: *TextHandler, E: *Editor, char: []const u8) !void {
+  pub fn insertChar(self: *TextHandler, E: *Editor, char: []const u8, advance_right_after_ins: bool) !void {
     self.buffer_changed = true;
     
     const line_is_multibyte = self.lineinfo.checkIsMultibyte(self.cursor.row);
@@ -635,7 +632,134 @@ pub const TextHandler = struct {
       }
       self.lineinfo.increaseOffsets(self.cursor.row + 1, @intCast(char.len));
       E.needs_redraw = true;
-      self.goRight(E);
+      if (advance_right_after_ins) {
+        self.goRight(E);
+      }
+    }
+  }
+  
+  pub fn insertCharPair(self: *TextHandler, E: *Editor,
+                        char1: []const u8,
+                        char2: []const u8) !void {
+    try self.insertChar(E, char1, true);
+    try self.insertChar(E, char2, false);
+  }
+  
+  pub fn insertTab(self: *TextHandler, E: *Editor) !void {
+    // TODO tab settings
+    const indent = "  ";
+    const insidx: u32 = self.calcOffsetFromCursor();
+    try self.undo_mgr.doAppend(insidx, @intCast(indent.len));
+    return self.insertSliceAtPosWithHints(E, insidx, indent, true, false);
+  }
+  
+  pub fn indentMarked(self: *TextHandler, E: *Editor) !void {
+    if (self.markers == null) {
+      return;
+    }
+    
+    var markers = &self.markers.?;
+    if (markers.start_cur.col != 0) {
+      markers.start_cur.col = 0;
+      markers.start_cur.gfx_col = 0;
+      markers.start = self.lineinfo.getOffset(markers.start_cur.row);
+    }
+    
+    if (markers.start == markers.end) {
+      markers.end = self.getRowOffsetEnd(markers.start_cur.row);
+    }
+    
+    // TODO tab settings
+    const indent = "  ";
+    var indented: str.String = .{};
+    defer indented.deinit(E.allocr());
+    try indented.appendSlice(E.allocr(), indent);
+    
+    var iter = self.iterate(self.lineinfo.getOffset(markers.start_cur.row));
+    while (iter.nextCharUntil(markers.end)) |char| {
+      try indented.appendSlice(E.allocr(), char);
+      if (char[0] == '\n') {
+        try indented.appendSlice(E.allocr(), indent);
+      }
+    }
+    
+    try self.replaceMarked(E, indented.items);
+  }
+  
+  pub fn dedentMarked(self: *TextHandler, E: *Editor) !void {
+    if (self.markers == null) {
+      return;
+    }
+  
+    var markers = &self.markers.?;
+    
+    if (markers.start_cur.col != 0) {
+      markers.start_cur.col = 0;
+      markers.start_cur.gfx_col = 0;
+      markers.start = self.lineinfo.getOffset(markers.start_cur.row);
+    }
+    
+    if (markers.start == markers.end) {
+      markers.end = self.getRowOffsetEnd(markers.start_cur.row);
+    }
+    
+    // TODO tab settings
+    const indent = "  ";
+    const indentWithNL = "\n  ";
+    var dedented: str.String = .{};
+    defer dedented.deinit(E.allocr());
+    
+    var iter = self.iterate(self.lineinfo.getOffset(markers.start_cur.row));
+    while (iter.nextCharUntil(markers.end)) |char| {
+      try dedented.appendSlice(E.allocr(), char);
+    }
+    
+    var dest: usize = 0;
+    var src: usize = 0;
+    var newlen: usize = dedented.items.len;
+    
+    if (std.mem.startsWith(u8, dedented.items, indent)) {
+      src += indent.len;
+      newlen -= indent.len;
+    }
+    
+    while (src < dedented.items.len) {
+      // TODO replace startswith
+      if (std.mem.startsWith(u8, dedented.items[src..], indentWithNL)) {
+        dedented.items[dest] = '\n';
+        dest += 1;
+        src += indentWithNL.len;
+        newlen -= indent.len;
+      } else {
+        dedented.items[dest] = dedented.items[src];
+        dest += 1;
+        src += 1;
+      }
+    }
+    dedented.shrinkRetainingCapacity(newlen);
+    
+    try self.replaceMarked(E, dedented.items);
+  }
+  
+  pub fn insertNewline(self: *TextHandler, E: *Editor) !void {
+    var indent: str.String = .{};
+    defer indent.deinit(E.allocr());
+    
+    var iter = self.iterate(self.lineinfo.getOffset(self.cursor.row));
+    while (iter.nextCharUntil(self.getRowOffsetEnd(self.cursor.row))) |char| {
+      if (std.mem.eql(u8, char, " ")) {
+        try indent.appendSlice(E.allocr(), char);
+      } else {
+        break;
+      }
+    }
+    
+    try self.insertChar(E, "\n", true);
+    
+    if (indent.items.len > 0) {
+      const insidx: u32 = self.calcOffsetFromCursor();
+      try self.undo_mgr.doAppend(insidx, @intCast(indent.items.len));
+      try self.insertSliceAtPosWithHints(E, insidx, indent.items, false, false);
     }
   }
   
@@ -643,7 +767,8 @@ pub const TextHandler = struct {
     self: *TextHandler, E: *Editor,
     slice: []const u8,
     insidx: u32,
-    first_row_after_insidx: u32
+    first_row_after_insidx: u32,
+    is_slice_always_inline: bool,
   ) !u32 {
     const allocr: std.mem.Allocator = E.allocr();
     
@@ -654,15 +779,31 @@ pub const TextHandler = struct {
     var newlines: std.ArrayListUnmanaged(u32) = .{};
     defer newlines.deinit(allocr);
     
-    var absidx: u32 = insidx;
-    
-    for (slice) |byte| {
-      if (byte == '\n') {
-        try newlines.append(allocr, absidx + 1);
+    if (!is_slice_always_inline) {
+      var absidx: u32 = insidx;
+      for (slice) |byte| {
+        if (byte == '\n') {
+          try newlines.append(allocr, absidx + 1);
+        }
+        absidx += 1;
       }
-      absidx += 1;
     }
-    try self.buffer.insertSlice(allocr, insidx, slice);
+    
+    if (insidx > self.head_end and insidx <= self.head_end + self.gap.len) {
+      // insertion within gap
+      if ((slice.len + self.gap.len) < self.gap.buffer.len) {
+        const gap_relidx = insidx - self.head_end;
+        self.gap.insertSlice(gap_relidx, slice) catch unreachable;
+      } else {
+        // overflow if inserted
+        try self.flushGapBuffer(E);
+        try self.buffer.insertSlice(allocr, insidx, slice);
+      }
+    } else {
+      try self.flushGapBuffer(E);
+      try self.buffer.insertSlice(allocr, insidx, slice);
+    }
+    
     if (newlines.items.len > 0) {
       try self.lineinfo.insertSlice(first_row_after_insidx, newlines.items);
       self.calcLineDigits();
@@ -677,20 +818,25 @@ pub const TextHandler = struct {
   pub fn insertSlice(self: *TextHandler, E: *Editor, slice: []const u8) !void {
     const insidx: u32 = self.calcOffsetFromCursor();
     try self.undo_mgr.doAppend(insidx, @intCast(slice.len));
-    
-    return self.insertSliceAtPos(E, insidx, slice);
+    return self.insertSliceAtPosWithHints(E, insidx, slice, true, false);
   }
   
-  /// Inserts slice at specified position. Used by UndoManager.
-  pub fn insertSliceAtPos(self: *TextHandler, E: *Editor, insidx: u32, slice: []const u8) !void {
+  fn insertSliceAtPosWithHints(
+    self: *TextHandler,
+    E: *Editor,
+    insidx: u32,
+    slice: []const u8,
+    use_cursor_line_hint: bool,
+    is_slice_always_inline: bool,
+  ) !void {
     self.buffer_changed = true;
     
-    // assume that the gap buffer is flushed to make it easier
-    // for us to insert the region
-    try self.flushGapBuffer(E);
+    const first_row_after_insidx: u32 = if (use_cursor_line_hint)
+      self.cursor.row + 1
+    else
+      self.lineinfo.findMinLineAfterOffset(insidx);
     
-    const first_row_after_insidx: u32 = self.lineinfo.findMinLineAfterOffset(insidx);
-    const num_newlines = try self.shiftAndInsertNewLines(E, slice, insidx, first_row_after_insidx);
+    const num_newlines = try self.shiftAndInsertNewLines(E, slice, insidx, first_row_after_insidx, is_slice_always_inline);
     
     const row_at_end_of_slice: u32 = @intCast(first_row_after_insidx - 1 + num_newlines);
     self.cursor.row = row_at_end_of_slice;
@@ -716,6 +862,11 @@ pub const TextHandler = struct {
     E.needs_redraw = true;
   }
   
+  /// Inserts slice at specified position. Used by UndoManager.
+  pub fn insertSliceAtPos(self: *TextHandler, E: *Editor, insidx: u32, slice: []const u8) !void {
+    return self.insertSliceAtPosWithHints(E, insidx, slice, false, false);
+  }
+  
   // deletion
   pub fn deleteChar(self: *TextHandler, E: *Editor, delete_next_char: bool) !void {
     var delidx: u32 = self.calcOffsetFromCursor();
@@ -727,7 +878,7 @@ pub const TextHandler = struct {
     }
     
     self.buffer_changed = true;
-    var deleted_char = [4]u8{0,0,0,0};
+    var deleted_char = [_]u8{0} ** 4;
     var seqlen: u32 = 0;
     
     // Delete the character and record the deleted char
@@ -940,25 +1091,162 @@ pub const TextHandler = struct {
       }
     }
     
+    self.syncColumnScroll(E);
+    self.syncRowScroll(E);
+    
     E.needs_redraw = true;
     
     return retval;
   }
   
   pub fn deleteMarked(self: *TextHandler, E: *Editor) !void {
-    if (self.markers) |markers| {
-      _ = try self.deleteRegionAtPos(E, markers.start, markers.end, true, false);
-      
-      self.cursor = markers.start_cur;
-      if (self.cursor.row >= self.lineinfo.getLen()) {
-        self.cursor.row = self.lineinfo.getLen() - 1;
-        self.cursor.col = self.getRowLen(self.cursor.row);
-      }
+    if (self.markers == null) {
+      return;
+    }
+    
+    const markers = self.markers.?;
+    
+    if (markers.start == markers.end) {
+      return;
+    }
+    
+    _ = try self.deleteRegionAtPos(E, markers.start, markers.end, true, false);
+    
+    self.cursor = markers.start_cur;
+    if (self.cursor.row >= self.lineinfo.getLen()) {
+      self.cursor.row = self.lineinfo.getLen() - 1;
+      try self.goTail(E);
+      self.syncRowScroll(E);
+    } else {
       self.syncColumnScroll(E);
       self.syncRowScroll(E);
-      
-      self.markers = null;
     }
+    
+    self.markers = null;
+  }
+  
+  /// Replacement
+  pub fn replaceRegion(
+    self: *TextHandler,
+    E: *Editor,
+    replace_start: u32, replace_end: u32,
+    new_buffer: []const u8,
+    record_undoable_action: bool,
+  ) !void {
+    if (replace_start == replace_end) {
+      if (record_undoable_action) {
+        try self.undo_mgr.doAppend(replace_start, @intCast(new_buffer.len));
+      }
+      return self.insertSliceAtPos(
+        E,
+        replace_start,
+        new_buffer,
+      );
+    }
+  
+    try self.flushGapBuffer(E);
+    
+    // TODO: replace within gap buffer
+    
+    if (record_undoable_action) {
+      try self.undo_mgr.doReplace(
+        replace_start,
+        self.buffer.items[replace_start..replace_end],
+        new_buffer,
+      );
+    }
+    
+    const old_buffer_len = replace_end - replace_start;
+    
+    try self.buffer.replaceRange(
+      E.allocr(),
+      replace_start,
+      old_buffer_len,
+      new_buffer,
+    );
+    
+    var newlines: std.ArrayListUnmanaged(u32) = .{};
+    defer newlines.deinit(E.allocr());
+    
+    for (new_buffer,0..new_buffer.len) |item, idx| {
+      if (item == '\n') {
+        try newlines.append(E.allocr(), @intCast(replace_start + idx + 1));
+      }
+    }
+    
+    // TODO: this is a very inefficient way to handle multi-line replacements
+    // which needs a rewrite
+    const replace_line_start = self.lineinfo.removeLinesInRange(replace_start, replace_end);
+    
+    const row_at_end_of_slice: u32 = @intCast(replace_line_start + 1 + newlines.items.len);
+      
+    try self.lineinfo.insertSlice(replace_line_start + 1, newlines.items);
+    self.lineinfo.increaseOffsets(row_at_end_of_slice, @intCast(new_buffer.len));
+    self.calcLineDigits();
+    
+    for (replace_line_start..row_at_end_of_slice) |i| {
+      try self.recheckIsMultibyte(@intCast(i));
+    }
+    
+    self.cursor.row = row_at_end_of_slice - 1;
+    
+    const new_replace_end: u32 = @intCast(replace_start + new_buffer.len);
+    self.cursor.col = 0;
+    self.cursor.gfx_col = 0;
+    var iter = self.iterate(self.lineinfo.getOffset(self.cursor.row));
+    while (iter.nextCharUntil(new_replace_end)) |char| {
+      self.cursor.col += @intCast(char.len);
+      self.cursor.gfx_col += 1;
+    }
+    
+    self.syncColumnScroll(E);
+    self.syncRowScroll(E);
+    
+    E.needs_redraw = true;
+  }
+  
+  pub fn replaceMarked(
+    self: *TextHandler,
+    E: *Editor,
+    new_buffer: []const u8
+  ) !void {
+    var markers = &self.markers.?;
+    const new_end: u32 = @intCast(markers.start + new_buffer.len);
+    try self.replaceRegion(E, markers.start, markers.end, new_buffer, true);
+    markers.end = new_end;
+  }
+  
+  pub fn replaceAllMarked(
+    self: *TextHandler,
+    E: *Editor,
+    needle: []const u8,
+    replacement: []const u8
+  ) !void {
+    var markers = &self.markers.?;
+    var replaced: str.String = .{};
+    defer replaced.deinit(E.allocr());
+    
+    // TODO: replace all within gap buffer
+    try self.flushGapBuffer(E);
+    
+    const src_text = self.buffer.items[markers.start..markers.end];
+    
+    var slide: usize = 0;
+    var replacements: usize = 0;
+    while (slide < src_text.len) {
+      if (std.mem.startsWith(u8, src_text[slide..], needle)) {
+        try replaced.appendSlice(E.allocr(), replacement);
+        slide += needle.len;
+        replacements += 1;
+      } else {
+        try replaced.append(E.allocr(), src_text[slide]);
+        slide += 1;
+      }
+    }
+    
+    const new_end: u32 = @intCast(markers.start + replaced.items.len);
+    try self.replaceRegion(E, markers.start, markers.end, replaced.items, true);
+    markers.end = new_end;
   }
   
   // markers
@@ -1001,22 +1289,52 @@ pub const TextHandler = struct {
     E.needs_redraw = true;
   }
   
+  pub fn markAll(self: *TextHandler, E: *Editor) void {
+    self.markers = .{
+      .start = 0,
+      .end = self.getLogicalLen(),
+      .start_cur = .{
+        .row = 0,
+        .col = 0,
+        .gfx_col = 0,
+      },
+    };
+    E.needs_redraw = true;
+  }
+  
   // clipboard
   
   pub fn copy(self: *TextHandler, E: *Editor) !void {
-    if (self.markers) |*markers| {
-      try self.flushGapBuffer(E);
-      
-      const n_copied = markers.end - markers.start;
-      try self.clipboard.resize(E.allocr(), n_copied);
-      @memcpy(self.clipboard.items, self.buffer.items[markers.start..markers.end]);
+    if (self.markers == null) {
+      return;
     }
+    const markers = self.markers.?;
+    
+    try self.flushGapBuffer(E);
+    
+    const n_copied = markers.end - markers.start;
+    try self.clipboard.resize(E.allocr(), n_copied);
+    @memcpy(self.clipboard.items, self.buffer.items[markers.start..markers.end]);
   }
   
   pub fn paste(self: *TextHandler, E: *Editor) !void {
     if (self.clipboard.items.len > 0) {
       try self.insertSlice(E, self.clipboard.items);
     }
+  }
+  
+  pub fn duplicateLine(self: *TextHandler, E: *Editor) !void {
+    var line: str.String = .{};
+    defer line.deinit(E.allocr());
+    try line.append(E.allocr(), '\n');
+    const offset_start: u32 = self.lineinfo.getOffset(self.cursor.row);
+    const offset_end: u32 = self.getRowOffsetEnd(self.cursor.row);
+    var iter = self.iterate(offset_start);
+    while (iter.nextCharUntil(offset_end)) |char| {
+      try line.appendSlice(E.allocr(), char);
+    }
+    try self.goTail(E);
+    try self.insertSlice(E, line.items);
   }
 
 };

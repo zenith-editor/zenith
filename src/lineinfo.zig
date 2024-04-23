@@ -244,7 +244,7 @@ pub const LineInfoList = struct {
       lower_u32,
     );
     if (idx >= self.offsets.items.len) {
-      return @intCast(idx);
+      return @intCast(self.offsets.items.len - 1);
     }
     if (self.offsets.items[idx] > offset) {
       return @intCast(idx - 1);
@@ -263,6 +263,10 @@ pub const LineInfoList = struct {
   }
   
   fn moveTail(self: *LineInfoList, line_pivot_dest: u32, line_pivot_src: u32) void {
+    if (line_pivot_dest == line_pivot_src) {
+      return;
+    }
+    
     const new_len = self.offsets.items.len - (line_pivot_src - line_pivot_dest);
     std.mem.copyForwards(
       u32,
@@ -282,6 +286,8 @@ pub const LineInfoList = struct {
     self: *LineInfoList,
     delete_start: u32, delete_end: u32
   ) u32 {
+    std.debug.assert(delete_end > delete_start);
+    
     const line_start = self.findMinLineAfterOffset(delete_start);
     if (line_start == self.getLen()) {
       // region starts in last line

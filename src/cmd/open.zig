@@ -1,3 +1,8 @@
+//
+// Copyright (c) 2024 T. M. <pm2mtr@gmail.com>.
+//
+// This work is licensed under the BSD 3-Clause License.
+//
 const Cmd = @This();
 
 const std = @import("std");
@@ -85,3 +90,15 @@ pub fn onInputtedTryToSave(self: *editor.Editor) !void {
     self.needs_redraw = true;
   }
 }
+
+pub const PROMPT_OPEN = "Open file:";
+pub const PROMPT_SAVE = "Save file:";
+pub const PROMPT_SAVE_NEW = "Save file to new location:";
+
+pub const Fns: editor.CommandData.FnTable = .{
+  .onInputted = Cmd.onInputted,
+};
+
+pub const FnsTryToSave: editor.CommandData.FnTable = .{
+  .onInputted = Cmd.onInputtedTryToSave,
+};

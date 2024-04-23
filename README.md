@@ -1,13 +1,18 @@
-# zed  
-
+# zenith
 
 ![](/docs/preview.jpg)
 
 A very minimal console text editor written in Zig.
 
+## Requirements
+
+ * A terminal emulator that supports ANSI escape sequences (currently tested with
+ xterm on Linux)
+
 ## Build
 
-zed uses POSIX interfaces not present in the stable build of zig.
+zenith uses POSIX interfaces not present in the current stable build of zig
+(at the time of writing).
 Please use the latest nightly release (last tested with `zig-linux-x86_64-0.12.0-dev.3496+a2df84d0f`).
 
 For debug builds, use the command:
@@ -24,7 +29,9 @@ zig build -Doptimize=ReleaseSafe
 
 ## Usage
 
-By default, zed starts in text mode. You can use the following shortcuts
+### Text mode
+
+By default, zenith starts in text mode, which supports the following shortcuts
 (`^x` means ctrl + x):
 
 ```
@@ -36,29 +43,40 @@ By default, zed starts in text mode. You can use the following shortcuts
 ^g: goto line (cmd)
 ^f: find (cmd)
 ^z: undo
+^d: duplicate line
 ```
 
-Text navigation is done with the arrow keys. Home/End can also be used
-to go to the start/end of a line.
+Text navigation is done with the arrow keys and the PgUp/PgDown keys.
+Home/End can be used to go to the start/end of a line.
 
-Within block mode (accessible with ^b), you can mark a block of text by moving
-your cursor and pressing Enter. Keyboard shortcuts in block mode include:
+### Block mode
+
+Within block mode (accessible with `^b`), you can mark a block of text by moving
+your cursor and pressing Enter. Block mode supports the shortcuts:
 
 ```
-enter: end
-^c: copy
-^x: cut
+enter: set end marker position
+^c: copy marked block
+^x: cut marked block
 del/backspace: delete a block of text
+>: indent
+<: dedent
 ```
 
-Shortcuts such as ^g, ^f takes you to command mode. Here, you can
-enter a "command" (any acceptable input) to perform tasks.
+### Command mode
 
-* ^g allows you to go to a specific line by entering a number (or typing
-g/G to go to the first/last line, respectively)
+Shortcuts such as ^g, ^f takes you to command mode.
 
-* ^f allows you to search through text. Use the up/down arrow keys to
-search forward or backwards.
+* `^g`: go to line
+ * Enter a valid line number to go to a specific line
+ * Type `g` to go to first line
+ * Type `G` to go to last line
+
+* `^f`: find and mark searched text
+ * Use the up/down arrow keys to search forward or backwards.
+ * `^r` to replace currently selected 
+ * `^h` to replace all instances
+ * `^b` to send to block mode
 
 ## License
 

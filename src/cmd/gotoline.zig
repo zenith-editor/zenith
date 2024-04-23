@@ -1,3 +1,8 @@
+//
+// Copyright (c) 2024 T. M. <pm2mtr@gmail.com>.
+//
+// This work is licensed under the BSD 3-Clause License.
+//
 const Cmd = @This();
 
 const std = @import("std");
@@ -44,3 +49,10 @@ pub fn onKey(self: *editor.Editor, keysym: kbd.Keysym) !bool {
   }
   return false;
 }
+
+pub const PROMPT = "Go to line (first = g, last = G):";
+
+pub const Fns: editor.CommandData.FnTable = .{
+  .onInputted = Cmd.onInputted,
+  .onKey = Cmd.onKey,
+};

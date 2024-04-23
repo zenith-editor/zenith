@@ -24,21 +24,14 @@ const StateHandler = struct {
   handleInput: *const fn (self: *Editor, keysym: kbd.Keysym) anyerror!void,
   handleOutput: *const fn (self: *Editor) anyerror!void,
   onSet: ?*const fn (self: *Editor) void,
-  
-  fn _voidFnOrNull(comptime T: type, comptime name: []const u8)
-  ?*const fn (self: *Editor) void {
-    if (@hasDecl(T, name)) {
-      return @field(T, name);
-    } else {
-      return null;
-    }
-  }
+  onUnset: ?*const fn (self: *Editor, next_state: State) void,
   
   fn _createStateHandler(comptime T: type) StateHandler {
     return StateHandler {
       .handleInput = T.handleInput,
       .handleOutput = T.handleOutput,
-      .onSet = _voidFnOrNull(T, "onSet"),
+      .onSet = (if (@hasDecl(T, "onSet")) @field(T, "onSet") else null),
+      .onUnset = (if (@hasDecl(T, "onUnset")) @field(T, "onUnset") else null),
     };
   }
   
@@ -60,19 +53,60 @@ const StateHandler = struct {
 };
 
 pub const CommandData = struct {
-  prompt: ?[]const u8 = null,
-  promptoverlay: ?str.MaybeOwnedSlice = null,
-  cmdinp: str.String = .{},
-  onInputted: *const fn (self: *Editor) anyerror!void,
+  pub const FnTable = struct {
+    onInputted: *const fn (self: *Editor) anyerror!void,
+    /// Handle key, returns false if no key is handled
+    onKey: ?*const fn (self: *Editor, keysym: kbd.Keysym) anyerror!bool = null,
+    onUnset: ?*const fn (self: *Editor, next_state: State) void = null,
+  };
   
-  /// Handle key, returns false if no key is handled
-  onKey: ?*const fn (self: *Editor, keysym: kbd.Keysym) anyerror!bool = null,
+  pub const Args = union(enum) {
+    pub const ReplaceAll = struct {
+      needle: []const u8,
+    };
+    
+    replace_all: ReplaceAll,
+    
+    fn deinit(self: *Args, allocr: std.mem.Allocator) void {
+      switch (self.*) {
+        .replace_all => |*e| {
+          allocr.free(e.needle);
+        },
+      }
+    }
+  };
+  
+  /// Prompt
+  prompt: ?[]const u8 = null,
+  
+  /// (Error) message to display on top of prompt
+  promptoverlay: ?str.MaybeOwnedSlice = null,
+  
+  /// Input for command
+  cmdinp: str.String = .{},
+  
+  /// Position of cursor in cmdinp
+  cmdinp_pos: text.TextPos = .{},
+  
+  /// Functions for the current executed command
+  fns: FnTable,
+  
+  /// Optional arguments
+  args: ?Args = null,
   
   fn deinit(self: *CommandData, E: *Editor) void {
     if (self.promptoverlay) |*promptoverlay| {
       promptoverlay.deinit(E.allocr());
     }
+    if (self.args) |*args| {
+      args.deinit(E.allocr());
+    }
     self.cmdinp.deinit(E.allocr());
+  }
+  
+  pub fn replace(self: *CommandData, E: *Editor, new_cmd_data: CommandData) void {
+    self.deinit(E);
+    self.* = new_cmd_data;
   }
 };
 
@@ -80,10 +114,16 @@ pub const Commands = struct {
   pub const Open = @import("./cmd/open.zig");
   pub const GotoLine = @import("./cmd/gotoline.zig");
   pub const Find = @import("./cmd/find.zig");
+  pub const Replace = @import("./cmd/replace.zig");
 };
   
 pub const Editor = struct {
   const STATUS_BAR_HEIGHT = 2;
+  
+  const Private = struct {
+    state: State,
+    cmd_data: ?CommandData,
+  };
   
   in: std.fs.File,
   inr: std.fs.File.Reader,
@@ -96,7 +136,6 @@ pub const Editor = struct {
   needs_redraw: bool,
   needs_update_cursor: bool,
   
-  _state: State,
   state_handler: *const StateHandler,
   
   alloc_gpa: std.heap.GeneralPurposeAllocator(.{}),
@@ -107,7 +146,7 @@ pub const Editor = struct {
   
   text_handler: text.TextHandler,
   
-  _cmd_data: ?CommandData,
+  _priv: Private,
   
   pub fn init() !Editor {
     const stdin: std.fs.File = std.io.getStdIn();
@@ -122,14 +161,16 @@ pub const Editor = struct {
       .orig_termios = null,
       .needs_redraw = true,
       .needs_update_cursor = true,
-      ._state = State.INIT,
       .state_handler = &StateHandler.Text,
       .alloc_gpa = alloc_gpa,
       .w_width = 0,
       .w_height = 0,
       .buffered_byte = 0,
       .text_handler = text_handler,
-      ._cmd_data = null,
+      ._priv = .{
+        .state = State.INIT,
+        .cmd_data = null,
+      },
     };
   }
   
@@ -137,15 +178,17 @@ pub const Editor = struct {
     return self.alloc_gpa.allocator();
   }
   
+  pub fn getState(self: *const Editor) State {
+    return self._priv.state;
+  }
+  
   pub fn setState(self: *Editor, state: State) void {
-    if (state == self._state) {
-      return;
+    std.debug.assert(state != self._priv.state);
+    const old_state_handler = StateHandler.List[@intFromEnum(self._priv.state)];
+    if (old_state_handler.onUnset) |onUnset| {
+      onUnset(self, state);
     }
-    if (self._state == .command) {
-      self._cmd_data.?.deinit(self);
-      self._cmd_data = null;
-    }
-    self._state = state;
+    self._priv.state = state;
     const state_handler = StateHandler.List[@intFromEnum(state)];
     self.state_handler = state_handler;
     if (state_handler.onSet) |onSet| {
@@ -158,12 +201,17 @@ pub const Editor = struct {
   // command data
   
   pub fn getCmdData(self: *Editor) *CommandData {
-    return &self._cmd_data.?;
+    return &self._priv.cmd_data.?;
   }
   
   pub fn setCmdData(self: *Editor, cmd_data: CommandData) void {
-    std.debug.assert(self._cmd_data == null);
-    self._cmd_data = cmd_data;
+    std.debug.assert(self._priv.cmd_data == null);
+    self._priv.cmd_data = cmd_data;
+  }
+  
+  pub fn unsetCmdData(self: *Editor) void {
+    self._priv.cmd_data.?.deinit(self);
+    self._priv.cmd_data = null;
   }
   
   // raw mode
@@ -202,10 +250,15 @@ pub const Editor = struct {
   
   // console input
   
+  fn readByte(self: *Editor) !u8 {
+    const byte = try self.inr.readByte();
+    //std.log.debug("readByte: {}", .{byte});
+    return byte;
+  }
+  
   fn flushConsoleInput(self: *Editor) void {
     while (true) {
-      const byte = self.inr.readByte() catch break;
-      std.log.debug("readKey: unk [{}]\n", .{byte});
+      _ = self.readByte() catch break;
     }
   }
   
@@ -215,11 +268,11 @@ pub const Editor = struct {
       self.buffered_byte = 0;
       return kbd.Keysym.init(b);
     }
-    const raw = self.inr.readByte() catch return null;
+    const raw = self.readByte() catch return null;
     if (raw == kbd.Keysym.ESC) {
-      if (self.inr.readByte() catch null) |possibleEsc| {
+      if (self.readByte() catch null) |possibleEsc| {
         if (possibleEsc == '[') {
-          switch (self.inr.readByte() catch 0) {
+          switch (self.readByte() catch 0) {
             'A' => { return kbd.Keysym.initSpecial(.up); },
             'B' => { return kbd.Keysym.initSpecial(.down); },
             'C' => { return kbd.Keysym.initSpecial(.right); },
@@ -227,7 +280,7 @@ pub const Editor = struct {
             'F' => { return kbd.Keysym.initSpecial(.end); },
             'H' => { return kbd.Keysym.initSpecial(.home); },
             '3' => {
-              switch (self.inr.readByte() catch 0) {
+              switch (self.readByte() catch 0) {
                 '~' => { return kbd.Keysym.initSpecial(.del); },
                 else => {
                   self.flushConsoleInput();
@@ -236,7 +289,7 @@ pub const Editor = struct {
               }
             },
             '5' => {
-              switch (self.inr.readByte() catch 0) {
+              switch (self.readByte() catch 0) {
                 '~' => { return kbd.Keysym.initSpecial(.pgup); },
                 else => {
                   self.flushConsoleInput();
@@ -245,7 +298,7 @@ pub const Editor = struct {
               }
             },
             '6' => {
-              switch (self.inr.readByte() catch 0) {
+              switch (self.readByte() catch 0) {
                 '~' => { return kbd.Keysym.initSpecial(.pgdown); },
                 else => {
                   self.flushConsoleInput();
@@ -253,9 +306,8 @@ pub const Editor = struct {
                 },
               }
             },
-            else => |byte1| {
+            else => {
               // unknown escape sequence, empty the buffer
-              std.log.debug("readKey: unk [{}]\n", .{byte1});
               self.flushConsoleInput();
               return null;
             }
@@ -270,7 +322,7 @@ pub const Editor = struct {
         var seq = std.BoundedArray(u8, 4).init(0) catch unreachable;
         seq.append(raw) catch unreachable;
         for (1..seqlen) |_| {
-          const cont = self.inr.readByte() catch {
+          const cont = self.readByte() catch {
             return null;
           };
           seq.append(cont) catch {
@@ -458,7 +510,7 @@ pub const Editor = struct {
     try self.updateWinSize();
     try self.enableRawMode();
     self.needs_redraw = true;
-    while (self._state != State.quit) {
+    while (self.getState() != State.quit) {
       if (sig.resized) {
         try self.updateWinSize();
         sig.resized = false;
@@ -474,8 +526,8 @@ pub const Editor = struct {
   pub fn openAtStart(self: *Editor, opened_file_str: str.String) !void {
     self.setState(.command);
     self.setCmdData(CommandData {
-      .prompt = "Open file:",
-      .onInputted = Commands.Open.onInputted,
+      .prompt = Commands.Open.PROMPT_OPEN,
+      .fns = Commands.Open.Fns,
       .cmdinp = opened_file_str,
     });
     try Commands.Open.onInputted(self);

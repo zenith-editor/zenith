@@ -8,6 +8,7 @@ const Impl = @This();
 const kbd = @import("../kbd.zig");
 const text = @import("../text.zig");
 const editor = @import("../editor.zig");
+const std = @import("std");
 
 pub fn handleInput(self: *editor.Editor, keysym: kbd.Keysym) !void {
   if (keysym.key == kbd.Keysym.Key.up) {
@@ -41,15 +42,15 @@ pub fn handleInput(self: *editor.Editor, keysym: kbd.Keysym) !void {
     if (self.text_handler.file == null) {
       self.setState(editor.State.command);
       self.setCmdData(.{
-        .prompt = "Save file:",
-        .onInputted = editor.Commands.Open.onInputtedTryToSave,
+        .prompt = editor.Commands.Open.PROMPT_SAVE,
+        .fns = editor.Commands.Open.FnsTryToSave,
       });
     } else {
       self.text_handler.save(self) catch |err| {
         self.setState(editor.State.command);
         self.setCmdData(.{
-          .prompt = "Save file to new location:",
-          .onInputted = editor.Commands.Open.onInputtedTryToSave,
+          .prompt = editor.Commands.Open.PROMPT_SAVE_NEW,
+          .fns = editor.Commands.Open.FnsTryToSave,
         });
         try editor.Commands.Open.setupUnableToSavePrompt(self, err);
       };
@@ -58,20 +59,26 @@ pub fn handleInput(self: *editor.Editor, keysym: kbd.Keysym) !void {
   else if (keysym.ctrl_key and keysym.isChar('o')) {
     self.setState(editor.State.command);
     self.setCmdData(.{
-      .prompt = "Open file:",
-      .onInputted = editor.Commands.Open.onInputted,
+      .prompt = editor.Commands.Open.PROMPT_OPEN,
+      .fns = editor.Commands.Open.Fns,
     });
   }
   else if (keysym.ctrl_key and keysym.isChar('g')) {
     self.setState(editor.State.command);
     self.setCmdData(.{
-      .prompt = "Go to line (first = g, last = G):",
-      .onInputted = editor.Commands.GotoLine.onInputted,
-      .onKey = editor.Commands.GotoLine.onKey,
+      .prompt = editor.Commands.GotoLine.PROMPT,
+      .fns = editor.Commands.GotoLine.Fns,
     });
+  }
+  else if (keysym.ctrl_key and keysym.isChar('a')) {
+    self.setState(editor.State.mark);
+    self.text_handler.markAll(self);
   }
   else if (keysym.ctrl_key and keysym.isChar('b')) {
     self.setState(editor.State.mark);
+  }
+  else if (keysym.ctrl_key and keysym.isChar('d')) {
+    try self.text_handler.duplicateLine(self);
   }
   else if (keysym.ctrl_key and keysym.isChar('v')) {
     try self.text_handler.paste(self);
@@ -82,9 +89,8 @@ pub fn handleInput(self: *editor.Editor, keysym: kbd.Keysym) !void {
   else if (keysym.ctrl_key and keysym.isChar('f')) {
     self.setState(.command);
     self.setCmdData(.{
-      .prompt = "Find (next = Enter):",
-      .onInputted = editor.Commands.Find.onInputted,
-      .onKey = editor.Commands.Find.onKey,
+      .prompt = editor.Commands.Find.PROMPT,
+      .fns = editor.Commands.Find.Fns,
     });
   }
   else if (keysym.ctrl_key and keysym.isChar('y')) {
@@ -97,13 +103,31 @@ pub fn handleInput(self: *editor.Editor, keysym: kbd.Keysym) !void {
     try self.text_handler.deleteChar(self, true);
   }
   else if (keysym.raw == kbd.Keysym.NEWLINE) {
-    try self.text_handler.insertChar(self, "\n");
+    try self.text_handler.insertNewline(self);
+  }
+  else if (keysym.raw == kbd.Keysym.TAB) {
+    try self.text_handler.insertTab(self);
+  }
+  else if (keysym.isChar('{')) {
+    try self.text_handler.insertCharPair(self, "{", "}");
+  }
+  else if (keysym.isChar('(')) {
+    try self.text_handler.insertCharPair(self, "(", ")");
+  }
+  else if (keysym.isChar('[')) {
+    try self.text_handler.insertCharPair(self, "[", "]");
+  }
+  else if (keysym.isChar('\'')) {
+    try self.text_handler.insertCharPair(self, "'", "'");
+  }
+  else if (keysym.isChar('"')) {
+    try self.text_handler.insertCharPair(self, "\"", "\"");
   }
   else if (keysym.getPrint()) |key| {
-    try self.text_handler.insertChar(self, &[_]u8{key});
+    try self.text_handler.insertChar(self, &[_]u8{key}, true);
   }
   else if (keysym.getMultibyte()) |seq| {
-    try self.text_handler.insertChar(self, seq);
+    try self.text_handler.insertChar(self, seq, true);
   }
 }
 
@@ -129,5 +153,5 @@ pub fn renderStatus(self: *editor.Editor) !void {
   } else {
     try self.writeAll("[ ]");
   }
-  try self.writeFmt(" {}:{}", .{text_handler.cursor.row+1, text_handler.cursor.col+1});
+  try self.writeFmt(" {}:{}", .{text_handler.cursor.row+1, text_handler.cursor.gfx_col+1});
 }

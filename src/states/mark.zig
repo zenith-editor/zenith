@@ -12,17 +12,20 @@ const text = @import("../text.zig");
 const editor = @import("../editor.zig");
 
 pub fn onSet(self: *editor.Editor) void {
-  self.text_handler.markStart(self);
+  if (self.text_handler.markers == null) {
+    self.text_handler.markStart(self);
+  }
 }
 
-pub fn resetState(self: *editor.Editor) void {
-  self.text_handler.markers = null;
-  self.setState(.text);
+pub fn onUnset(self: *editor.Editor, next_state: editor.State) void {
+  if (next_state == .text) {
+    self.text_handler.markers = null;
+  }
 }
 
 pub fn handleInput(self: *editor.Editor, keysym: kbd.Keysym) !void {
   if (keysym.raw == kbd.Keysym.ESC) {
-    Impl.resetState(self);
+    self.setState(.text);
     return;
   }
   if (keysym.key == kbd.Keysym.Key.up) {
@@ -56,17 +59,43 @@ pub fn handleInput(self: *editor.Editor, keysym: kbd.Keysym) !void {
   }
   else if (keysym.raw == kbd.Keysym.BACKSPACE) {
     try self.text_handler.deleteMarked(self);
-    Impl.resetState(self);
+    self.setState(.text);
   }
   
   else if (keysym.ctrl_key and keysym.isChar('c')) {
     try self.text_handler.copy(self);
-    Impl.resetState(self);
+    self.setState(.text);
   }
   else if (keysym.ctrl_key and keysym.isChar('x')) {
     try self.text_handler.copy(self);
     try self.text_handler.deleteMarked(self);
-    Impl.resetState(self);
+    self.setState(.text);
+  }
+  
+  else if (keysym.ctrl_key and keysym.isChar('r')) {
+    self.setState(.command);
+    self.setCmdData(.{
+      .prompt = editor.Commands.Replace.PROMPT,
+      .fns = editor.Commands.Replace.Fns,
+    });
+  }
+  else if (keysym.ctrl_key and keysym.isChar('f')) {
+    var cmd_data = self.getCmdData();
+    const cmdinp = cmd_data.cmdinp;
+    cmd_data.cmdinp = .{};
+    self.setState(.command);
+    self.setCmdData(.{
+      .prompt = editor.Commands.Find.PROMPT,
+      .fns = editor.Commands.Find.Fns,
+      .cmdinp = cmdinp
+    });
+  }
+  
+  else if (keysym.isChar('>')) {
+    try self.text_handler.indentMarked(self);
+  }
+  else if (keysym.isChar('<')) {
+    try self.text_handler.dedentMarked(self);
   }
 }
 
