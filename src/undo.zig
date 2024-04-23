@@ -116,8 +116,7 @@ pub const UndoManager = struct {
     if (self.undo_stack.last) |node| {
       switch (node.data) {
         Action.append => |*append| {
-          std.debug.assert(append.orig_buffer == null);
-          if (append.pos + append.len == pos) {
+          if (append.orig_buffer == null and append.pos + append.len == pos) {
             append.len += len;
             return;
           }
