@@ -11,9 +11,7 @@ A very minimal console text editor written in Zig.
 
 ## Build
 
-zenith uses POSIX interfaces not present in the current stable build of zig
-(at the time of writing).
-Please use the latest nightly release (last tested with `zig-linux-x86_64-0.12.0-dev.3496+a2df84d0f`).
+**Supported Zig version:** 0.12.0.
 
 For debug builds, use the command:
 
