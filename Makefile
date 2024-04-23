@@ -1,4 +1,5 @@
 ZIG?=zig
+#PREFIX?=
 
 .PHONY: build
 build:
@@ -12,3 +13,11 @@ release:
 clean:
 	rm -rf zig-out
 	rm -rf zig-cache
+
+.PHONY: install
+install:
+ifeq ($(PREFIX),)
+	$(error PREFIX is empty.)
+else
+	cp ./zig-out/bin/zenith $(PREFIX)
+endif
