@@ -6,6 +6,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+const config = @import("./config.zig");
 const kbd = @import("./kbd.zig");
 const str = @import("./str.zig");
 const text = @import("./text.zig");
@@ -146,13 +147,16 @@ pub const Editor = struct {
   
   text_handler: text.TextHandler,
   
+  conf: config.Reader,
+  
   _priv: Private,
   
-  pub fn init() !Editor {
+  pub fn create() !Editor {
     const stdin: std.fs.File = std.io.getStdIn();
     const stdout: std.fs.File = std.io.getStdOut();
-    const alloc_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    var alloc_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
     const text_handler: text.TextHandler = try text.TextHandler.init();
+    const conf: config.Reader = config.Reader.open(alloc_gpa.allocator()) catch .{};
     return Editor {
       .in = stdin,
       .inr = stdin.reader(),
@@ -167,6 +171,7 @@ pub const Editor = struct {
       .w_height = 0,
       .buffered_byte = 0,
       .text_handler = text_handler,
+      .conf = conf,
       ._priv = .{
         .state = State.INIT,
         .cmd_data = null,

@@ -62,8 +62,9 @@ pub const UndoManager = struct {
   const AllocGPAConfig: std.heap.GeneralPurposeAllocatorConfig = .{
     .enable_memory_limit = true,
   };
-  
-  const DEFAULT_MEM_LIMIT: usize = 32768;
+
+  // TODO: handle out of memory  
+  const DEFAULT_MEM_LIMIT: usize = 4 * 1024 * 1024;
   
   undo_stack: ActionStack = .{},
   redo_stack: ActionStack = .{},
@@ -73,6 +74,13 @@ pub const UndoManager = struct {
 
   fn allocr(self: *UndoManager) std.mem.Allocator {
     return self.alloc_gpa.allocator();
+  }
+  
+  pub fn clear(self: *UndoManager) void {
+    self.clearRedoStack();
+    while (self.undo_stack.popFirst()) |action_ptr| {
+      self.destroyActionNode(action_ptr);
+    }
   }
   
   fn clearRedoStack(self: *UndoManager) void {
@@ -85,7 +93,7 @@ pub const UndoManager = struct {
     std.debug.assert(self.redo_stack.first == null);
     var alloc_gpa = &self.alloc_gpa;
     const allocator = alloc_gpa.allocator();
-    while (alloc_gpa.total_requested_bytes > alloc_gpa.requested_memory_limit) {
+    while ((alloc_gpa.total_requested_bytes + @sizeOf(ActionStack.Node)) > alloc_gpa.requested_memory_limit) {
       const opt_action_ptr = self.undo_stack.popFirst();
       if (opt_action_ptr) |action_ptr| {
         self.destroyActionNode(action_ptr);

@@ -50,7 +50,7 @@ pub fn main() !void {
     }
   }
   sig.registerSignals();
-  var E = try editor.Editor.init();
+  var E = try editor.Editor.create();
   if (opt_opened_file) |opened_file| {
     var opened_file_str: str.String = .{};
     try opened_file_str.appendSlice(E.allocr(), opened_file);

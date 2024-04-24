@@ -80,14 +80,10 @@ pub fn handleInput(self: *editor.Editor, keysym: kbd.Keysym) !void {
     });
   }
   else if (keysym.ctrl_key and keysym.isChar('f')) {
-    var cmd_data = self.getCmdData();
-    const cmdinp = cmd_data.cmdinp;
-    cmd_data.cmdinp = .{};
     self.setState(.command);
     self.setCmdData(.{
       .prompt = editor.Commands.Find.PROMPT,
       .fns = editor.Commands.Find.Fns,
-      .cmdinp = cmdinp
     });
   }
   

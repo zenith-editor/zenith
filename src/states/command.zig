@@ -113,6 +113,7 @@ pub fn handleOutput(self: *editor.Editor) !void {
   if (self.needs_redraw) {
     try self.refreshScreen();
     try self.renderText();
+    self.needs_redraw = false;
   }
   if (self.needs_update_cursor) {
     try Impl.renderStatus(self);

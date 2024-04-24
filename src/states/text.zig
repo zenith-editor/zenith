@@ -74,6 +74,10 @@ pub fn handleInput(self: *editor.Editor, keysym: kbd.Keysym) !void {
     self.setState(editor.State.mark);
     self.text_handler.markAll(self);
   }
+  else if (keysym.ctrl_key and keysym.isChar('l')) {
+    self.setState(editor.State.mark);
+    self.text_handler.markLine(self);
+  }
   else if (keysym.ctrl_key and keysym.isChar('b')) {
     self.setState(editor.State.mark);
   }

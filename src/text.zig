@@ -7,6 +7,7 @@ const std = @import("std");
 
 const str = @import("./str.zig");
 const undo = @import("./undo.zig");
+const conf = @import("./config.zig");
 const lineinfo = @import("./lineinfo.zig");
 
 const Editor = @import("./editor.zig").Editor;
@@ -135,8 +136,14 @@ pub const TextHandler = struct {
     if (flush_buffer) {
       self.cursor = .{};
       self.scroll = .{};
+      self.markers = null;
       self.buffer.clearAndFree(E.allocr());
       self.lineinfo.clear();
+      self.head_end = 0;
+      self.tail_start = 0;
+      self.gap.resize(0) catch unreachable;
+      self.undo_mgr.clear();
+      self.buffer_changed = false;
       try self.readLines(E);
     }
   }
@@ -204,7 +211,7 @@ pub const TextHandler = struct {
   }
   
   fn calcLineDigits(self: *TextHandler) void {
-    self.line_digits = std.math.log10(self.lineinfo.getLen() + 1) + 1;
+    self.line_digits = std.math.log10(self.lineinfo.getLen()) + 1;
   }
   
   pub fn getRowOffsetEnd(self: *const TextHandler, row: u32) u32 {
@@ -646,11 +653,13 @@ pub const TextHandler = struct {
   }
   
   pub fn insertTab(self: *TextHandler, E: *Editor) !void {
-    // TODO tab settings
-    const indent = "  ";
+    var indent: std.BoundedArray(u8, conf.MAX_TAB_SIZE) = .{};
+    for (0..@intCast(E.conf.tab_size)) |_| {
+      indent.append(' ') catch break;
+    }
     const insidx: u32 = self.calcOffsetFromCursor();
     try self.undo_mgr.doAppend(insidx, @intCast(indent.len));
-    return self.insertSliceAtPosWithHints(E, insidx, indent, true, false);
+    return self.insertSliceAtPosWithHints(E, insidx, indent.slice(), true, false);
   }
   
   pub fn indentMarked(self: *TextHandler, E: *Editor) !void {
@@ -669,21 +678,35 @@ pub const TextHandler = struct {
       markers.end = self.getRowOffsetEnd(markers.start_cur.row);
     }
     
-    // TODO tab settings
-    const indent = "  ";
     var indented: str.String = .{};
     defer indented.deinit(E.allocr());
-    try indented.appendSlice(E.allocr(), indent);
+    for (0..@intCast(E.conf.tab_size)) |_| {
+      try indented.append(E.allocr(), ' ');
+    }
     
     var iter = self.iterate(self.lineinfo.getOffset(markers.start_cur.row));
     while (iter.nextCharUntil(markers.end)) |char| {
       try indented.appendSlice(E.allocr(), char);
       if (char[0] == '\n') {
-        try indented.appendSlice(E.allocr(), indent);
+        for (0..@intCast(E.conf.tab_size)) |_| {
+          try indented.append(E.allocr(), ' ');
+        }
       }
     }
     
     try self.replaceMarked(E, indented.items);
+  }
+  
+  fn startsWithIndent(E: *Editor, slice: []const u8) bool {
+    if (slice.len < E.conf.tab_size) {
+      return false;
+    }
+    for (0..@intCast(E.conf.tab_size)) |i| {
+      if (slice[i] != ' ') {
+        return false;
+      }
+    }
+    return true;
   }
   
   pub fn dedentMarked(self: *TextHandler, E: *Editor) !void {
@@ -704,8 +727,6 @@ pub const TextHandler = struct {
     }
     
     // TODO tab settings
-    const indent = "  ";
-    const indentWithNL = "\n  ";
     var dedented: str.String = .{};
     defer dedented.deinit(E.allocr());
     
@@ -718,18 +739,17 @@ pub const TextHandler = struct {
     var src: usize = 0;
     var newlen: usize = dedented.items.len;
     
-    if (std.mem.startsWith(u8, dedented.items, indent)) {
-      src += indent.len;
-      newlen -= indent.len;
+    if (TextHandler.startsWithIndent(E, dedented.items)) {
+      src += @intCast(E.conf.tab_size);
+      newlen -= @intCast(E.conf.tab_size);
     }
     
     while (src < dedented.items.len) {
-      // TODO replace startswith
-      if (std.mem.startsWith(u8, dedented.items[src..], indentWithNL)) {
+      if (dedented.items[src] == '\n' and TextHandler.startsWithIndent(E, dedented.items[(src+1)..])) {
         dedented.items[dest] = '\n';
         dest += 1;
-        src += indentWithNL.len;
-        newlen -= indent.len;
+        src += @intCast(E.conf.tab_size + 1);
+        newlen -= @intCast(E.conf.tab_size);
       } else {
         dedented.items[dest] = dedented.items[src];
         dest += 1;
@@ -978,6 +998,7 @@ pub const TextHandler = struct {
           self.lineinfo.remove(deletedrowidx);
           try self.recheckIsMultibyteAfterDelete(cur_at_deleted_char.row, deleted_char_is_mb);
         }
+        self.calcLineDigits();
       } else {
         self.lineinfo.decreaseOffsets(cur_at_deleted_char.row + 1, seqlen);
         try self.recheckIsMultibyteAfterDelete(cur_at_deleted_char.row, deleted_char_is_mb);
@@ -988,6 +1009,7 @@ pub const TextHandler = struct {
         self.lineinfo.decreaseOffsets(cur_at_deleted_char.row, 1);
         self.lineinfo.remove(cur_at_deleted_char.row);
         try self.recheckIsMultibyteAfterDelete(cur_at_deleted_char.row - 1, deleted_char_is_mb);
+        self.calcLineDigits();
       } else {
         self.lineinfo.decreaseOffsets(cur_at_deleted_char.row + 1, seqlen);
         try self.recheckIsMultibyteAfterDelete(cur_at_deleted_char.row, deleted_char_is_mb);
@@ -1072,11 +1094,16 @@ pub const TextHandler = struct {
       }
     }
     
+    const old_no_lines = self.lineinfo.getLen();
     const removed_line_start = self.lineinfo.removeLinesInRange(delete_start, delete_end);
     
     try self.recheckIsMultibyte(removed_line_start);
     if ((removed_line_start + 1) < self.lineinfo.getLen()) {
       try self.recheckIsMultibyte(removed_line_start + 1);
+    }
+    
+    if (old_no_lines != self.lineinfo.getLen()) {
+      self.calcLineDigits();
     }
     
     self.cursor.row = removed_line_start;
@@ -1297,6 +1324,19 @@ pub const TextHandler = struct {
       .end = self.getLogicalLen(),
       .start_cur = .{
         .row = 0,
+        .col = 0,
+        .gfx_col = 0,
+      },
+    };
+    E.needs_redraw = true;
+  }
+  
+  pub fn markLine(self: *TextHandler, E: *Editor) void {
+    self.markers = .{
+      .start = self.lineinfo.getOffset(self.cursor.row),
+      .end = self.getRowOffsetEnd(self.cursor.row),
+      .start_cur = .{
+        .row = self.cursor.row,
         .col = 0,
         .gfx_col = 0,
       },

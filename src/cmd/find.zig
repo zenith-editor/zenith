@@ -110,7 +110,6 @@ fn toReplaceAll(self: *editor.Editor, cmd_data: *editor.CommandData) !void {
 }
 
 pub fn onKey(self: *editor.Editor, keysym: kbd.Keysym) !bool {
-  self.needs_update_cursor = true;
   const cmd_data: *editor.CommandData = self.getCmdData();
   if (keysym.key == kbd.Keysym.Key.up) {
     try Cmd.findBackwards(self, cmd_data);
