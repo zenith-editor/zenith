@@ -5,12 +5,13 @@
 //
 const Impl = @This();
 
+const std = @import("std");
+
 const kbd = @import("../kbd.zig");
 const text = @import("../text.zig");
 const editor = @import("../editor.zig");
-const std = @import("std");
 
-pub fn handleInput(self: *editor.Editor, keysym: kbd.Keysym) !void {
+pub fn handleInput(self: *editor.Editor, keysym: kbd.Keysym, is_clipboard: bool) !void {
   if (keysym.key == kbd.Keysym.Key.up) {
     self.text_handler.goUp(self);
   }
@@ -107,24 +108,28 @@ pub fn handleInput(self: *editor.Editor, keysym: kbd.Keysym) !void {
     try self.text_handler.deleteChar(self, true);
   }
   else if (keysym.raw == kbd.Keysym.NEWLINE) {
-    try self.text_handler.insertNewline(self);
+    if (is_clipboard) {
+      try self.text_handler.insertChar(self, "\n", true);
+    } else {
+      try self.text_handler.insertNewline(self);
+    }
   }
-  else if (keysym.raw == kbd.Keysym.TAB) {
+  else if (!is_clipboard and keysym.raw == kbd.Keysym.TAB) {
     try self.text_handler.insertTab(self);
   }
-  else if (keysym.isChar('{')) {
+  else if (!is_clipboard and keysym.isChar('{')) {
     try self.text_handler.insertCharPair(self, "{", "}");
   }
-  else if (keysym.isChar('(')) {
+  else if (!is_clipboard and keysym.isChar('(')) {
     try self.text_handler.insertCharPair(self, "(", ")");
   }
-  else if (keysym.isChar('[')) {
+  else if (!is_clipboard and keysym.isChar('[')) {
     try self.text_handler.insertCharPair(self, "[", "]");
   }
-  else if (keysym.isChar('\'')) {
+  else if (!is_clipboard and keysym.isChar('\'')) {
     try self.text_handler.insertCharPair(self, "'", "'");
   }
-  else if (keysym.isChar('"')) {
+  else if (!is_clipboard and keysym.isChar('"')) {
     try self.text_handler.insertCharPair(self, "\"", "\"");
   }
   else if (keysym.getPrint()) |key| {

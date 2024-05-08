@@ -23,7 +23,9 @@ pub fn onUnset(self: *editor.Editor, next_state: editor.State) void {
   }
 }
 
-pub fn handleInput(self: *editor.Editor, keysym: kbd.Keysym) !void {
+pub fn handleInput(self: *editor.Editor, keysym: kbd.Keysym, is_clipboard: bool) !void {
+  _ = is_clipboard;
+  
   if (keysym.raw == kbd.Keysym.ESC) {
     self.setState(.text);
     return;

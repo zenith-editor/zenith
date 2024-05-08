@@ -125,10 +125,12 @@ pub fn onKey(self: *editor.Editor, keysym: kbd.Keysym) !bool {
   }
   else if (keysym.ctrl_key and keysym.isChar('r')) {
     Cmd.toReplace(self, cmd_data);
+    self.needs_update_cursor = true;
     return true;
   }
   else if (keysym.ctrl_key and keysym.isChar('h')) {
     try Cmd.toReplaceAll(self, cmd_data);
+    self.needs_update_cursor = true;
     return true;
   }
   return false;

@@ -9,6 +9,7 @@ const str = @import("./str.zig");
 const undo = @import("./undo.zig");
 const conf = @import("./config.zig");
 const lineinfo = @import("./lineinfo.zig");
+const clipboard = @import("./clipboard.zig");
 
 const Editor = @import("./editor.zig").Editor;
 
@@ -197,7 +198,7 @@ pub const TextHandler = struct {
       }
     }
     
-    self.calcLineDigits();
+    self.calcLineDigits(E);
   }
   
   // general manip
@@ -210,8 +211,10 @@ pub const TextHandler = struct {
     return @intCast(self.head_end + self.gap.len + (self.buffer.items.len - self.tail_start));
   }
   
-  fn calcLineDigits(self: *TextHandler) void {
-    self.line_digits = std.math.log10(self.lineinfo.getLen()) + 1;
+  fn calcLineDigits(self: *TextHandler, E: *const Editor) void {
+    if (E.conf.show_line_numbers) {
+      self.line_digits = std.math.log10(self.lineinfo.getLen()) + 1;
+    }
   }
   
   pub fn getRowOffsetEnd(self: *const TextHandler, row: u32) u32 {
@@ -622,7 +625,7 @@ pub const TextHandler = struct {
         try self.recheckIsMultibyte(self.cursor.row);
         try self.recheckIsMultibyte(self.cursor.row + 1);
       }
-      self.calcLineDigits();
+      self.calcLineDigits(E);
       
       self.cursor.row += 1;
       self.cursor.col = 0;
@@ -826,7 +829,7 @@ pub const TextHandler = struct {
     
     if (newlines.items.len > 0) {
       try self.lineinfo.insertSlice(first_row_after_insidx, newlines.items);
-      self.calcLineDigits();
+      self.calcLineDigits(E);
     }
     
     for ((first_row_after_insidx - 1)..(first_row_after_insidx + newlines.items.len)) |i| {
@@ -938,7 +941,7 @@ pub const TextHandler = struct {
       }
     }
     
-    // Update line offset info
+    // Perform deletion
     
     const logical_tail_start = self.head_end + self.gap.len;
 
@@ -979,6 +982,8 @@ pub const TextHandler = struct {
     
     try self.undo_mgr.doDelete(delidx, deleted_char[0..seqlen]);
     
+    // Update line offset info
+    
     const deleted_char_is_mb = seqlen > 1;
     
     // checkIsMultibyte is done after decreaseOffsets
@@ -998,7 +1003,7 @@ pub const TextHandler = struct {
           self.lineinfo.remove(deletedrowidx);
           try self.recheckIsMultibyteAfterDelete(cur_at_deleted_char.row, deleted_char_is_mb);
         }
-        self.calcLineDigits();
+        self.calcLineDigits(E);
       } else {
         self.lineinfo.decreaseOffsets(cur_at_deleted_char.row + 1, seqlen);
         try self.recheckIsMultibyteAfterDelete(cur_at_deleted_char.row, deleted_char_is_mb);
@@ -1009,7 +1014,7 @@ pub const TextHandler = struct {
         self.lineinfo.decreaseOffsets(cur_at_deleted_char.row, 1);
         self.lineinfo.remove(cur_at_deleted_char.row);
         try self.recheckIsMultibyteAfterDelete(cur_at_deleted_char.row - 1, deleted_char_is_mb);
-        self.calcLineDigits();
+        self.calcLineDigits(E);
       } else {
         self.lineinfo.decreaseOffsets(cur_at_deleted_char.row + 1, seqlen);
         try self.recheckIsMultibyteAfterDelete(cur_at_deleted_char.row, deleted_char_is_mb);
@@ -1103,7 +1108,7 @@ pub const TextHandler = struct {
     }
     
     if (old_no_lines != self.lineinfo.getLen()) {
-      self.calcLineDigits();
+      self.calcLineDigits(E);
     }
     
     self.cursor.row = removed_line_start;
@@ -1211,7 +1216,7 @@ pub const TextHandler = struct {
       
     try self.lineinfo.insertSlice(replace_line_start + 1, newlines.items);
     self.lineinfo.increaseOffsets(row_at_end_of_slice, @intCast(new_buffer.len));
-    self.calcLineDigits();
+    self.calcLineDigits(E);
     
     for (replace_line_start..row_at_end_of_slice) |i| {
       try self.recheckIsMultibyte(@intCast(i));
@@ -1355,11 +1360,28 @@ pub const TextHandler = struct {
     try self.flushGapBuffer(E);
     
     const n_copied = markers.end - markers.start;
-    try self.clipboard.resize(E.allocr(), n_copied);
-    @memcpy(self.clipboard.items, self.buffer.items[markers.start..markers.end]);
+    if (n_copied > 0) {
+      if (E.conf.use_native_clipboard) {
+        if (clipboard.write(
+          E.allocr(),
+          self.buffer.items[markers.start..markers.end]
+        )) |_| {
+          return;
+        } else |_| {}
+      }
+      try self.clipboard.resize(E.allocr(), n_copied);
+      @memcpy(self.clipboard.items, self.buffer.items[markers.start..markers.end]);
+    }
   }
   
   pub fn paste(self: *TextHandler, E: *Editor) !void {
+    if (E.conf.use_native_clipboard) {
+      if (try clipboard.read(E.allocr())) |native_clip| {
+        defer E.allocr().free(native_clip);
+        try self.insertSlice(E, native_clip);
+        return;
+      }
+    }
     if (self.clipboard.items.len > 0) {
       try self.insertSlice(E, self.clipboard.items);
     }

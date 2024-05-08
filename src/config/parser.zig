@@ -60,7 +60,7 @@ pub const Expr = union(enum) {
   }
 };
 
-pub const ParseError = error {
+pub const ParseErrorType = enum {
   ExpectedNewline,
   EmptySection,
   ExpectedDigit,
@@ -68,7 +68,41 @@ pub const ParseError = error {
   ExpectedEqual,
   InvalidEscapeSeq,
   UnexpectedEof,
+  OutOfMemory,
 };
+
+pub const ParseError = struct {
+  type: ParseErrorType,
+  pos: usize,
+};
+
+fn ParseResult(comptime T: type) type {
+  return union(enum) {
+    const Self = @This();
+  
+    ok: T,
+    err: ParseError,
+    
+    pub fn unwrap(self: *Self) T {
+      switch (self.*) {
+        .ok => |v| {
+          return v;
+        },
+        else => unreachable,
+      }
+    }
+    
+    pub fn isErr(self: *const Self) bool {
+      return switch(self.*) {
+        .err => true,
+        else => false,
+      };
+    }
+  };
+}
+
+const ValueResult = ParseResult(Value);
+const ExprOrNullResult = ParseResult(?Expr);
 
 pub const Parser = struct {
   buffer: []const u8,
@@ -109,7 +143,7 @@ pub const Parser = struct {
     }
   }
   
-  fn skipSpaceAndNewline(self: *Parser) !void {
+  fn skipSpaceAndNewline(self: *Parser) ?ParseError {
     self.skipSpace();
     if (self.getch()) |char| {
       if (char == '#') {
@@ -122,7 +156,7 @@ pub const Parser = struct {
             self.pos += 1;
           }
         }
-        return;
+        return null;
       }
       if (char == '\n') {
         self.pos += 1;
@@ -133,10 +167,14 @@ pub const Parser = struct {
             break;
           }
         }
-        return;
+        return null;
       }
-      return ParseError.ExpectedNewline;
+      return .{
+        .type = ParseErrorType.ExpectedNewline,
+        .pos = self.pos,
+      };
     }
+    return null;
   }
   
   fn matchStr(self: *Parser, match: []const u8) bool {
@@ -169,7 +207,7 @@ pub const Parser = struct {
     }
   }
   
-  pub fn nextExpr(self: *Parser, allocr: std.mem.Allocator) !?Expr {
+  pub fn nextExpr(self: *Parser, allocr: std.mem.Allocator) ExprOrNullResult {
     // expr = ws* (comment newline)* keyval ws* comment? newline+
     self.skipSpaceBeforeExpr();
     if (self.getch()) |char| {
@@ -187,10 +225,21 @@ pub const Parser = struct {
           }
         }
         if (size == 0) {
-          return ParseError.EmptySection;
+          return .{ 
+            .err = .{
+              .type = ParseErrorType.EmptySection,
+              .pos = self.pos,
+            },
+          };
         }
-        try self.skipSpaceAndNewline();
-        return .{ .section = self.buffer[start_pos..(start_pos+size)], };
+        if (self.skipSpaceAndNewline()) |err| {
+          return .{ .err = err, };
+        }
+        return .{
+          .ok = .{
+            .section = self.buffer[start_pos..(start_pos+size)],
+          },
+        };
       }
       else if (Parser.isId(char)) {
         const start_pos = self.pos;
@@ -208,62 +257,89 @@ pub const Parser = struct {
         self.skipSpace();
         
         if (self.getch() != '=') {
-          return ParseError.ExpectedEqual;
+          return .{ 
+            .err = .{
+              .type = ParseErrorType.ExpectedEqual,
+              .pos = self.pos,
+            },
+          };
         }
         self.pos += 1;
         
         self.skipSpace();
         
-        const val = try self.nextValue(allocr);
-        try self.skipSpaceAndNewline();
+        var val = self.nextValue(allocr);
+        if (val.isErr()) {
+          return .{ .err = val.err, };
+        }
+        if (self.skipSpaceAndNewline()) |err| {
+          return .{ .err = err, };
+        }
         
         const key = self.buffer[start_pos..(start_pos+size)];
         
         return .{
-          .kv = .{
-            .key = key,
-            .val = val,
+          .ok = .{
+            .kv = .{
+              .key = key,
+              .val = val.unwrap(),
+            },
           },
         };
       }
     }
-    return null;
+    return .{ .ok = null, };
   }
   
-  fn nextValue(self: *Parser, allocr: std.mem.Allocator) !Value {
+  fn nextValue(self: *Parser, allocr: std.mem.Allocator) ValueResult {
     if (self.getch()) |char| {
       if (self.matchStr("true")) {
-        return .{ .boole = true, };
+        return .{
+          .ok = .{ .boole = true, },
+        };
       }
       else if (self.matchStr("false")) {
-        return .{ .boole = false, };
+        return .{
+          .ok = .{ .boole = false, },
+        };
       }
+      const start_pos = self.pos;
       switch(char) {
         '0' ... '9' => {
           self.pos += 1;
-          return self.parseInteger(char - '0', false);
+          return self.parseInteger(char - '0', false, start_pos);
         },
         '-' => {
           self.pos += 1;
-          return self.parseInteger(null, true);
+          return self.parseInteger(null, true, start_pos);
         },
         '"' => {
           self.pos += 1;
-          return self.parseStr(allocr);
+          return self.parseStr(allocr, start_pos);
         },
         else => {
-          return ParseError.ExpectedValue;
+          return .{
+            .err = .{
+              .type = ParseErrorType.ExpectedValue,
+              .pos = start_pos,
+            },
+          };
         },
       }
     } else {
-      return ParseError.ExpectedValue;
+      return .{
+        .err = .{
+          .type = ParseErrorType.ExpectedValue,
+          .pos = self.pos,
+        },
+      };
     }
   }
   
-  fn parseInteger(self: *Parser, init_digit: ?i32, is_neg: bool) !Value {
+  fn parseInteger(self: *Parser, init_digit: ?i32, is_neg: bool, start_pos: usize) ValueResult {
     var num: i32 = 0;
     if (init_digit == 0) {
-      return .{ .int = 0, };
+      return .{ .ok = .{ .int = 0, }, };
     }
     else if (init_digit == null) {
       if (self.getch()) |char| {
@@ -274,14 +350,24 @@ pub const Parser = struct {
           },
           '0' => {
             self.pos += 1;
-            return .{ .int = 0, };
+            return .{ .ok = .{ .int = 0, }, };
           },
           else => {
-            return ParseError.ExpectedDigit;
+            return .{
+              .err = .{
+                .type = ParseErrorType.ExpectedDigit,
+                .pos = start_pos,
+              },
+            };
           },
         }
       } else {
-        return ParseError.ExpectedDigit;
+        return .{
+          .err = .{
+            .type = ParseErrorType.ExpectedDigit,
+            .pos = start_pos,
+          },
+        };
       }
     }
     else {
@@ -299,15 +385,16 @@ pub const Parser = struct {
           self.pos += 1;
         },
         else => {
-          return .{ .int = num, };
+          return .{ .ok = .{ .int = num, }, };
         },
       }
     }
-    return .{ .int = num, };
+    return .{ .ok = .{ .int = num, }, };
   }
 
-  fn parseStr(self: *Parser, allocr: std.mem.Allocator) !Value {
+  fn parseStrInner(self: *Parser, allocr: std.mem.Allocator, start_pos: usize) !ValueResult {
     var string: str.String = .{};
+    errdefer string.deinit(allocr);
     while (self.getch()) |char| {
       switch (char) {
         '"' => {
@@ -326,10 +413,22 @@ pub const Parser = struct {
                 self.pos += 1;
                 try string.append(allocr, '"');
               },
-              else => { return ParseError.InvalidEscapeSeq; },
+              else => {
+                return .{
+                  .err =  .{
+                    .type = ParseErrorType.InvalidEscapeSeq,
+                    .pos = start_pos,
+                  },
+                };
+              },
             }
           } else {
-            return ParseError.UnexpectedEof;
+            return .{
+              .err =  .{
+                .type = ParseErrorType.UnexpectedEof,
+                .pos = start_pos,
+              },
+            };
           }
         },
         else => {
@@ -338,9 +437,25 @@ pub const Parser = struct {
         },
       }
     }
-    return .{ .string = string, };
+    return .{ .ok = .{ .string = string, }, };
   }
-
+  
+  fn parseStr(self: *Parser, allocr: std.mem.Allocator, start_pos: usize) ValueResult {
+    if (self.parseStrInner(allocr, start_pos)) |result| {
+      return result;
+    } else |err| {
+      switch(err) {
+        error.OutOfMemory => {
+          return .{
+            .err =  .{
+              .type = ParseErrorType.OutOfMemory,
+              .pos = start_pos,
+            },
+          };
+        },
+      }
+    }
+  }
 };
 
 test "parse empty section" {
@@ -348,7 +463,7 @@ test "parse empty section" {
   const allocr = gpa.allocator();
   var parser = Parser.init("[section]");
   {
-    var expr = (try parser.nextExpr(allocr)).?;
+    var expr = parser.nextExpr(allocr).unwrap().?;
     defer expr.deinit(allocr);
     try std.testing.expectEqualSlices(u8, "section", expr.section);
   }
@@ -362,12 +477,12 @@ test "parse section with int val" {
     \\key=1
   );
   {
-    var expr = (try parser.nextExpr(allocr)).?;
+    var expr = parser.nextExpr(allocr).unwrap().?;
     defer expr.deinit(allocr);
     try std.testing.expectEqualSlices(u8, "section", expr.section);
   }
   {
-    var expr = (try parser.nextExpr(allocr)).?;
+    var expr = parser.nextExpr(allocr).unwrap().?;
     defer expr.deinit(allocr);
     try std.testing.expectEqualSlices(u8, "key", expr.kv.key);
     try std.testing.expectEqual(1, expr.kv.val.int);
@@ -381,7 +496,7 @@ test "parse section with string val" {
     \\key="val"
   );
   {
-    var expr = (try parser.nextExpr(allocr)).?;
+    var expr = parser.nextExpr(allocr).unwrap().?;
     defer expr.deinit(allocr);
     try std.testing.expectEqualSlices(u8, "key", expr.kv.key);
     try std.testing.expectEqualSlices(u8, "val", expr.kv.val.string.items);
@@ -396,13 +511,13 @@ test "parse section with bool val" {
     \\faux=false
   );
   {
-    var expr = (try parser.nextExpr(allocr)).?;
+    var expr = parser.nextExpr(allocr).unwrap().?;
     defer expr.deinit(allocr);
     try std.testing.expectEqualSlices(u8, "truth", expr.kv.key);
     try std.testing.expectEqual(true, expr.kv.val.boole);
   }
   {
-    var expr = (try parser.nextExpr(allocr)).?;
+    var expr = parser.nextExpr(allocr).unwrap().?;
     defer expr.deinit(allocr);
     try std.testing.expectEqualSlices(u8, "faux", expr.kv.key);
     try std.testing.expectEqual(false, expr.kv.val.boole);
@@ -421,13 +536,13 @@ test "parse section with comments" {
     \\faux=false #comment4
   );
   {
-    var expr = (try parser.nextExpr(allocr)).?;
+    var expr = parser.nextExpr(allocr).unwrap().?;
     defer expr.deinit(allocr);
     try std.testing.expectEqualSlices(u8, "truth", expr.kv.key);
     try std.testing.expectEqual(true, expr.kv.val.boole);
   }
   {
-    var expr = (try parser.nextExpr(allocr)).?;
+    var expr = parser.nextExpr(allocr).unwrap().?;
     defer expr.deinit(allocr);
     try std.testing.expectEqualSlices(u8, "faux", expr.kv.key);
     try std.testing.expectEqual(false, expr.kv.val.boole);
@@ -441,7 +556,7 @@ test "parse section with esc seq in string val" {
     \\key="\"val\""
   );
   {
-    var expr = (try parser.nextExpr(allocr)).?;
+    var expr = parser.nextExpr(allocr).unwrap().?;
     defer expr.deinit(allocr);
     try std.testing.expectEqualSlices(u8, "key", expr.kv.key);
     try std.testing.expectEqualSlices(u8, "\"val\"", expr.kv.val.string.items);
