@@ -1,12 +1,16 @@
 const Expr = @This();
 
 const std = @import("std");
+const Instr = @import("./instr.zig").Instr;
+const Parser = @import("./parser.zig");
 
-pub const CreateErrorType = enum {
+pub const CreateErrorType = error {
   EmptyRegex,
   OutOfMemory,
   InvalidUnicode,
   ExpectedSimpleExpr,
+  ExpectedEscapeBeforeDashInRange,
+  UnbalancedGroupBrackets,
 };
 
 pub const CreateError = struct {
@@ -26,159 +30,37 @@ pub const CreateResult = union(enum) {
   }
 };
 
-const Instr = union(enum) {
-  const Range = struct {
-    from: u32,
-    to: u32,
-  };
-  /// Finish matching
-  matched: void,
-  /// Tries to consume a char, backtracks if fails
-  char: u32,
-  /// Tries to consume a char in range, backtracks if fails
-  range: []Range,
-  /// Tries to consume a string, exit if fails
-  string: []u8,
-  /// Sets the program counter
-  jmp: usize,
-  /// Sets backtrack target
-  backtrack_target: usize,
-  
-  fn deinit(self: *Instr, allocr: std.mem.Allocator) void {
-    _ = self;
-    _ = allocr;
-  }
-  
-  fn isSimpleMatcher(self: *const Instr) bool {
-    return switch(self.*) {
-      .char, .range => true,
-      else => false,
-    };
-  }
-  
-  fn isChar(self: *const Instr) bool {
-    return switch(self.*) {
-      .char => true,
-      else => false,
-    };
-  }
-  
-  fn getString(self: *const Instr) ?[]u8 {
-    return switch(self.*) {
-      .string => |string| string,
-      else => null,
-    };
-  }
-  
-  fn decrPc(self: *Instr, shifted: usize) void {
-    switch(self.*) {
-      .jmp => |*pc| { pc.* -= shifted; },
-      .backtrack_target => |*pc| { pc.* -= shifted; },
-      else => {},
-    }
-  }
-};
-
 instrs: std.ArrayListUnmanaged(Instr),
+num_groups: usize,
 
-fn deinit(self: *Expr, allocr: std.mem.Allocator) void {
+fn debugPrint(self: *const Expr) void {
+  for (0..self.instrs.items.len) |i| {
+    std.debug.print("{} {}\n", .{i, self.instrs.items[i]});
+  }
+}
+
+pub fn deinit(self: *Expr, allocr: std.mem.Allocator) void {
   for (self.instrs.items) |*instr| {
     instr.deinit(allocr);
   }
   self.instrs.deinit(allocr);
 }
 
-fn createInner(allocr: std.mem.Allocator, in_pattern: []const u8) !CreateResult {
-  var expr: Expr = .{
-    .instrs = .{},
-  };
-  errdefer expr.deinit(allocr);
-  
-  var i: usize = 0;
-  while (i < in_pattern.len) {
-    const seqlen = try std.unicode.utf8ByteSequenceLength(in_pattern[i]);
-    if ((in_pattern.len - i) < seqlen) {
-      return .{ .err = .{ .type = .InvalidUnicode, .pos = i, }, };
-    }
-    const char: u32 = try std.unicode.utf8Decode(in_pattern[i..(i+seqlen)]);
-    switch (char) {
-      '+' => {
-        if (!expr.instrs.items[expr.instrs.items.len - 1].isSimpleMatcher()) {
-          return .{ .err = .{ .type = .ExpectedSimpleExpr, .pos = i, }, };
-        }
-        // L1: <char>
-        // bt L3
-        // jmp L1
-        // L3: ...
-        const jmp = expr.instrs.items.len - 1;
-        const backtrack_target = expr.instrs.items.len + 2;
-        try expr.instrs.append(allocr, .{ // +0
-          .backtrack_target = backtrack_target,
-        });
-        try expr.instrs.append(allocr, .{ // +1
-          .jmp = jmp,
-        });
-      },
-      '*' => {
-        if (!expr.instrs.items[expr.instrs.items.len - 1].isSimpleMatcher()) {
-          return .{ .err = .{ .type = .ExpectedSimpleExpr, .pos = i, }, };
-        }
-        // transform:
-        //  -1 <char>
-        // ... to
-        //  -1 bt L3
-        //  +0 L1: <char>
-        //  +1 jmp L1
-        //  +2 L3: ...
-        const backtrack_target = expr.instrs.items.len + 2;
-        const jmp = expr.instrs.items.len;
-        try expr.instrs.insert(allocr, expr.instrs.items.len - 1, .{ // -1
-          .backtrack_target = backtrack_target,
-        });
-        try expr.instrs.append(allocr, .{ // +1
-          .jmp = jmp,
-        });
-      },
-      '?' => {
-        if (!expr.instrs.items[expr.instrs.items.len - 1].isSimpleMatcher()) {
-          return .{ .err = .{ .type = .ExpectedSimpleExpr, .pos = i, }, };
-        }
-        // transform:
-        //  -1 <char>
-        // ... to
-        //  -1 bt L3
-        //  +0 <char>
-        //  +1 L3: ...
-        const backtrack_target = expr.instrs.items.len + 1;
-        try expr.instrs.insert(allocr, expr.instrs.items.len - 1, .{ // -1
-          .backtrack_target = backtrack_target,
-        });
-      },
-      else => {
-        try expr.instrs.append(allocr, .{ .char = char });
-      },
-    }
-    i += seqlen;
-  }
-  try expr.instrs.append(allocr, .{ .matched = {}, });
-  try expr.optimizePrefixString(allocr);
-  return .{ .ok = expr, };
-}
-
 pub fn create(allocr: std.mem.Allocator, in_pattern: []const u8) CreateResult {
   if (in_pattern.len == 0) {
     return .{
-      .err = .{ .type = .EmptyRegex, .pos = 0, },
+      .err = .{ .type = error.EmptyRegex, .pos = 0, },
     };
   }
-  if (createInner(allocr, in_pattern)) |result| {
-    return result;
+  var parser: Parser = .{};
+  if (parser.parse(allocr, in_pattern)) |expr| {
+    return .{ .ok = expr, };
   } else |err| {
     switch (err) {
       error.OutOfMemory => {
         return .{
           .err = .{
-            .type = .OutOfMemory,
+            .type = error.OutOfMemory,
             .pos = 0,
           },
         };
@@ -187,114 +69,121 @@ pub fn create(allocr: std.mem.Allocator, in_pattern: []const u8) CreateResult {
       error.Utf8ExpectedContinuation,
       error.Utf8OverlongEncoding,
       error.Utf8EncodesSurrogateHalf,
-      error.Utf8CannotEncodeSurrogateHalf,
-      error.CodepointTooLarge,
       error.Utf8CodepointTooLarge => {
         return .{
           .err = .{
-            .type = .InvalidUnicode,
-            .pos = 0,
+            .type = error.InvalidUnicode,
+            .pos = parser.str_idx,
           },
         };
-      }
-    }
-  }
-}
-
-fn optimizePrefixString(self: *Expr, allocr: std.mem.Allocator) !void {
-  if (self.instrs.items.len < 2) {
-    return;
-  }
-  if (!self.instrs.items[0].isChar() or !self.instrs.items[1].isChar()) {
-    return;
-  }
-  
-  var removed: usize = 0;
-  var bytes: std.ArrayListUnmanaged(u8) = .{};
-  errdefer bytes.deinit(allocr);
-  
-  for (self.instrs.items) |item| {
-    switch (item) {
-      .char => |char| {
-        var char_bytes: [4]u8 = undefined;
-        const n_bytes = try std.unicode.utf8Encode(@intCast(char), &char_bytes);
-        try bytes.appendSlice(allocr, char_bytes[0..n_bytes]);
-        removed += 1;
       },
-      else => { break; },
+      error.ExpectedSimpleExpr,
+      error.ExpectedEscapeBeforeDashInRange,
+      error.UnbalancedGroupBrackets => |suberr| {
+        return .{
+          .err = .{
+            .type = @errorCast(suberr),
+            .pos = parser.str_idx,
+          },
+        };
+      },
     }
   }
-  removed -= 1; // except for first char
-  
-  self.instrs.items[0] = .{ .string = try bytes.toOwnedSlice(allocr), };
-  self.instrs.replaceRangeAssumeCapacity(1, removed, &[_]Instr {});
-  for (self.instrs.items[1..]) |*item| {
-    item.decrPc(removed);
-  }
 }
-
-pub const MatchResult = struct {
-  pos: usize,
-  fully_matched: bool,
-};
 
 const VM = struct {
+  const Backtrack = struct {
+    str_idx: usize,
+    pc: usize,
+  };
+  
   haystack: []const u8,
   instrs: []const Instr,
+  options: *const MatchOptions,
   pc: usize = 0,
-  str_index: usize = 0,
-  backtrack: ?usize = null,
+  str_idx: usize = 0,
+  backtrack_stack: std.BoundedArray(Backtrack, 128) = .{},
   fully_matched: bool = false,
   
   fn stopOrBacktrack(self: *VM) bool {
-    if (self.backtrack) |bt| {
-      self.pc = bt;
-      self.backtrack = null;
+    if (self.backtrack_stack.popOrNull()) |bt| {
+      // std.debug.print("BT\n",.{});
+      self.pc = bt.pc;
+      self.str_idx = bt.str_idx;
       return true;
     }
     return false;
   }
   
   fn nextInstr(self: *VM) !bool {
+    // std.debug.print(">>> {} {}\n", .{self.pc,self.instrs[self.pc]});
     switch (self.instrs[self.pc]) {
       .matched => {
         self.fully_matched = true;
         return false;
       },
       .char => |char1| {
-        if (self.str_index >= self.haystack.len) {
+        if (self.str_idx >= self.haystack.len) {
           return self.stopOrBacktrack();
         }
         const seqlen = try std.unicode.utf8ByteSequenceLength(
-          self.haystack[self.str_index]
+          self.haystack[self.str_idx]
         );
-        if ((self.haystack.len - self.str_index) < seqlen) {
-          return error.InvalidUtf8;
+        if ((self.haystack.len - self.str_idx) < seqlen) {
+          return error.Utf8ExpectedContinuation;
         }
         const char: u32 = try std.unicode.utf8Decode(
-          self.haystack[self.str_index..(self.str_index+seqlen)]
+          self.haystack[self.str_idx..(self.str_idx+seqlen)]
         );
         if (char != char1) {
           return self.stopOrBacktrack();
         }
         self.pc += 1;
-        self.str_index += seqlen;
+        self.str_idx += seqlen;
         return true;
       },
-      .range => {
-        @panic("TODO\n");
+      .range => |ranges| {
+        if (self.str_idx >= self.haystack.len) {
+          return self.stopOrBacktrack();
+        }
+        const seqlen = try std.unicode.utf8ByteSequenceLength(
+          self.haystack[self.str_idx]
+        );
+        if ((self.haystack.len - self.str_idx) < seqlen) {
+          return error.Utf8ExpectedContinuation;
+        }
+        const char: u32 = try std.unicode.utf8Decode(
+          self.haystack[self.str_idx..(self.str_idx+seqlen)]
+        );
+        var matches = false;
+        for (ranges) |range| {
+          if (range.from <= char and range.to >= char) {
+            matches = true;
+            break;
+          }
+        }
+        if (!matches) {
+          return self.stopOrBacktrack();
+        }
+        self.pc += 1;
+        self.str_idx += seqlen;
+        return true;
       },
       .string => |string| {
+        // string is only here for optimizing find calls
+        std.debug.assert(self.pc == 0);
+        
         for (0..string.len) |i| {
-          if (self.str_index == self.haystack.len) {
+          if (self.str_idx == self.haystack.len) {
             return false;
           }
-          if (self.haystack[self.str_index] == string[i]) {
-            self.str_index += 1;
+          if (self.haystack[self.str_idx] == string[i]) {
+            self.str_idx += 1;
           } else {
             return false;
           }
         }
+        
         self.pc += 1;
         return true;
       },
@@ -303,7 +192,29 @@ const VM = struct {
         return true;
       },
       .backtrack_target => |backtrack_target| {
-        self.backtrack = backtrack_target;
+        self.backtrack_stack.append(.{
+          .pc = backtrack_target,
+          .str_idx = self.str_idx,
+        }) catch return error.BacktrackOverflow;
+        self.pc += 1;
+        return true;
+      },
+      .consume_backtrack => {
+        _ = self.backtrack_stack.pop();
+        self.pc += 1;
+        return true;
+      },
+      .group_start => |group_id| {
+        if (self.options.group_out) |group_out| {
+          group_out[group_id].start = self.str_idx;
+        }
+        self.pc += 1;
+        return true;
+      },
+      .group_end => |group_id| {
+        if (self.options.group_out) |group_out| {
+          group_out[group_id].end = self.str_idx;
+        }
         self.pc += 1;
         return true;
       },
@@ -311,23 +222,64 @@ const VM = struct {
   }
   
   fn exec(self: *VM) !MatchResult {
+    // std.debug.print("---\n",.{});
     while (try self.nextInstr()) {}
     return .{
-      .pos = self.str_index,
+      .pos = self.str_idx,
       .fully_matched = self.fully_matched,
     };
   }
 };
 
+pub const MatchResult = struct {
+  pos: usize,
+  fully_matched: bool,
+};
+
+pub const MatchGroup = struct {
+  start: usize = 0,
+  end: usize = 0,
+};
+
+pub const MatchOptions = struct {
+  group_out: ?[]MatchGroup = null,
+};
+
+pub const MatchError = error {
+  InvalidGroupSize,
+  InvalidUnicode,
+  BacktrackOverflow,
+};
+
 pub fn checkMatch(
   self: *const Expr,
   haystack: []const u8,
-) !MatchResult {
+  options: MatchOptions,
+) MatchError!MatchResult {
+  if (options.group_out) |group_out| {
+    if (group_out.len != self.num_groups) {
+      return error.InvalidGroupSize;
+    }
+  }
   var vm: VM = .{
     .haystack = haystack,
     .instrs = self.instrs.items,
+    .options = &options,
   };
-  return vm.exec();
+  return vm.exec() catch |err| {
+    switch(err) {
+      error.Utf8InvalidStartByte,
+      error.Utf8ExpectedContinuation,
+      error.Utf8OverlongEncoding,
+      error.Utf8EncodesSurrogateHalf,
+      error.Utf8CodepointTooLarge => {
+        return error.InvalidUnicode;
+      },
+      error.BacktrackOverflow => |suberr| {
+        return suberr;
+      },
+    }
+  };
 }
 
 pub const FindResult = struct {
@@ -340,7 +292,7 @@ pub fn find(self: *const Expr, haystack: []const u8) !?FindResult {
     var skip: usize = 0;
     while (std.mem.indexOf(u8, haystack[skip..], string)) |rel_skip| {
       skip += rel_skip;
-      const match = try self.checkMatch(haystack[skip..]);
+      const match = try self.checkMatch(haystack[skip..], .{});
       if (match.fully_matched) {
         return .{
           .start = skip,
@@ -353,7 +305,7 @@ pub fn find(self: *const Expr, haystack: []const u8) !?FindResult {
   }
   
   for (0..haystack.len-1) |skip| {
-    const match = try self.checkMatch(haystack[skip..]);
+    const match = try self.checkMatch(haystack[skip..], .{});
     if (match.fully_matched) {
       return .{
         .start = skip,
@@ -369,8 +321,8 @@ test "simple one" {
   const allocr = gpa.allocator();
   var expr = Expr.create(allocr, "asdf").asOpt().?;
   defer expr.deinit(allocr);
-  try std.testing.expectEqual(4, (try expr.checkMatch("asdf")).pos);
-  try std.testing.expectEqual(2, (try expr.checkMatch("as")).pos);
+  try std.testing.expectEqual(4, (try expr.checkMatch("asdf", .{})).pos);
+  try std.testing.expectEqual(2, (try expr.checkMatch("as", .{})).pos);
 }
 
 test "simple more than one" {
@@ -378,11 +330,21 @@ test "simple more than one" {
   const allocr = gpa.allocator();
   var expr = Expr.create(allocr, "a+").asOpt().?;
   defer expr.deinit(allocr);
-  try std.testing.expectEqual(1, (try expr.checkMatch("a")).pos);
-  try std.testing.expectEqual(2, (try expr.checkMatch("aa")).pos);
-  try std.testing.expectEqual(1, (try expr.checkMatch("aba")).pos);
-  try std.testing.expectEqual(2, (try expr.checkMatch("aad")).pos);
-  try std.testing.expectEqual(0, (try expr.checkMatch("daa")).pos);
+  try std.testing.expectEqual(1, (try expr.checkMatch("a", .{})).pos);
+  try std.testing.expectEqual(2, (try expr.checkMatch("aa", .{})).pos);
+  try std.testing.expectEqual(1, (try expr.checkMatch("aba", .{})).pos);
+  try std.testing.expectEqual(2, (try expr.checkMatch("aad", .{})).pos);
+  try std.testing.expectEqual(0, (try expr.checkMatch("daa", .{})).pos);
+}
+
+test "group more than one" {
+  var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+  const allocr = gpa.allocator();
+  var expr = Expr.create(allocr, "(ab)+").asOpt().?;
+  defer expr.deinit(allocr);
+  try std.testing.expectEqual(2, (try expr.checkMatch("ab", .{})).pos);
+  try std.testing.expectEqual(4, (try expr.checkMatch("abab", .{})).pos);
+  try std.testing.expectEqual(0, (try expr.checkMatch("dab", .{})).pos);
 }
 
 test "simple zero or more" {
@@ -390,11 +352,22 @@ test "simple zero or more" {
   const allocr = gpa.allocator();
   var expr = Expr.create(allocr, "a*b").asOpt().?;
   defer expr.deinit(allocr);
-  try std.testing.expectEqual(2, (try expr.checkMatch("ab")).pos);
-  try std.testing.expectEqual(3, (try expr.checkMatch("aab")).pos);
-  try std.testing.expectEqual(2, (try expr.checkMatch("aba")).pos);
-  try std.testing.expectEqual(2, (try expr.checkMatch("aad")).pos);
-  try std.testing.expectEqual(0, (try expr.checkMatch("daa")).pos);
+  try std.testing.expectEqual(2, (try expr.checkMatch("ab", .{})).pos);
+  try std.testing.expectEqual(3, (try expr.checkMatch("aab", .{})).pos);
+  try std.testing.expectEqual(2, (try expr.checkMatch("aba", .{})).pos);
+  try std.testing.expectEqual(2, (try expr.checkMatch("aad", .{})).pos);
+  try std.testing.expectEqual(0, (try expr.checkMatch("daa", .{})).pos);
+}
+
+test "group zero or more" {
+  var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+  const allocr = gpa.allocator();
+  var expr = Expr.create(allocr, "(ab)*c").asOpt().?;
+  defer expr.deinit(allocr);
+  try std.testing.expectEqual(1, (try expr.checkMatch("c", .{})).pos);
+  try std.testing.expectEqual(3, (try expr.checkMatch("abc", .{})).pos);
+  try std.testing.expectEqual(5, (try expr.checkMatch("ababc", .{})).pos);
+  try std.testing.expectEqual(0, (try expr.checkMatch("xab", .{})).pos);
 }
 
 test "simple optional" {
@@ -402,10 +375,72 @@ test "simple optional" {
   const allocr = gpa.allocator();
   var expr = Expr.create(allocr, "a?b").asOpt().?;
   defer expr.deinit(allocr);
-  try std.testing.expectEqual(2, (try expr.checkMatch("ab")).pos);
-  try std.testing.expectEqual(2, (try expr.checkMatch("aba")).pos);
-  try std.testing.expectEqual(0, (try expr.checkMatch("db")).pos);
-  try std.testing.expectEqual(1, (try expr.checkMatch("b")).pos);
+  try std.testing.expectEqual(2, (try expr.checkMatch("ab", .{})).pos);
+  try std.testing.expectEqual(2, (try expr.checkMatch("aba", .{})).pos);
+  try std.testing.expectEqual(0, (try expr.checkMatch("db", .{})).pos);
+  try std.testing.expectEqual(1, (try expr.checkMatch("b", .{})).pos);
+}
+
+test "group optional" {
+  var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+  const allocr = gpa.allocator();
+  var expr = Expr.create(allocr, "(ab)?c").asOpt().?;
+  defer expr.deinit(allocr);
+  try std.testing.expectEqual(3, (try expr.checkMatch("abc", .{})).pos);
+  try std.testing.expectEqual(1, (try expr.checkMatch("c", .{})).pos);
+  try std.testing.expectEqual(0, (try expr.checkMatch("a", .{})).pos);
+}
+
+test "simple range" {
+  var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+  const allocr = gpa.allocator();
+  var expr = Expr.create(allocr, "[a-z]+").asOpt().?;
+  defer expr.deinit(allocr);
+  try std.testing.expectEqual(2, (try expr.checkMatch("ab0", .{})).pos);
+  try std.testing.expectEqual(3, (try expr.checkMatch("aba0", .{})).pos);
+  try std.testing.expectEqual(2, (try expr.checkMatch("db0", .{})).pos);
+  try std.testing.expectEqual(1, (try expr.checkMatch("x0", .{})).pos);
+}
+
+test "group" {
+  var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+  const allocr = gpa.allocator();
+  var expr = Expr.create(allocr, "([a-z]*)([A-Z]+)").asOpt().?;
+  defer expr.deinit(allocr);
+  var groups = [1]MatchGroup{.{}} ** 2;
+  const opts: MatchOptions = .{ .group_out = &groups, };
+  try std.testing.expectEqual(4, (try expr.checkMatch("abAB0", opts)).pos);
+  try std.testing.expectEqual(0, groups[0].start);
+  try std.testing.expectEqual(2, groups[0].end);
+  try std.testing.expectEqual(2, groups[1].start);
+  try std.testing.expectEqual(4, groups[1].end);
+  try std.testing.expectEqual(2, (try expr.checkMatch("AB0", opts)).pos);
+  try std.testing.expectEqual(0, groups[0].start);
+  try std.testing.expectEqual(0, groups[0].end);
+  try std.testing.expectEqual(0, groups[1].start);
+  try std.testing.expectEqual(2, groups[1].end);
+}
+
+test "simple alternate" {
+  var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+  const allocr = gpa.allocator();
+  var expr = Expr.create(allocr, "[a-z]+|[A-Z]+").asOpt().?;
+  defer expr.deinit(allocr);
+  try std.testing.expectEqual(2, (try expr.checkMatch("ab", .{})).pos);
+  try std.testing.expectEqual(2, (try expr.checkMatch("AB", .{})).pos);
+  try std.testing.expectEqual(1, (try expr.checkMatch("aB", .{})).pos);
+  try std.testing.expectEqual(0, (try expr.checkMatch("00", .{})).pos);
+}
+
+test "group alternate" {
+  var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+  const allocr = gpa.allocator();
+  var expr = Expr.create(allocr, "(a|z)(b|c)").asOpt().?;
+  defer expr.deinit(allocr);
+  try std.testing.expectEqual(2, (try expr.checkMatch("ab", .{})).pos);
+  try std.testing.expectEqual(1, (try expr.checkMatch("az", .{})).pos);
+  try std.testing.expectEqual(2, (try expr.checkMatch("zc", .{})).pos);
+  try std.testing.expectEqual(0, (try expr.checkMatch("c", .{})).pos);
 }
 
 test "find (1st pat el is string)" {
