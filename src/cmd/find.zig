@@ -11,6 +11,8 @@ const builtin = @import("builtin");
 const kbd = @import("../kbd.zig");
 const editor = @import("../editor.zig");
 
+const Expr = @import("../patterns/expr.zig");
+
 pub fn onUnset(self: *editor.Editor, next_state: editor.State) void {
   if (next_state == .text) {
     self.text_handler.markers = null;
@@ -23,49 +25,95 @@ fn findForwards(self: *editor.Editor, cmd_data: *editor.CommandData) !void {
     return;
   }
   try self.text_handler.flushGapBuffer(self);
-  const opt_pos = std.mem.indexOfPos(
-    u8,
-    text_handler.buffer.items,
-    text_handler.calcOffsetFromCursor() + 1,
-    cmd_data.cmdinp.items,
-  );
+  
+  const offset = if (self.text_handler.markers) |*markers|
+    (markers.end)
+  else
+    (text_handler.calcOffsetFromCursor());
+  
+  if (offset >= text_handler.buffer.items.len) {
+    cmd_data.replacePromptOverlay(self, .{ .static = PROMPT_NOT_FOUND, });
+    return;
+  }
+  
+  var opt_pos: ?usize = null;
+  var opt_end: ?usize = null;
+  if (cmd_data.args != null and cmd_data.args.?.find.regex != null) {
+    const regex = cmd_data.args.?.find.regex.?;
+    if (try regex.find(text_handler.buffer.items[offset..])) |find_result| {
+      opt_pos = offset + find_result.start;
+      opt_end = offset + find_result.end;
+    }
+  } else {
+    opt_pos = std.mem.indexOfPos(
+      u8,
+      text_handler.buffer.items,
+      offset,
+      cmd_data.cmdinp.items,
+    );
+    if (opt_pos) |pos| {
+      opt_end = pos + cmd_data.cmdinp.items.len;
+    }
+  }
+  
   if (opt_pos) |pos| {
     try text_handler.gotoPos(self, @intCast(pos));
     self.text_handler.markers = .{
       .start = @intCast(pos),
-      .end = @intCast(pos + cmd_data.cmdinp.items.len),
+      .end = @intCast(opt_end.?),
       .start_cur = self.text_handler.cursor,
     };
   } else {
-    cmd_data.promptoverlay = .{ .static = PROMPT_NOT_FOUND, };
+    cmd_data.replacePromptOverlay(self, .{ .static = PROMPT_NOT_FOUND, });
   }
 }
 
-fn findBackwards(self: *editor.Editor, cmd_data: *editor.CommandData) !void {
+fn findBackwards(self: *editor.Editor, cmd_data: *editor.CommandData) !void { 
   var text_handler = &self.text_handler;
   if (cmd_data.cmdinp.items.len == 0) {
     return;
   }
-  const offset = text_handler.calcOffsetFromCursor();
+  
+  const offset = if (self.text_handler.markers) |*markers|
+    (markers.start)
+  else
+    (text_handler.calcOffsetFromCursor());
+  
   if (offset == 0) {
-    cmd_data.promptoverlay = .{ .static = PROMPT_NOT_FOUND, };
+    cmd_data.replacePromptOverlay(self, .{ .static = PROMPT_NOT_FOUND, });
     return;
   }
+  
   try self.text_handler.flushGapBuffer(self);
-  const opt_pos = std.mem.lastIndexOf(
-    u8,
-    text_handler.buffer.items[0..offset],
-    cmd_data.cmdinp.items,
-  );
+  
+  var opt_pos: ?usize = null;
+  var opt_end: ?usize = null;
+  if (cmd_data.args != null and cmd_data.args.?.find.regex != null) {
+    const regex = cmd_data.args.?.find.regex.?;
+    if (try regex.findBackwards(text_handler.buffer.items[0..offset])) |find_result| {
+      opt_pos = find_result.start;
+      opt_end = find_result.end;
+    }
+  } else {
+    opt_pos = std.mem.lastIndexOf(
+      u8,
+      text_handler.buffer.items[0..offset],
+      cmd_data.cmdinp.items,
+    );
+    if (opt_pos) |pos| {
+      opt_end = pos + cmd_data.cmdinp.items.len;
+    }
+  }
+  
   if (opt_pos) |pos| {
     try text_handler.gotoPos(self, @intCast(pos));
     self.text_handler.markers = .{
       .start = @intCast(pos),
-      .end = @intCast(pos + cmd_data.cmdinp.items.len),
+      .end = @intCast(opt_end.?),
       .start_cur = self.text_handler.cursor,
     };
   } else {
-    cmd_data.promptoverlay = .{ .static = PROMPT_NOT_FOUND, };
+    cmd_data.replacePromptOverlay(self, .{ .static = PROMPT_NOT_FOUND, });
   }
 }
 
@@ -80,7 +128,7 @@ fn toBlockMode(self: *editor.Editor, cmd_data: *editor.CommandData) !void {
     self.setState(editor.State.mark);
     self.needs_redraw = true;
   } else {
-    cmd_data.promptoverlay = .{ .static = PROMPT_NOTHING_MARKED, };
+    cmd_data.replacePromptOverlay(self, .{ .static = PROMPT_NOTHING_MARKED, });
   }
 }
 
@@ -91,7 +139,7 @@ fn toReplace(self: *editor.Editor, cmd_data: *editor.CommandData) void {
       .fns = editor.Commands.Replace.Fns,
     });
   } else {
-    cmd_data.promptoverlay = .{ .static = PROMPT_NOTHING_MARKED, };
+    cmd_data.replacePromptOverlay(self, .{ .static = PROMPT_NOTHING_MARKED, });
   }
 }
 
@@ -131,6 +179,27 @@ pub fn onKey(self: *editor.Editor, keysym: kbd.Keysym) !bool {
   else if (keysym.ctrl_key and keysym.isChar('h')) {
     try Cmd.toReplaceAll(self, cmd_data);
     self.needs_update_cursor = true;
+    return true;
+  }
+  else if (keysym.ctrl_key and keysym.isChar('e')) {
+    switch (Expr.create(self.allocr(), cmd_data.cmdinp.items)) {
+      .ok => |expr| {
+        cmd_data.replaceArgs(self, .{ .find = .{
+          .regex = expr,
+        }, });
+        try Cmd.findForwards(self, cmd_data);
+      },
+      .err => |err| {
+        cmd_data.replacePromptOverlay(self, .{
+          .owned = try std.fmt.allocPrint(
+            self.allocr(),
+            "Invalid regex (ERR: {}@{})",
+            .{err.type, err.pos}
+          ),
+        });
+        self.needs_update_cursor = true;
+      },
+    }
     return true;
   }
   return false;

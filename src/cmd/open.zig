@@ -22,24 +22,24 @@ pub fn onInputtedGeneric(self: *editor.Editor) !?std.fs.File {
         .read = true,
         .truncate = false
       }) catch |create_err| {
-        cmd_data.promptoverlay = .{
+        cmd_data.replacePromptOverlay(self, .{
           .owned = try std.fmt.allocPrint(
             self.allocr(),
             "Unable to create new file! (ERR: {})",
             .{create_err}
           ),
-        };
+        });
         return null;
       };
     },
     else => {
-      cmd_data.promptoverlay = .{
+      cmd_data.replacePromptOverlay(self, .{
         .owned = try std.fmt.allocPrint(
           self.allocr(),
           "Unable to open file! (ERR: {})",
           .{err}
         ),
-      };
+      });
       return null;
     },
   };
@@ -48,13 +48,13 @@ pub fn onInputtedGeneric(self: *editor.Editor) !?std.fs.File {
       .mode = .read_write,
       .lock = .shared,
     }) catch |err| {
-      cmd_data.promptoverlay = .{
+      cmd_data.replacePromptOverlay(self, .{
         .owned = try std.fmt.allocPrint(
           self.allocr(),
           "Unable to open file! (ERR: {})",
           .{err}
         ),
-      };
+      });
       return null;
     };
   }

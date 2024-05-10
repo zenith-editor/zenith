@@ -12,6 +12,7 @@ const kbd = @import("./kbd.zig");
 const str = @import("./str.zig");
 const text = @import("./text.zig");
 const sig = @import("./sig.zig");
+const Expr = @import("./patterns/expr.zig");
 
 pub const State = enum {
   text,
@@ -67,12 +68,22 @@ pub const CommandData = struct {
       needle: []const u8,
     };
     
+    pub const Find = struct {
+      regex: ?Expr = null,
+    };
+    
     replace_all: ReplaceAll,
+    find: Find,
     
     fn deinit(self: *Args, allocr: std.mem.Allocator) void {
       switch (self.*) {
         .replace_all => |*e| {
           allocr.free(e.needle);
+        },
+        .find => |*e| {
+          if (e.regex) |*regex| {
+            regex.deinit(allocr);
+          }
         },
       }
     }
@@ -109,6 +120,20 @@ pub const CommandData = struct {
   pub fn replace(self: *CommandData, E: *Editor, new_cmd_data: CommandData) void {
     self.deinit(E);
     self.* = new_cmd_data;
+  }
+  
+  pub fn replaceArgs(self: *CommandData, E: *Editor, new_args: Args) void {
+    if (self.args != null) {
+      self.args.?.deinit(E.allocr());
+    }
+    self.args = new_args;
+  }
+  
+  pub fn replacePromptOverlay(self: *CommandData, E: *Editor, promptoverlay: ?str.MaybeOwnedSlice) void {
+    if (self.promptoverlay != null) {
+      self.promptoverlay.?.deinit(E.allocr());
+    }
+    self.promptoverlay = promptoverlay;
   }
 };
 

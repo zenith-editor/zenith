@@ -75,6 +75,7 @@ Shortcuts such as ^g, ^f takes you to command mode.
  * `^r` to replace currently selected 
  * `^h` to replace all instances
  * `^b` to send to block mode
+ * `^e` to search with regex
 
 ## License
 
