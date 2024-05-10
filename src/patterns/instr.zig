@@ -24,6 +24,8 @@ pub const Instr = union(enum) {
   any: void,
   /// Tries to consume a char
   char: u32,
+  /// Tries to consume any char, except for specified one
+  char_inverse: u32,
   /// Tries to consume a char in range
   range: []Range,
   /// Tries to consume a char not in range

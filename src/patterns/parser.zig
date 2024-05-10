@@ -12,6 +12,7 @@ const Instr = @import("./instr.zig").Instr;
 
 in_pattern: []const u8,
 str_idx: usize = 0,
+flags: Expr.Flags,
 
 fn findLastSimpleExpr(expr: *Expr) ?usize {
   if (expr.instrs.items.len == 0) {
@@ -215,9 +216,17 @@ fn parseGroup(
         }
         
         if (range_inverse) {
-          try expr.instrs.append(allocr, .{
-            .range_inverse = try ranges.toOwnedSlice(allocr),
-          });
+          if (ranges.items.len == 1 and ranges.items[0].from == ranges.items[0].to) {
+            try expr.instrs.append(allocr, .{
+              .char_inverse = ranges.items[0].from,
+            });
+            ranges.deinit(allocr);
+            ranges = undefined;
+          } else {
+            try expr.instrs.append(allocr, .{
+              .range_inverse = try ranges.toOwnedSlice(allocr),
+            });
+          }
         } else {
           try expr.instrs.append(allocr, .{
             .range = try ranges.toOwnedSlice(allocr),
@@ -322,7 +331,13 @@ fn parseGroup(
         escaped = true;
       },
       '.' => {
-        try expr.instrs.append(allocr, .{ .any = {}, });
+        if (self.flags.multiline) {
+          try expr.instrs.append(allocr, .{ .any = {}, });
+        } else {
+          try expr.instrs.append(
+            allocr,
+            .{ .char_inverse = std.ascii.control_code.cr, });
+        }
       },
       else => {
         try expr.instrs.append(allocr, .{ .char = char, });
