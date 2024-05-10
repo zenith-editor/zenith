@@ -1,3 +1,8 @@
+//
+// Copyright (c) 2024 T. M. <pm2mtr@gmail.com>.
+//
+// This work is licensed under the BSD 3-Clause License.
+//
 const std = @import("std");
 
 pub const Instr = union(enum) {
@@ -6,20 +11,29 @@ pub const Instr = union(enum) {
     to: u32,
   };
   
+  pub const Split = struct {
+    a: usize,
+    b: usize,
+  };
+  
+  /// Abort. Functions as a filler instruction for codegen.
+  abort: void,
   /// Finish matching
   matched: void,
-  /// Tries to consume a char, backtracks if fails
+  /// Tries to consume any char
+  any: void,
+  /// Tries to consume a char
   char: u32,
-  /// Tries to consume a char in range, backtracks if fails
+  /// Tries to consume a char in range
   range: []Range,
+  /// Tries to consume a char not in range
+  range_inverse: []Range,
   /// Tries to consume a string, exit if fails
   string: []u8,
   /// Sets the program counter
   jmp: usize,
-  /// Pushes backtrack target to stack
-  backtrack_target: usize,
-  /// Consumes backtrack target from the top of the stack
-  consume_backtrack: void,
+  /// Splits execution
+  split: Split,
   /// Record start of the captured slice into specified group
   group_start: usize,
   /// Record end of the captured slice into specified group
@@ -35,7 +49,7 @@ pub const Instr = union(enum) {
   
   pub fn isSimpleMatcher(self: *const Instr) bool {
     return switch(self.*) {
-      .char, .range => true,
+      .char, .range, .range_inverse => true,
       else => false,
     };
   }
@@ -54,23 +68,22 @@ pub const Instr = union(enum) {
     };
   }
   
-  pub fn getPcPtr(self: *Instr) ?*usize {
-    return switch(self.*) {
-      .jmp => |*pc| pc,
-      .backtrack_target => |*pc| pc,
-      else => null,
-    };
-  }
-  
-  pub fn incrPc(self: *Instr, shifted: usize) void {
-    if (self.getPcPtr()) |pc| {
-      pc.* += shifted;
-    }
-  }
-  
-  pub fn decrPc(self: *Instr, shifted: usize) void {
-    if (self.getPcPtr()) |pc| {
-      pc.* -= shifted;
+  pub fn incrPc(self: *Instr, shifted: usize, from_pc: usize) void {
+    switch(self.*) {
+      .jmp => |*pc| {
+        if (pc.* >= from_pc) {
+          pc.* += shifted;
+        }
+      },
+      .split => |*split| {
+        if (split.a >= from_pc) {
+          split.a += shifted;
+        }
+        if (split.b >= from_pc) {
+          split.b += shifted;
+        }
+      },
+      else => {},
     }
   }
 };

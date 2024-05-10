@@ -18,7 +18,7 @@ pub fn build(b: *std.Build) void {
   ) orelse false;
   options.addOption(bool, "dbg_show_gap_buf",
     opt_dbg_show_gap_buf);
-  
+
   const target = b.standardTargetOptions(.{});
   const optimize = b.standardOptimizeOption(.{});
 

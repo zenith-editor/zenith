@@ -1,6 +1,18 @@
+//
+// Copyright (c) 2024 T. M. <pm2mtr@gmail.com>.
+//
+// This work is licensed under the BSD 3-Clause License.
+//
+
+// This file implements a virtual machine used to execute regular expressions
+// as described in the following article:
+//
+//   https://swtch.com/~rsc/regexp/regexp2.html
+
 const Expr = @This();
 
 const std = @import("std");
+const builtin = @import("builtin");
 const Instr = @import("./instr.zig").Instr;
 const Parser = @import("./parser.zig");
 
@@ -22,10 +34,10 @@ pub const CreateResult = union(enum) {
   ok: Expr,
   err: CreateError,
   
-  fn asOpt(self: CreateResult) ?Expr {
+  fn asErr(self: CreateResult) !Expr {
     switch(self) {
       .ok => |expr| { return expr; },
-      .err => { return null; },
+      .err => |err| { return err.type; },
     }
   }
 };
@@ -33,7 +45,7 @@ pub const CreateResult = union(enum) {
 instrs: std.ArrayListUnmanaged(Instr),
 num_groups: usize,
 
-fn debugPrint(self: *const Expr) void {
+pub fn debugPrint(self: *const Expr) void {
   for (0..self.instrs.items.len) |i| {
     std.debug.print("{} {}\n", .{i, self.instrs.items[i]});
   }
@@ -52,8 +64,10 @@ pub fn create(allocr: std.mem.Allocator, in_pattern: []const u8) CreateResult {
       .err = .{ .type = error.EmptyRegex, .pos = 0, },
     };
   }
-  var parser: Parser = .{};
-  if (parser.parse(allocr, in_pattern)) |expr| {
+  var parser: Parser = .{
+    .in_pattern = in_pattern,
+  };
+  if (parser.parse(allocr)) |expr| {
     return .{ .ok = expr, };
   } else |err| {
     switch (err) {
@@ -92,68 +106,75 @@ pub fn create(allocr: std.mem.Allocator, in_pattern: []const u8) CreateResult {
 }
 
 const VM = struct {
-  const Backtrack = struct {
+  const Thread = struct {
     str_idx: usize,
     pc: usize,
+    fully_matched: bool = false,
   };
   
   haystack: []const u8,
   instrs: []const Instr,
   options: *const MatchOptions,
-  pc: usize = 0,
-  str_idx: usize = 0,
-  backtrack_stack: std.BoundedArray(Backtrack, 128) = .{},
-  fully_matched: bool = false,
+  thread_stack: std.BoundedArray(Thread, 128) = .{},
   
-  fn stopOrBacktrack(self: *VM) bool {
-    if (self.backtrack_stack.popOrNull()) |bt| {
-      // std.debug.print("BT\n",.{});
-      self.pc = bt.pc;
-      self.str_idx = bt.str_idx;
-      return true;
-    }
-    return false;
-  }
-  
-  fn nextInstr(self: *VM) !bool {
-    // std.debug.print(">>> {} {}\n", .{self.pc,self.instrs[self.pc]});
-    switch (self.instrs[self.pc]) {
+  fn nextInstr(self: *VM, thread: *Thread) !bool {
+    // std.debug.print("{s}\n", .{self.haystack[thread.str_idx..]});
+    // std.debug.print(">>> {} {}\n", .{thread.pc,self.instrs[thread.pc]});
+    // std.debug.print("{any}\n", .{self.thread_stack.slice()});
+    switch (self.instrs[thread.pc]) {
+      .abort => {
+        @panic("abort opcode reached");
+      },
       .matched => {
-        self.fully_matched = true;
+        thread.fully_matched = true;
         return false;
       },
-      .char => |char1| {
-        if (self.str_idx >= self.haystack.len) {
-          return self.stopOrBacktrack();
+      .any => {
+        if (thread.str_idx >= self.haystack.len) {
+          return false;
         }
         const seqlen = try std.unicode.utf8ByteSequenceLength(
-          self.haystack[self.str_idx]
+          self.haystack[thread.str_idx]
         );
-        if ((self.haystack.len - self.str_idx) < seqlen) {
+        if ((self.haystack.len - thread.str_idx) < seqlen) {
+          return error.Utf8ExpectedContinuation;
+        }
+        thread.pc += 1;
+        thread.str_idx += seqlen;
+        return true;
+      },
+      .char => |char1| {
+        if (thread.str_idx >= self.haystack.len) {
+          return false;
+        }
+        const seqlen = try std.unicode.utf8ByteSequenceLength(
+          self.haystack[thread.str_idx]
+        );
+        if ((self.haystack.len - thread.str_idx) < seqlen) {
           return error.Utf8ExpectedContinuation;
         }
         const char: u32 = try std.unicode.utf8Decode(
-          self.haystack[self.str_idx..(self.str_idx+seqlen)]
+          self.haystack[thread.str_idx..(thread.str_idx+seqlen)]
         );
         if (char != char1) {
-          return self.stopOrBacktrack();
+          return false;
         }
-        self.pc += 1;
-        self.str_idx += seqlen;
+        thread.pc += 1;
+        thread.str_idx += seqlen;
         return true;
       },
       .range => |ranges| {
-        if (self.str_idx >= self.haystack.len) {
-          return self.stopOrBacktrack();
+        if (thread.str_idx >= self.haystack.len) {
+          return false;
         }
         const seqlen = try std.unicode.utf8ByteSequenceLength(
-          self.haystack[self.str_idx]
+          self.haystack[thread.str_idx]
         );
-        if ((self.haystack.len - self.str_idx) < seqlen) {
+        if ((self.haystack.len - thread.str_idx) < seqlen) {
           return error.Utf8ExpectedContinuation;
         }
         const char: u32 = try std.unicode.utf8Decode(
-          self.haystack[self.str_idx..(self.str_idx+seqlen)]
+          self.haystack[thread.str_idx..(thread.str_idx+seqlen)]
         );
         var matches = false;
         for (ranges) |range| {
@@ -163,71 +184,106 @@ const VM = struct {
           }
         }
         if (!matches) {
-          return self.stopOrBacktrack();
+          return false;
         }
-        self.pc += 1;
-        self.str_idx += seqlen;
+        thread.pc += 1;
+        thread.str_idx += seqlen;
+        return true;
+      },
+      .range_inverse => |ranges| {
+        if (thread.str_idx >= self.haystack.len) {
+          return false;
+        }
+        const seqlen = try std.unicode.utf8ByteSequenceLength(
+          self.haystack[thread.str_idx]
+        );
+        if ((self.haystack.len - thread.str_idx) < seqlen) {
+          return error.Utf8ExpectedContinuation;
+        }
+        const char: u32 = try std.unicode.utf8Decode(
+          self.haystack[thread.str_idx..(thread.str_idx+seqlen)]
+        );
+        var matches = false;
+        for (ranges) |range| {
+          if (range.from <= char and range.to >= char) {
+            matches = true;
+            break;
+          }
+        }
+        if (matches) {
+          return false;
+        }
+        thread.pc += 1;
+        thread.str_idx += seqlen;
         return true;
       },
       .string => |string| {
         // string is only here for optimizing find calls
-        std.debug.assert(self.pc == 0);
+        std.debug.assert(thread.pc == 0);
         
         for (0..string.len) |i| {
-          if (self.str_idx == self.haystack.len) {
+          if (thread.str_idx == self.haystack.len) {
             return false;
           }
-          if (self.haystack[self.str_idx] == string[i]) {
-            self.str_idx += 1;
+          if (self.haystack[thread.str_idx] == string[i]) {
+            thread.str_idx += 1;
           } else {
             return false;
           }
         }
         
-        self.pc += 1;
+        thread.pc += 1;
         return true;
       },
       .jmp => |target| {
-        self.pc = target;
+        thread.pc = target;
         return true;
       },
-      .backtrack_target => |backtrack_target| {
-        self.backtrack_stack.append(.{
-          .pc = backtrack_target,
-          .str_idx = self.str_idx,
+      .split => |split| {
+        self.thread_stack.append(.{
+          .pc = split.b,
+          .str_idx = thread.str_idx,
         }) catch return error.BacktrackOverflow;
-        self.pc += 1;
-        return true;
-      },
-      .consume_backtrack => {
-        _ = self.backtrack_stack.pop();
-        self.pc += 1;
+        thread.pc = split.a;
         return true;
       },
       .group_start => |group_id| {
         if (self.options.group_out) |group_out| {
-          group_out[group_id].start = self.str_idx;
+          group_out[group_id].start = thread.str_idx;
         }
-        self.pc += 1;
+        thread.pc += 1;
         return true;
       },
       .group_end => |group_id| {
         if (self.options.group_out) |group_out| {
-          group_out[group_id].end = self.str_idx;
+          group_out[group_id].end = thread.str_idx;
         }
-        self.pc += 1;
+        thread.pc += 1;
         return true;
       },
     }
   }
   
   fn exec(self: *VM) !MatchResult {
-    // std.debug.print("---\n",.{});
-    while (try self.nextInstr()) {}
-    return .{
-      .pos = self.str_idx,
-      .fully_matched = self.fully_matched,
-    };
+    self.thread_stack.append(.{
+      .str_idx = 0,
+      .pc = 0,
+    }) catch unreachable;
+    while (self.thread_stack.len > 0) {
+      const thread_top: *Thread = &self.thread_stack.buffer[self.thread_stack.len - 1];
+      const thread_exec = try self.nextInstr(thread_top);
+      if (!thread_exec) {
+        const exitted_thread = self.thread_stack.pop();
+        if (self.thread_stack.len == 0 or exitted_thread.fully_matched) {
+          return .{
+            .pos = exitted_thread.str_idx,
+            .fully_matched = exitted_thread.fully_matched,
+          };
+        }
+      }
+      // _ = std.io.getStdIn().reader().readByte() catch {};
+    }
+    unreachable;
   }
 };
 
@@ -319,16 +375,25 @@ pub fn find(self: *const Expr, haystack: []const u8) !?FindResult {
 test "simple one" {
   var gpa = std.heap.GeneralPurposeAllocator(.{}){};
   const allocr = gpa.allocator();
-  var expr = Expr.create(allocr, "asdf").asOpt().?;
+  var expr = try Expr.create(allocr, "asdf").asErr();
   defer expr.deinit(allocr);
   try std.testing.expectEqual(4, (try expr.checkMatch("asdf", .{})).pos);
+  try std.testing.expectEqual(2, (try expr.checkMatch("as", .{})).pos);
+}
+
+test "any" {
+  var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+  const allocr = gpa.allocator();
+  var expr = try Expr.create(allocr, "..").asErr();
+  defer expr.deinit(allocr);
+  try std.testing.expectEqual(1, (try expr.checkMatch("a", .{})).pos);
   try std.testing.expectEqual(2, (try expr.checkMatch("as", .{})).pos);
 }
 
 test "simple more than one" {
   var gpa = std.heap.GeneralPurposeAllocator(.{}){};
   const allocr = gpa.allocator();
-  var expr = Expr.create(allocr, "a+").asOpt().?;
+  var expr = try Expr.create(allocr, "a+").asErr();
   defer expr.deinit(allocr);
   try std.testing.expectEqual(1, (try expr.checkMatch("a", .{})).pos);
   try std.testing.expectEqual(2, (try expr.checkMatch("aa", .{})).pos);
@@ -340,7 +405,7 @@ test "simple more than one" {
 test "group more than one" {
   var gpa = std.heap.GeneralPurposeAllocator(.{}){};
   const allocr = gpa.allocator();
-  var expr = Expr.create(allocr, "(ab)+").asOpt().?;
+  var expr = try Expr.create(allocr, "(ab)+").asErr();
   defer expr.deinit(allocr);
   try std.testing.expectEqual(2, (try expr.checkMatch("ab", .{})).pos);
   try std.testing.expectEqual(4, (try expr.checkMatch("abab", .{})).pos);
@@ -350,7 +415,7 @@ test "group more than one" {
 test "simple zero or more" {
   var gpa = std.heap.GeneralPurposeAllocator(.{}){};
   const allocr = gpa.allocator();
-  var expr = Expr.create(allocr, "a*b").asOpt().?;
+  var expr = try Expr.create(allocr, "a*b").asErr();
   defer expr.deinit(allocr);
   try std.testing.expectEqual(2, (try expr.checkMatch("ab", .{})).pos);
   try std.testing.expectEqual(3, (try expr.checkMatch("aab", .{})).pos);
@@ -362,7 +427,7 @@ test "simple zero or more" {
 test "group zero or more" {
   var gpa = std.heap.GeneralPurposeAllocator(.{}){};
   const allocr = gpa.allocator();
-  var expr = Expr.create(allocr, "(ab)*c").asOpt().?;
+  var expr = try Expr.create(allocr, "(ab)*c").asErr();
   defer expr.deinit(allocr);
   try std.testing.expectEqual(1, (try expr.checkMatch("c", .{})).pos);
   try std.testing.expectEqual(3, (try expr.checkMatch("abc", .{})).pos);
@@ -373,7 +438,7 @@ test "group zero or more" {
 test "simple optional" {
   var gpa = std.heap.GeneralPurposeAllocator(.{}){};
   const allocr = gpa.allocator();
-  var expr = Expr.create(allocr, "a?b").asOpt().?;
+  var expr = try Expr.create(allocr, "a?b").asErr();
   defer expr.deinit(allocr);
   try std.testing.expectEqual(2, (try expr.checkMatch("ab", .{})).pos);
   try std.testing.expectEqual(2, (try expr.checkMatch("aba", .{})).pos);
@@ -384,17 +449,17 @@ test "simple optional" {
 test "group optional" {
   var gpa = std.heap.GeneralPurposeAllocator(.{}){};
   const allocr = gpa.allocator();
-  var expr = Expr.create(allocr, "(ab)?c").asOpt().?;
+  var expr = try Expr.create(allocr, "(ab)?c").asErr();
   defer expr.deinit(allocr);
   try std.testing.expectEqual(3, (try expr.checkMatch("abc", .{})).pos);
   try std.testing.expectEqual(1, (try expr.checkMatch("c", .{})).pos);
-  try std.testing.expectEqual(0, (try expr.checkMatch("a", .{})).pos);
+  try std.testing.expectEqual(0, (try expr.checkMatch("b", .{})).pos);
 }
 
 test "simple range" {
   var gpa = std.heap.GeneralPurposeAllocator(.{}){};
   const allocr = gpa.allocator();
-  var expr = Expr.create(allocr, "[a-z]+").asOpt().?;
+  var expr = try Expr.create(allocr, "[a-z]+").asErr();
   defer expr.deinit(allocr);
   try std.testing.expectEqual(2, (try expr.checkMatch("ab0", .{})).pos);
   try std.testing.expectEqual(3, (try expr.checkMatch("aba0", .{})).pos);
@@ -402,10 +467,19 @@ test "simple range" {
   try std.testing.expectEqual(1, (try expr.checkMatch("x0", .{})).pos);
 }
 
+test "simple range inverse" {
+  var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+  const allocr = gpa.allocator();
+  var expr = try Expr.create(allocr, "[^b]").asErr();
+  defer expr.deinit(allocr);
+  try std.testing.expectEqual(1, (try expr.checkMatch("0", .{})).pos);
+  try std.testing.expectEqual(0, (try expr.checkMatch("b", .{})).pos);
+}
+
 test "group" {
   var gpa = std.heap.GeneralPurposeAllocator(.{}){};
   const allocr = gpa.allocator();
-  var expr = Expr.create(allocr, "([a-z]*)([A-Z]+)").asOpt().?;
+  var expr = try Expr.create(allocr, "([a-z]*)([A-Z]+)").asErr();
   defer expr.deinit(allocr);
   var groups = [1]MatchGroup{.{}} ** 2;
   const opts: MatchOptions = .{ .group_out = &groups, };
@@ -424,7 +498,7 @@ test "group" {
 test "simple alternate" {
   var gpa = std.heap.GeneralPurposeAllocator(.{}){};
   const allocr = gpa.allocator();
-  var expr = Expr.create(allocr, "[a-z]+|[A-Z]+").asOpt().?;
+  var expr = try Expr.create(allocr, "[a-z]+|[A-Z]+").asErr();
   defer expr.deinit(allocr);
   try std.testing.expectEqual(2, (try expr.checkMatch("ab", .{})).pos);
   try std.testing.expectEqual(2, (try expr.checkMatch("AB", .{})).pos);
@@ -435,7 +509,7 @@ test "simple alternate" {
 test "group alternate" {
   var gpa = std.heap.GeneralPurposeAllocator(.{}){};
   const allocr = gpa.allocator();
-  var expr = Expr.create(allocr, "(a|z)(b|c)").asOpt().?;
+  var expr = try Expr.create(allocr, "(a|z)(b|c)").asErr();
   defer expr.deinit(allocr);
   try std.testing.expectEqual(2, (try expr.checkMatch("ab", .{})).pos);
   try std.testing.expectEqual(1, (try expr.checkMatch("az", .{})).pos);
@@ -443,10 +517,32 @@ test "group alternate" {
   try std.testing.expectEqual(0, (try expr.checkMatch("c", .{})).pos);
 }
 
+test "integrate: string" {
+  var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+  const allocr = gpa.allocator();
+  var expr = try Expr.create(
+    allocr,
+    \\"([^"]|\\.)*"
+  ).asErr();
+  defer expr.deinit(allocr);
+  try std.testing.expectEqual(3, (try expr.checkMatch(
+    \\"a"
+  , .{})).pos);
+  try std.testing.expectEqual(4, (try expr.checkMatch(
+    \\"\\"
+  , .{})).pos);
+  try std.testing.expectEqual(4, (try expr.checkMatch(
+    \\"ab"
+  , .{})).pos);
+  try std.testing.expectEqual(6, (try expr.checkMatch(
+    \\"\"\""
+  , .{})).pos);
+}
+
 test "find (1st pat el is string)" {
   var gpa = std.heap.GeneralPurposeAllocator(.{}){};
   const allocr = gpa.allocator();
-  var expr = Expr.create(allocr, "asdf?b").asOpt().?;
+  var expr = try Expr.create(allocr, "asdf?b").asErr();
   defer expr.deinit(allocr);
   {
     const res = (try expr.find("000asdfbasdfb")).?;
@@ -463,7 +559,7 @@ test "find (1st pat el is string)" {
 test "find (1st pat el is char)" {
   var gpa = std.heap.GeneralPurposeAllocator(.{}){};
   const allocr = gpa.allocator();
-  var expr = Expr.create(allocr, "x+asdf?b").asOpt().?;
+  var expr = try Expr.create(allocr, "x+asdf?b").asErr();
   defer expr.deinit(allocr);
   {
     const res = (try expr.find("000xxxasdfbasdfb")).?;

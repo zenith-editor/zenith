@@ -1,3 +1,8 @@
+//
+// Copyright (c) 2024 T. M. <pm2mtr@gmail.com>.
+//
+// This work is licensed under the BSD 3-Clause License.
+//
 const std = @import("std");
 const Expr = @import("./expr.zig");
 const Instr = @import("./instr.zig").Instr;

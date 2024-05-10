@@ -1,3 +1,8 @@
+//
+// Copyright (c) 2024 T. M. <pm2mtr@gmail.com>.
+//
+// This work is licensed under the BSD 3-Clause License.
+//
 const Self = @This();
 
 const std = @import("std");
@@ -5,109 +10,120 @@ const optimizer = @import("./optimizer.zig");
 const Expr = @import("./expr.zig");
 const Instr = @import("./instr.zig").Instr;
 
-const GroupData = struct {
-  id: usize,
-  instr_start: usize, // including group_start op
-};
-
+in_pattern: []const u8,
 str_idx: usize = 0,
 
-fn findLastSimpleExprOrGroup(expr: *Expr) ?usize {
+fn findLastSimpleExpr(expr: *Expr) ?usize {
   if (expr.instrs.items.len == 0) {
     return null;
   }
   if (expr.instrs.items[expr.instrs.items.len - 1].isSimpleMatcher()) {
     return expr.instrs.items.len - 1;
   }
-  return switch (expr.instrs.items[expr.instrs.items.len - 1]) {
-    .group_end => |group_id| group_id,
-    else => null,
-  };
+  return null;
 }
 
-pub fn parse(
+const QualifierCodegenInfo = struct {
+  expr_shift: usize,
+};
+
+fn genQualifier(
+  allocr: std.mem.Allocator,
+  char: u32,
+  expr: *Expr,
+  L0: usize,
+) !QualifierCodegenInfo {
+  switch (char) {
+    '+' => {
+      // (L0)    L0: <char>
+      // (len+0) split L0, L2
+      // (len+1) L2: ...
+      const L2 = expr.instrs.items.len + 1;
+      try expr.instrs.append(allocr, .{
+        // order of a and b matters here,
+        // having L0 execute first means that '+' performs a greedy match
+        .split = .{ .a = L2, .b = L0, },
+      });
+      return .{ .expr_shift = 0, };
+    },
+    '*' => {
+      // (L0)    L0: split L1, L2
+      // (L0+1)  L1: <char>
+      // len+0 accounts for new L0
+      // (len+1) jmp L0
+      // (len+2) L2: ...
+      const L1 = L0 + 1;
+      const L2 = expr.instrs.items.len + 2;
+      for (expr.instrs.items) |*instr| {
+        instr.incrPc(1, L0);
+      }
+      try expr.instrs.insert(allocr, L0, .{
+        .split = .{ .a = L1, .b = L2, },
+      });
+      try expr.instrs.append(allocr, .{
+        .jmp = L0,
+      });
+      return .{ .expr_shift = 1, };
+    },
+    '?' => {
+      // (L0)    L0: split L1, L2
+      // (L0+1)  L1: <char>
+      // len+0 accounts for new L0
+      // (len+1) L2: ...
+      const L1 = L0 + 1;
+      const L2 = expr.instrs.items.len + 1;
+      for (expr.instrs.items) |*instr| {
+        instr.incrPc(1, L0);
+      }
+      try expr.instrs.insert(allocr, L0, .{
+        .split = .{ .a = L1, .b = L2, },
+      });
+      return .{ .expr_shift = 1, };
+    },
+    else => @panic("Unknown qualifier"),
+  }
+}
+
+const GroupOrRoot = struct {
+  instr_start: usize,
+  group_id: ?usize,
+};
+
+fn parseGroup(
   self: *Self,
   allocr: std.mem.Allocator,
-  in_pattern: []const u8,
-) !Expr {
-  var expr: Expr = .{
-    .instrs = .{},
-    .num_groups = 0,
-  };
-  errdefer expr.deinit(allocr);
+  expr: *Expr,
+  group_or_root: GroupOrRoot,
+) !void {
+  var jmp_to_end_targets: std.ArrayListUnmanaged(usize) = .{};
+  defer jmp_to_end_targets.deinit(allocr);
   
-  var groups: std.ArrayListUnmanaged(GroupData) = .{};
-  defer groups.deinit(allocr);
+  var escaped = false;
   
-  const AltJmpTarget = struct {
-    jmp_instr: usize,
-    for_group: ?usize, // id or null if in parent group
-  };
-  var alternate_jmp_targets: std.ArrayListUnmanaged(AltJmpTarget) = .{};
-  defer alternate_jmp_targets.deinit(allocr);
-  
-  outer: while (self.str_idx < in_pattern.len) {
+  outer: while (self.str_idx < self.in_pattern.len) {
     const seqlen = try std.unicode.utf8ByteSequenceLength(
-      in_pattern[self.str_idx]
+      self.in_pattern[self.str_idx]
     );
-    if ((in_pattern.len - self.str_idx) < seqlen) {
+    if ((self.in_pattern.len - self.str_idx) < seqlen) {
       return error.Utf8ExpectedContinuation;
     }
     const char: u32 = try std.unicode.utf8Decode(
-      in_pattern[self.str_idx..(self.str_idx+seqlen)]
+      self.in_pattern[self.str_idx..(self.str_idx+seqlen)]
     );
+    
+    if (escaped) {
+      try expr.instrs.append(allocr, .{ .char = char, });
+      escaped = false;
+      self.str_idx += seqlen;
+      continue :outer;
+    }
+    
     switch (char) {
-      '+' => {
-        // (len-1) L1: <char>
-        // (len+0) bt L3
-        // (len+1) jmp L1
-        // (len+2) L3: ...
-        if (findLastSimpleExprOrGroup(&expr)) |L1| {
-          const L3 = expr.instrs.items.len + 2;
-          try expr.instrs.append(allocr, .{ // +0
-            .backtrack_target = L3,
-          });
-          try expr.instrs.append(allocr, .{ // +1
-            .jmp = L1,
-          });
+      '+', '*', '?' => |qualifier| {
+        if (findLastSimpleExpr(expr)) |L0| {
+          _ = try genQualifier(allocr, qualifier, expr, L0);
         } else {
           return error.ExpectedSimpleExpr;
-        }
-      },
-      '*' => {
-        // (len-1) L0: bt L3
-        // (len+0) L1: <char>
-        // (len+1) consume_backtrack
-        // (len+2) jmp L0
-        // (len+3) L3: ...
-        if (findLastSimpleExprOrGroup(&expr)) |L0| {
-          const L3 = expr.instrs.items.len + 3;
-          try expr.instrs.insert(allocr, L0, .{
-            .backtrack_target = L3,
-          });
-          try expr.instrs.append(allocr, .{
-            .consume_backtrack = {},
-          });
-          try expr.instrs.append(allocr, .{
-            .jmp = L0,
-          });
-        } else {
-          return error.ExpectedSimpleExpr;
-        }
-      },
-      '?' => {
-        // (len-1) L0: bt L3
-        // (len+0) L1: <char>
-        // (len+1) consume_backtrack
-        // (len+2) L3: ...
-        if (findLastSimpleExprOrGroup(&expr)) |L0| {
-          const L3 = expr.instrs.items.len + 2;
-          try expr.instrs.insert(allocr, L0, .{
-            .backtrack_target = L3,
-          });
-          try expr.instrs.append(allocr, .{
-            .consume_backtrack = {},
-          });
         }
       },
       '[' => {
@@ -121,17 +137,26 @@ pub fn parse(
         
         var from: ?u32 = null;
         var state: ParseState = .Normal;
+        var range_inverse = false;
         var ranges: std.ArrayListUnmanaged(Instr.Range) = .{};
         
-        inner: while (self.str_idx < in_pattern.len) {
+        if (
+          self.str_idx < self.in_pattern.len
+          and self.in_pattern[self.str_idx] == '^'
+        ) {
+          range_inverse = true;
+          self.str_idx += 1;
+        }
+        
+        inner: while (self.str_idx < self.in_pattern.len) {
           const seqlen1 = try std.unicode.utf8ByteSequenceLength(
-            in_pattern[self.str_idx]
+            self.in_pattern[self.str_idx]
           );
-          if ((in_pattern.len - self.str_idx) < seqlen1) {
+          if ((self.in_pattern.len - self.str_idx) < seqlen1) {
             return error.Utf8ExpectedContinuation;
           }
           const char1: u32 = try std.unicode.utf8Decode(
-            in_pattern[self.str_idx..(self.str_idx+seqlen1)]
+            self.in_pattern[self.str_idx..(self.str_idx+seqlen1)]
           );
           
           if (state != .Escaped) {
@@ -180,90 +205,123 @@ pub fn parse(
           continue :inner;
         }
         
-        try expr.instrs.append(allocr, .{
-          .range = try ranges.toOwnedSlice(allocr),
-        });
+        if (from != null) {
+          try ranges.append(allocr, .{
+            .from = from.?,
+            .to = from.?,
+          });
+        }
+        
+        if (range_inverse) {
+          try expr.instrs.append(allocr, .{
+            .range_inverse = try ranges.toOwnedSlice(allocr),
+          });
+        } else {
+          try expr.instrs.append(allocr, .{
+            .range = try ranges.toOwnedSlice(allocr),
+          });
+        }
         continue :outer;
       },
       '(' => {
+        self.str_idx += 1;
+        
         const group_id = expr.num_groups;
-        try groups.append(allocr, .{
-          .id = group_id,
-          .instr_start = expr.instrs.items.len,
-        });
         expr.num_groups += 1;
+        
         try expr.instrs.append(allocr, .{
           .group_start = group_id,
         });
+        
+        try self.parseGroup(
+          allocr,
+          expr,
+          .{
+            .instr_start = expr.instrs.items.len,
+            .group_id = group_id,
+          },
+        );
+        continue :outer;
       },
       ')' => {
-        if (groups.popOrNull()) |group| {
-          try expr.instrs.append(allocr, .{
-            .group_end = group.id,
-          });
-          while (alternate_jmp_targets.items.len > 0) {
-            const jmp_target = alternate_jmp_targets.items[alternate_jmp_targets.items.len - 1];
-            if (jmp_target.for_group == group.id) {
-              _ = alternate_jmp_targets.pop();
-              expr.instrs.items[jmp_target.jmp_instr] = .{
-                .jmp = expr.instrs.items.len,
-              };
-            } else {
-              break;
-            }
-          }
-        } else {
+        self.str_idx += 1;
+        if (group_or_root.group_id == null) {
           return error.UnbalancedGroupBrackets;
         }
-      },
-      '|' => {
-        // bt L3
-        // L1: ... (+0)
-        // consume_backtrack
-        // jmp L4
-        // L3: ...
-        // L4: ...
-        var backtrack_target_fill: usize = undefined;
-        var for_group: ?usize = null;
-        if (groups.items.len == 0) {
-          // backtrack for the first half of the alternate pair
-          // to jump to the start of the second half
-          backtrack_target_fill = 0;
-          try expr.instrs.insert(allocr, backtrack_target_fill, .{
-            .backtrack_target = 0,
-          });
-          for (expr.instrs.items[(backtrack_target_fill+1)..]) |*instr| {
-            instr.incrPc(1);
-          }
-        } else {
-          const group = groups.items[groups.items.len - 1];
-          backtrack_target_fill = group.instr_start;
-          try expr.instrs.insert(allocr, backtrack_target_fill, .{
-            .backtrack_target = 0,
-          });
-          for_group = group.id;
-          for (expr.instrs.items[(backtrack_target_fill+1)..]) |*instr| {
-            instr.incrPc(1);
+        
+        const group_end_instr = expr.instrs.items.len;
+        try expr.instrs.append(allocr, .{
+          .group_end = group_or_root.group_id.?,
+        });
+        
+        if (self.str_idx < self.in_pattern.len) {
+          switch (self.in_pattern[self.str_idx]) {
+            '+', '*', '?' => |qualifier| {
+              self.str_idx += 1;
+              
+              const L0 = group_or_root.instr_start;
+              const cg = try genQualifier(allocr, qualifier, expr, L0);
+              
+              for (jmp_to_end_targets.items) |jmp_instr| {
+                switch (expr.instrs.items[jmp_instr + cg.expr_shift]) {
+                  .abort => {},
+                  else => @panic("not abort"),
+                }
+                expr.instrs.items[jmp_instr + cg.expr_shift] = .{
+                  .jmp = group_end_instr + cg.expr_shift,
+                };
+              }
+              
+              return;
+            },
+            else => {},
           }
         }
         
-        try expr.instrs.append(allocr, .{
-          .consume_backtrack = {},
-        });
+        for (jmp_to_end_targets.items) |jmp_instr| {
+          switch (expr.instrs.items[jmp_instr]) {
+            .abort => {},
+            else => @panic("not abort"),
+          }
+          expr.instrs.items[jmp_instr] = .{
+            .jmp = group_end_instr,
+          };
+        }
         
-        const first_half_alt_end = expr.instrs.items.len;
-        try expr.instrs.append(allocr, .{
-          .jmp = 0, // to be filled
+        return;
+      },
+      '|' => {
+        // (L0)    split L1, L2
+        // (L0+1)  L1: ...
+        // len+0 accounts for new L0
+        // (len+1) jmp L3
+        // (len+2) L2: ...
+        const L0 = group_or_root.instr_start;
+        const L1 = L0 + 1;
+        const L2 = expr.instrs.items.len + 2;
+        for (expr.instrs.items) |*instr| {
+          instr.incrPc(1, L0);
+        }
+        try expr.instrs.insert(allocr, L0, .{
+          .split = .{ .a = L1, .b = L2, },
         });
-        try alternate_jmp_targets.append(allocr, .{
-          .jmp_instr = first_half_alt_end,
-          .for_group = for_group,
-        });
-        
-        const second_half_alt_start = expr.instrs.items.len;
-        expr.instrs.items[backtrack_target_fill] = .{
-          .backtrack_target = second_half_alt_start,
-        };
+        if (group_or_root.group_id != null) {
+          const jmp_instr = expr.instrs.items.len;
+          try expr.instrs.append(allocr, .{
+            .abort = {},
+          });
+          try jmp_to_end_targets.append(allocr, jmp_instr);
+        } else {
+          try expr.instrs.append(allocr, .{
+            .matched = {},
+          });
+        }
+      },
+      '\\' => {
+        escaped = true;
+      },
+      '.' => {
+        try expr.instrs.append(allocr, .{ .any = {}, });
       },
       else => {
         try expr.instrs.append(allocr, .{ .char = char, });
@@ -271,15 +329,27 @@ pub fn parse(
     }
     self.str_idx += seqlen;
   }
-  if (groups.items.len > 1) {
+  
+  if (group_or_root.group_id == null) {
+    try expr.instrs.append(allocr, .{
+      .matched = {},
+    });
+  } else {
     return error.UnbalancedGroupBrackets;
   }
-  for (alternate_jmp_targets.items) |jmp_target| {
-    std.debug.assert(jmp_target.for_group == null);
-    expr.instrs.items[jmp_target.jmp_instr] = .{ .matched = {}, };
-  }
-  try expr.instrs.append(allocr, .{ .matched = {}, });
-  try optimizer.optimizePrefixString(&expr, allocr);
-  return expr;
 }
 
+pub fn parse(
+  self: *Self,
+  allocr: std.mem.Allocator,
+) !Expr {
+  var expr: Expr = .{
+    .instrs = .{},
+    .num_groups = 0,
+  };
+  try self.parseGroup(allocr, &expr, .{
+    .instr_start = 0,
+    .group_id = null,
+  });
+  return expr;
+}
