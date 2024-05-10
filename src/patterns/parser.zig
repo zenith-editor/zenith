@@ -93,10 +93,12 @@ fn parseGroup(
   self: *Self,
   allocr: std.mem.Allocator,
   expr: *Expr,
-  group_or_root: GroupOrRoot,
+  parse_stack: *std.ArrayListUnmanaged(GroupOrRoot),
 ) !void {
   var jmp_to_end_targets: std.ArrayListUnmanaged(usize) = .{};
   defer jmp_to_end_targets.deinit(allocr);
+  
+  const group_or_root: GroupOrRoot = parse_stack.items[parse_stack.items.len - 1];
   
   var escaped = false;
   
@@ -233,21 +235,20 @@ fn parseGroup(
           .group_start = group_id,
         });
         
-        try self.parseGroup(
-          allocr,
-          expr,
-          .{
-            .instr_start = expr.instrs.items.len,
-            .group_id = group_id,
-          },
-        );
-        continue :outer;
+        try parse_stack.append(allocr, .{
+          .instr_start = expr.instrs.items.len,
+          .group_id = group_id,
+        });
+        
+        return;
       },
       ')' => {
         self.str_idx += 1;
         if (group_or_root.group_id == null) {
           return error.UnbalancedGroupBrackets;
         }
+        
+        _ = parse_stack.pop();
         
         const group_end_instr = expr.instrs.items.len;
         try expr.instrs.append(allocr, .{
@@ -329,14 +330,6 @@ fn parseGroup(
     }
     self.str_idx += seqlen;
   }
-  
-  if (group_or_root.group_id == null) {
-    try expr.instrs.append(allocr, .{
-      .matched = {},
-    });
-  } else {
-    return error.UnbalancedGroupBrackets;
-  }
 }
 
 pub fn parse(
@@ -347,9 +340,22 @@ pub fn parse(
     .instrs = .{},
     .num_groups = 0,
   };
-  try self.parseGroup(allocr, &expr, .{
+  
+  var parse_stack: std.ArrayListUnmanaged(GroupOrRoot) = .{};
+  defer parse_stack.deinit(allocr);
+  try parse_stack.append(allocr, .{
     .instr_start = 0,
     .group_id = null,
+  });
+  while (self.str_idx < self.in_pattern.len) {
+    try self.parseGroup(allocr, &expr, &parse_stack);
+  }
+  if (parse_stack.items.len != 1) {
+    return error.UnbalancedGroupBrackets;
+  }
+  
+  try expr.instrs.append(allocr, .{
+    .matched = {},
   });
   return expr;
 }
