@@ -129,21 +129,7 @@ const VM = struct {
         thread.fully_matched = true;
         return false;
       },
-      .any => {
-        if (thread.str_idx >= self.haystack.len) {
-          return false;
-        }
-        const seqlen = try std.unicode.utf8ByteSequenceLength(
-          self.haystack[thread.str_idx]
-        );
-        if ((self.haystack.len - thread.str_idx) < seqlen) {
-          return error.Utf8ExpectedContinuation;
-        }
-        thread.pc += 1;
-        thread.str_idx += seqlen;
-        return true;
-      },
-      .char => |char1| {
+      .any, .char, .range, .range_inverse => {
         if (thread.str_idx >= self.haystack.len) {
           return false;
         }
@@ -156,62 +142,33 @@ const VM = struct {
         const char: u32 = try std.unicode.utf8Decode(
           self.haystack[thread.str_idx..(thread.str_idx+seqlen)]
         );
-        if (char != char1) {
-          return false;
-        }
-        thread.pc += 1;
-        thread.str_idx += seqlen;
-        return true;
-      },
-      .range => |ranges| {
-        if (thread.str_idx >= self.haystack.len) {
-          return false;
-        }
-        const seqlen = try std.unicode.utf8ByteSequenceLength(
-          self.haystack[thread.str_idx]
-        );
-        if ((self.haystack.len - thread.str_idx) < seqlen) {
-          return error.Utf8ExpectedContinuation;
-        }
-        const char: u32 = try std.unicode.utf8Decode(
-          self.haystack[thread.str_idx..(thread.str_idx+seqlen)]
-        );
-        var matches = false;
-        for (ranges) |range| {
-          if (range.from <= char and range.to >= char) {
-            matches = true;
-            break;
-          }
-        }
-        if (!matches) {
-          return false;
-        }
-        thread.pc += 1;
-        thread.str_idx += seqlen;
-        return true;
-      },
-      .range_inverse => |ranges| {
-        if (thread.str_idx >= self.haystack.len) {
-          return false;
-        }
-        const seqlen = try std.unicode.utf8ByteSequenceLength(
-          self.haystack[thread.str_idx]
-        );
-        if ((self.haystack.len - thread.str_idx) < seqlen) {
-          return error.Utf8ExpectedContinuation;
-        }
-        const char: u32 = try std.unicode.utf8Decode(
-          self.haystack[thread.str_idx..(thread.str_idx+seqlen)]
-        );
-        var matches = false;
-        for (ranges) |range| {
-          if (range.from <= char and range.to >= char) {
-            matches = true;
-            break;
-          }
-        }
-        if (matches) {
-          return false;
+        switch (self.instrs[thread.pc]) {
+          .any => {},
+          .char => |char1| {
+            if (char != char1) {
+              return false;
+            }
+          },
+          .range => |ranges| {
+            var matches = false;
+            for (ranges) |range| {
+              if (range.from <= char and range.to >= char) {
+                matches = true;
+                break;
+              }
+            }
+            if (!matches) {
+              return false;
+            }
+          },
+          .range_inverse => |ranges| {
+            for (ranges) |range| {
+              if (range.from <= char and range.to >= char) {
+                return false;
+              }
+            }
+          },
+          else => unreachable,
         }
         thread.pc += 1;
         thread.str_idx += seqlen;
