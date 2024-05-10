@@ -9,6 +9,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const kbd = @import("../kbd.zig");
+const text = @import("../text.zig");
 const editor = @import("../editor.zig");
 
 const Expr = @import("../patterns/expr.zig");
@@ -147,7 +148,15 @@ fn toReplaceAll(self: *editor.Editor, cmd_data: *editor.CommandData) !void {
   if (self.text_handler.markers == null) {
     self.text_handler.markAll(self);
   }
-  const needle = try self.allocr().dupe(u8, cmd_data.cmdinp.items);
+  
+  var needle: text.TextHandler.ReplaceNeedle = undefined;
+  if (cmd_data.args != null and cmd_data.args.?.find.regex != null) {
+    needle = .{ .regex = cmd_data.args.?.find.regex.? };
+    cmd_data.args.?.find.regex = null;
+  } else {
+    needle = .{ .string = try cmd_data.cmdinp.toOwnedSlice(self.allocr()), };
+  }
+  
   cmd_data.replace(self, .{
     .prompt = editor.Commands.Replace.PROMPT_ALL,
     .fns = editor.Commands.Replace.FnsAll,
@@ -155,6 +164,29 @@ fn toReplaceAll(self: *editor.Editor, cmd_data: *editor.CommandData) !void {
       .replace_all = .{ .needle = needle, },
     },
   });
+}
+
+fn buildRegex(self: *editor.Editor) !bool {
+  const cmd_data: *editor.CommandData = self.getCmdData();
+  switch (Expr.create(self.allocr(), cmd_data.cmdinp.items, .{})) {
+    .ok => |expr| {
+      cmd_data.replaceArgs(self, .{ .find = .{
+        .regex = expr,
+      }, });
+      return true;
+    },
+    .err => |err| {
+      cmd_data.replacePromptOverlay(self, .{
+        .owned = try std.fmt.allocPrint(
+          self.allocr(),
+          "Invalid regex (ERR: {}@{})",
+          .{err.type, err.pos}
+        ),
+      });
+      self.needs_update_cursor = true;
+      return false;
+    },
+  }
 }
 
 pub fn onKey(self: *editor.Editor, keysym: kbd.Keysym) !bool {
@@ -181,24 +213,16 @@ pub fn onKey(self: *editor.Editor, keysym: kbd.Keysym) !bool {
     self.needs_update_cursor = true;
     return true;
   }
+  else if (keysym.ctrl_key and keysym.isChar('g')) {
+    if (try buildRegex(self)) {
+      try Cmd.toReplaceAll(self, cmd_data);
+      self.needs_update_cursor = true;
+    }
+    return true;
+  }
   else if (keysym.ctrl_key and keysym.isChar('e')) {
-    switch (Expr.create(self.allocr(), cmd_data.cmdinp.items)) {
-      .ok => |expr| {
-        cmd_data.replaceArgs(self, .{ .find = .{
-          .regex = expr,
-        }, });
-        try Cmd.findForwards(self, cmd_data);
-      },
-      .err => |err| {
-        cmd_data.replacePromptOverlay(self, .{
-          .owned = try std.fmt.allocPrint(
-            self.allocr(),
-            "Invalid regex (ERR: {}@{})",
-            .{err.type, err.pos}
-          ),
-        });
-        self.needs_update_cursor = true;
-      },
+    if (try buildRegex(self)) {
+      try Cmd.findForwards(self, cmd_data);
     }
     return true;
   }

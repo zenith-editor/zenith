@@ -12,6 +12,7 @@ const lineinfo = @import("./lineinfo.zig");
 const clipboard = @import("./clipboard.zig");
 
 const Editor = @import("./editor.zig").Editor;
+const Expr = @import("./patterns/expr.zig");
 
 pub const Encoding = struct {
   pub fn isContByte(byte: u8) bool {
@@ -729,7 +730,6 @@ pub const TextHandler = struct {
       markers.end = self.getRowOffsetEnd(markers.start_cur.row);
     }
     
-    // TODO tab settings
     var dedented: str.String = .{};
     defer dedented.deinit(E.allocr());
     
@@ -1250,12 +1250,48 @@ pub const TextHandler = struct {
     markers.end = new_end;
   }
   
+  pub const ReplaceNeedle = union(enum) {
+    string: []const u8,
+    regex: Expr,
+    
+    pub fn deinit(self: *ReplaceNeedle, allocr: std.mem.Allocator) void {
+      switch (self.*) {
+        .string => |needle| {
+          allocr.free(needle);
+        },
+        .regex => |*regex| {
+          regex.deinit(allocr);
+        }
+      }
+    }
+    
+    fn checkMatch(self: *const ReplaceNeedle, haystack: []const u8) ?usize {
+      switch (self.*) {
+        .string => |needle| {
+          if (std.mem.startsWith(u8, haystack, needle)) {
+            return needle.len;
+          } else {
+            return null;
+          }
+        },
+        .regex => |*regex| {
+          const match = regex.checkMatch(haystack, .{}) catch return null;
+          if (match.pos > 0) {
+            return match.pos;
+          } else {
+            return null;
+          }
+        }
+      }
+    }
+  };
+  
   pub fn replaceAllMarked(
     self: *TextHandler,
     E: *Editor,
-    needle: []const u8,
+    needle: ReplaceNeedle,
     replacement: []const u8
-  ) !void {
+  ) !usize {
     var markers = &self.markers.?;
     var replaced: str.String = .{};
     defer replaced.deinit(E.allocr());
@@ -1268,9 +1304,9 @@ pub const TextHandler = struct {
     var slide: usize = 0;
     var replacements: usize = 0;
     while (slide < src_text.len) {
-      if (std.mem.startsWith(u8, src_text[slide..], needle)) {
+      if (needle.checkMatch(src_text[slide..])) |len| {
         try replaced.appendSlice(E.allocr(), replacement);
-        slide += needle.len;
+        slide += len;
         replacements += 1;
       } else {
         try replaced.append(E.allocr(), src_text[slide]);
@@ -1281,6 +1317,8 @@ pub const TextHandler = struct {
     const new_end: u32 = @intCast(markers.start + replaced.items.len);
     try self.replaceRegion(E, markers.start, markers.end, replaced.items, true);
     markers.end = new_end;
+    
+    return replacements;
   }
   
   // markers

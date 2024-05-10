@@ -65,7 +65,7 @@ pub const CommandData = struct {
   
   pub const Args = union(enum) {
     pub const ReplaceAll = struct {
-      needle: []const u8,
+      needle: text.TextHandler.ReplaceNeedle,
     };
     
     pub const Find = struct {
@@ -78,7 +78,7 @@ pub const CommandData = struct {
     fn deinit(self: *Args, allocr: std.mem.Allocator) void {
       switch (self.*) {
         .replace_all => |*e| {
-          allocr.free(e.needle);
+          e.needle.deinit(allocr);
         },
         .find => |*e| {
           if (e.regex) |*regex| {

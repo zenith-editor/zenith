@@ -24,11 +24,18 @@ fn onInputted(self: *editor.Editor) !void {
 fn onInputtedRepAll(self: *editor.Editor) !void {
   self.needs_update_cursor = true;
   const cmd_data: *editor.CommandData = self.getCmdData();
-  try self.text_handler.replaceAllMarked(
+  const replacements = try self.text_handler.replaceAllMarked(
     self,
     cmd_data.args.?.replace_all.needle,
     cmd_data.cmdinp.items
   );
+  cmd_data.replacePromptOverlay(self, .{
+    .owned = try std.fmt.allocPrint(
+      self.allocr(),
+      "{} reps done",
+      .{replacements}
+    ),
+  });
 }
 
 pub const PROMPT = "Replace with:";
