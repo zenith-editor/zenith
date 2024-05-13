@@ -12,11 +12,10 @@ pub const Value = union(enum) {
   uninitialized: void,
   int: i32,
   string: str.String,
-  boole: bool,  
+  bool: bool,  
   
   fn deinit(self: *Value, allocr: std.mem.Allocator) void {
     switch(self.*) {
-      .uninitialized => { unreachable; },
       .string => |*string| {
         string.deinit(allocr);
       },
@@ -295,12 +294,12 @@ pub const Parser = struct {
     if (self.getch()) |char| {
       if (self.matchStr("true")) {
         return .{
-          .ok = .{ .boole = true, },
+          .ok = .{ .bool = true, },
         };
       }
       else if (self.matchStr("false")) {
         return .{
-          .ok = .{ .boole = false, },
+          .ok = .{ .bool = false, },
         };
       }
       const start_pos = self.pos;
@@ -514,13 +513,13 @@ test "parse section with bool val" {
     var expr = parser.nextExpr(allocr).unwrap().?;
     defer expr.deinit(allocr);
     try std.testing.expectEqualSlices(u8, "truth", expr.kv.key);
-    try std.testing.expectEqual(true, expr.kv.val.boole);
+    try std.testing.expectEqual(true, expr.kv.val.bool);
   }
   {
     var expr = parser.nextExpr(allocr).unwrap().?;
     defer expr.deinit(allocr);
     try std.testing.expectEqualSlices(u8, "faux", expr.kv.key);
-    try std.testing.expectEqual(false, expr.kv.val.boole);
+    try std.testing.expectEqual(false, expr.kv.val.bool);
   }
 }
 
@@ -539,13 +538,13 @@ test "parse section with comments" {
     var expr = parser.nextExpr(allocr).unwrap().?;
     defer expr.deinit(allocr);
     try std.testing.expectEqualSlices(u8, "truth", expr.kv.key);
-    try std.testing.expectEqual(true, expr.kv.val.boole);
+    try std.testing.expectEqual(true, expr.kv.val.bool);
   }
   {
     var expr = parser.nextExpr(allocr).unwrap().?;
     defer expr.deinit(allocr);
     try std.testing.expectEqualSlices(u8, "faux", expr.kv.key);
-    try std.testing.expectEqual(false, expr.kv.val.boole);
+    try std.testing.expectEqual(false, expr.kv.val.bool);
   }
 }
 

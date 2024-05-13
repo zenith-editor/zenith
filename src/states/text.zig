@@ -11,18 +11,27 @@ const kbd = @import("../kbd.zig");
 const text = @import("../text.zig");
 const editor = @import("../editor.zig");
 
+const this_shortcuts = @import("../shortcuts.zig").STATE_TEXT;
+const this_shortcuts_help = @import("../shortcuts.zig").STATE_TEXT_HELP;
+
 pub fn handleInput(self: *editor.Editor, keysym: kbd.Keysym, is_clipboard: bool) !void {
-  if (keysym.key == kbd.Keysym.Key.up) {
+  if (!keysym.ctrl_key and keysym.key == kbd.Keysym.Key.up) {
     self.text_handler.goUp(self);
   }
-  else if (keysym.key == kbd.Keysym.Key.down) {
+  else if (!keysym.ctrl_key and keysym.key == kbd.Keysym.Key.down) {
     self.text_handler.goDown(self);
   }
-  else if (keysym.key == kbd.Keysym.Key.left) {
+  else if (!keysym.ctrl_key and keysym.key == kbd.Keysym.Key.left) {
     self.text_handler.goLeft(self);
   }
-  else if (keysym.key == kbd.Keysym.Key.right) {
+  else if (!keysym.ctrl_key and keysym.key == kbd.Keysym.Key.right) {
     self.text_handler.goRight(self);
+  }
+  else if (keysym.ctrl_key and keysym.key == kbd.Keysym.Key.left) {
+    self.text_handler.goLeftWord(self);
+  }
+  else if (keysym.ctrl_key and keysym.key == kbd.Keysym.Key.right) {
+    self.text_handler.goRightWord(self);
   }
   else if (keysym.key == kbd.Keysym.Key.pgup) {
     self.text_handler.goPgUp(self);
@@ -36,10 +45,14 @@ pub fn handleInput(self: *editor.Editor, keysym: kbd.Keysym, is_clipboard: bool)
   else if (keysym.key == kbd.Keysym.Key.end) {
     try self.text_handler.goTail(self);
   }
-  else if (keysym.ctrl_key and keysym.isChar('q')) {
-    self.setState(editor.State.quit);
+  else if (this_shortcuts.key("help", keysym)) {
+    self.help_msg = &this_shortcuts_help;
+    self.needs_redraw = true;
   }
-  else if (keysym.ctrl_key and keysym.isChar('s')) {
+  else if (this_shortcuts.key("quit", keysym)) {
+    return error.Quit;
+  }
+  else if (this_shortcuts.key("save", keysym)) {
     if (self.text_handler.file == null) {
       self.setState(editor.State.command);
       self.setCmdData(.{
@@ -57,48 +70,51 @@ pub fn handleInput(self: *editor.Editor, keysym: kbd.Keysym, is_clipboard: bool)
       };
     }
   }
-  else if (keysym.ctrl_key and keysym.isChar('o')) {
+  else if (this_shortcuts.key("open", keysym)) {
     self.setState(editor.State.command);
     self.setCmdData(.{
       .prompt = editor.Commands.Open.PROMPT_OPEN,
       .fns = editor.Commands.Open.Fns,
     });
   }
-  else if (keysym.ctrl_key and keysym.isChar('g')) {
+  else if (this_shortcuts.key("open", keysym)) {
     self.setState(editor.State.command);
     self.setCmdData(.{
       .prompt = editor.Commands.GotoLine.PROMPT,
       .fns = editor.Commands.GotoLine.Fns,
     });
   }
-  else if (keysym.ctrl_key and keysym.isChar('a')) {
+  else if (this_shortcuts.key("block", keysym)) {
+    self.setState(editor.State.mark);
+  }
+  else if (this_shortcuts.key("all", keysym)) {
     self.setState(editor.State.mark);
     self.text_handler.markAll(self);
   }
-  else if (keysym.ctrl_key and keysym.isChar('l')) {
+  else if (this_shortcuts.key("line", keysym)) {
     self.setState(editor.State.mark);
     self.text_handler.markLine(self);
   }
-  else if (keysym.ctrl_key and keysym.isChar('b')) {
-    self.setState(editor.State.mark);
-  }
-  else if (keysym.ctrl_key and keysym.isChar('d')) {
+  else if (this_shortcuts.key("dup", keysym)) {
     try self.text_handler.duplicateLine(self);
   }
-  else if (keysym.ctrl_key and keysym.isChar('v')) {
+  else if (this_shortcuts.key("delline", keysym)) {
+    try self.text_handler.deleteLine(self);
+  }
+  else if (this_shortcuts.key("paste", keysym)) {
     try self.text_handler.paste(self);
   }
-  else if (keysym.ctrl_key and keysym.isChar('z')) {
-    try self.text_handler.undo_mgr.undo(self);
-  }
-  else if (keysym.ctrl_key and keysym.isChar('f')) {
+  else if (this_shortcuts.key("find", keysym)) {
     self.setState(.command);
     self.setCmdData(.{
       .prompt = editor.Commands.Find.PROMPT,
       .fns = editor.Commands.Find.Fns,
     });
   }
-  else if (keysym.ctrl_key and keysym.isChar('y')) {
+  else if (this_shortcuts.key("undo", keysym)) {
+    try self.text_handler.undo_mgr.undo(self);
+  }
+  else if (this_shortcuts.key("redo", keysym)) {
     try self.text_handler.undo_mgr.redo(self);
   }
   else if (keysym.raw == kbd.Keysym.BACKSPACE) {
@@ -120,11 +136,20 @@ pub fn handleInput(self: *editor.Editor, keysym: kbd.Keysym, is_clipboard: bool)
   else if (!is_clipboard and keysym.isChar('{')) {
     try self.text_handler.insertCharPair(self, "{", "}");
   }
+  else if (!is_clipboard and keysym.isChar('}')) {
+    try self.text_handler.insertCharUnlessOverwrite(self, "}");
+  }
   else if (!is_clipboard and keysym.isChar('(')) {
     try self.text_handler.insertCharPair(self, "(", ")");
   }
+  else if (!is_clipboard and keysym.isChar(')')) {
+    try self.text_handler.insertCharUnlessOverwrite(self, ")");
+  }
   else if (!is_clipboard and keysym.isChar('[')) {
     try self.text_handler.insertCharPair(self, "[", "]");
+  }
+  else if (!is_clipboard and keysym.isChar(']')) {
+    try self.text_handler.insertCharUnlessOverwrite(self, "]");
   }
   else if (!is_clipboard and keysym.isChar('\'')) {
     try self.text_handler.insertCharPair(self, "'", "'");
@@ -156,7 +181,7 @@ pub fn handleOutput(self: *editor.Editor) !void {
 pub fn renderStatus(self: *editor.Editor) !void {
   try self.moveCursor(self.getTextHeight(), 0);
   const text_handler: *const text.TextHandler = &self.text_handler;
-  try self.writeAll(editor.Editor.CLEAR_LINE);
+  try self.writeAll(editor.Editor.ESC_CLEAR_LINE);
   if (text_handler.buffer_changed) {
     try self.writeAll("[*]");
   } else {

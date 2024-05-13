@@ -14,19 +14,6 @@ fn showHelp(program_name: []const u8) !void {
   try writer.print(
     \\Usage: {s} [options] [file]
     \\
-    \\Key bindings:
-    \\ ^q: quit
-    \\ ^s: save
-    \\ ^o: open
-    \\ ^b: block mode
-    \\ ^v: paste
-    \\ ^g: goto line (cmd)
-    \\ ^f: find (cmd)
-    \\ ^z: undo
-    \\
-    \\ Within cmd mode:
-    \\  esc: change to text mode
-    \\
     \\Options:
     \\  -h/--help: Show this help message
     \\
@@ -56,5 +43,6 @@ pub fn main() !void {
     try opened_file_str.appendSlice(E.allocr(), opened_file);
     try E.openAtStart(opened_file_str);
   }
+  errdefer E.restoreTerminal() catch {};
   try E.run();
 }

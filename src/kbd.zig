@@ -20,6 +20,8 @@ pub const Keysym = struct {
     del,
     pgup,
     pgdown,
+    paste_begin,
+    paste_end,
   };
   
   raw: u8,

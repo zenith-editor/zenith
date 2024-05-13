@@ -51,7 +51,7 @@ pub const Instr = union(enum) {
   
   pub fn isSimpleMatcher(self: *const Instr) bool {
     return switch(self.*) {
-      .char, .range, .range_inverse => true,
+      .any, .char, .char_inverse, .range, .range_inverse => true,
       else => false,
     };
   }
@@ -70,22 +70,43 @@ pub const Instr = union(enum) {
     };
   }
   
-  pub fn incrPc(self: *Instr, shifted: usize, from_pc: usize) void {
+  fn modPc(
+    self: *Instr,
+    shifted: usize,
+    from_pc: usize,
+    operation: (*const fn (a: usize, b: usize) usize)
+  ) void {
     switch(self.*) {
       .jmp => |*pc| {
         if (pc.* >= from_pc) {
-          pc.* += shifted;
+          pc.* = operation(pc.*, shifted);
         }
       },
       .split => |*split| {
         if (split.a >= from_pc) {
-          split.a += shifted;
+          split.a = operation(split.a, shifted);
         }
         if (split.b >= from_pc) {
-          split.b += shifted;
+          split.b = operation(split.b, shifted);
         }
       },
       else => {},
     }
+  }
+  
+  pub fn incrPc(self: *Instr, shifted: usize, from_pc: usize) void {
+    return self.modPc(shifted, from_pc, (struct {
+      fn operation(a: usize, b: usize) usize {
+        return a + b;
+      }
+    }).operation);
+  }
+  
+  pub fn decrPc(self: *Instr, shifted: usize, from_pc: usize) void {
+    return self.modPc(shifted, from_pc, (struct {
+      fn operation(a: usize, b: usize) usize {
+        return a - b;
+      }
+    }).operation);
   }
 };

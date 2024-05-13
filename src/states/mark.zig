@@ -11,6 +11,9 @@ const kbd = @import("../kbd.zig");
 const text = @import("../text.zig");
 const editor = @import("../editor.zig");
 
+const this_shortcuts = @import("../shortcuts.zig").STATE_MARK;
+const this_shortcuts_help = @import("../shortcuts.zig").STATE_MARK_HELP;
+
 pub fn onSet(self: *editor.Editor) void {
   if (self.text_handler.markers == null) {
     self.text_handler.markStart(self);
@@ -64,24 +67,29 @@ pub fn handleInput(self: *editor.Editor, keysym: kbd.Keysym, is_clipboard: bool)
     self.setState(.text);
   }
   
-  else if (keysym.ctrl_key and keysym.isChar('c')) {
+  else if (this_shortcuts.key("help", keysym)) {
+    self.help_msg = &this_shortcuts_help;
+    self.needs_redraw = true;
+  }
+  
+  else if (this_shortcuts.key("copy", keysym)) {
     try self.text_handler.copy(self);
     self.setState(.text);
   }
-  else if (keysym.ctrl_key and keysym.isChar('x')) {
+  else if (this_shortcuts.key("cut", keysym)) {
     try self.text_handler.copy(self);
     try self.text_handler.deleteMarked(self);
     self.setState(.text);
   }
   
-  else if (keysym.ctrl_key and keysym.isChar('r')) {
+  else if (this_shortcuts.key("rep", keysym)) {
     self.setState(.command);
     self.setCmdData(.{
       .prompt = editor.Commands.Replace.PROMPT,
       .fns = editor.Commands.Replace.Fns,
     });
   }
-  else if (keysym.ctrl_key and keysym.isChar('f')) {
+  else if (this_shortcuts.key("find", keysym)) {
     self.setState(.command);
     self.setCmdData(.{
       .prompt = editor.Commands.Find.PROMPT,
@@ -89,10 +97,10 @@ pub fn handleInput(self: *editor.Editor, keysym: kbd.Keysym, is_clipboard: bool)
     });
   }
   
-  else if (keysym.isChar('>')) {
+  else if (this_shortcuts.key("indent", keysym)) {
     try self.text_handler.indentMarked(self);
   }
-  else if (keysym.isChar('<')) {
+  else if (this_shortcuts.key("dedent", keysym)) {
     try self.text_handler.dedentMarked(self);
   }
 }
@@ -112,7 +120,7 @@ pub fn handleOutput(self: *editor.Editor) !void {
 
 pub fn renderStatus(self: *editor.Editor) !void {
   try self.moveCursor(self.getTextHeight(), 0);
-  try self.writeAll(editor.Editor.CLEAR_LINE);
+  try self.writeAll(editor.Editor.ESC_CLEAR_LINE);
   try self.writeAll("Enter: mark end, Del: delete");
   var status: [32]u8 = undefined;
   const status_slice = try std.fmt.bufPrint(

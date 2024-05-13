@@ -10,36 +10,10 @@ const undo = @import("./undo.zig");
 const conf = @import("./config.zig");
 const lineinfo = @import("./lineinfo.zig");
 const clipboard = @import("./clipboard.zig");
+const encoding = @import("./encoding.zig");
 
 const Editor = @import("./editor.zig").Editor;
 const Expr = @import("./patterns/expr.zig");
-
-pub const Encoding = struct {
-  pub fn isContByte(byte: u8) bool {
-    return switch(byte) {
-      0b1000_0000...0b1011_1111 => true,
-      else => false,
-    };
-  }
-  
-  pub fn isMultibyte(byte: u8) bool {
-    return byte >= 0x80;
-  }
-  
-  pub fn sequenceLen(first_byte: u8) ?u3 {
-    return switch (first_byte) {
-      0b0000_0000...0b0111_1111 => 1,
-      0b1100_0000...0b1101_1111 => 2,
-      0b1110_0000...0b1110_1111 => 3,
-      0b1111_0000...0b1111_0111 => 4,
-      else => null,
-    };
-  }
-  
-  pub fn countChars(buf: []const u8) !usize {
-    return std.unicode.utf8CountCodepoints(buf);
-  }
-};
 
 pub const TextPos = struct {
   /// Row
@@ -61,7 +35,7 @@ pub const TextIterator = struct {
   
   pub fn nextChar(self: *TextIterator) ?[]const u8 {
     if (self.text_handler.getBytesStartingAt(self.pos)) |bytes| {
-      const seqlen = Encoding.sequenceLen(bytes[0]) orelse unreachable;
+      const seqlen = encoding.sequenceLen(bytes[0]).?;
       self.pos += seqlen;
       return bytes[0..seqlen];
     }
@@ -129,25 +103,37 @@ pub const TextHandler = struct {
   }
   
   // io
-  
   pub fn open(self: *TextHandler, E: *Editor, file: std.fs.File, flush_buffer: bool) !void {
+    const new_buffer = str.String.fromOwnedSlice(
+      try file.readToEndAlloc(E.allocr(), std.math.maxInt(u32))
+    );
+    if (!std.unicode.utf8ValidateSlice(new_buffer.items)) {
+      return error.InvalidUtf8;
+    }
     if (self.file != null) {
       self.file.?.close();
     }
     self.file = file;
     if (flush_buffer) {
-      self.cursor = .{};
-      self.scroll = .{};
-      self.markers = null;
-      self.buffer.clearAndFree(E.allocr());
-      self.lineinfo.clear();
-      self.head_end = 0;
-      self.tail_start = 0;
-      self.gap.resize(0) catch unreachable;
-      self.undo_mgr.clear();
-      self.buffer_changed = false;
-      try self.readLines(E);
+      self.clearBuffersForFile(E);
+      self.readLines(E, new_buffer) catch |err| {
+        self.clearBuffersForFile(E);
+        return err;
+      };
     }
+  }
+  
+  fn clearBuffersForFile(self: *TextHandler, E: *Editor) void {
+    self.cursor = .{};
+    self.scroll = .{};
+    self.markers = null;
+    self.buffer.clearAndFree(E.allocr());
+    self.lineinfo.clear();
+    self.head_end = 0;
+    self.tail_start = 0;
+    self.gap.resize(0) catch unreachable;
+    self.undo_mgr.clear();
+    self.buffer_changed = false;
   }
   
   pub fn save(self: *TextHandler, E: *Editor) !void {
@@ -169,10 +155,12 @@ pub const TextHandler = struct {
     E.needs_update_cursor = true;
   }
   
-  pub fn readLines(self: *TextHandler, E: *Editor) !void {
-    var file: std.fs.File = self.file.?;
-    const allocr: std.mem.Allocator = E.allocr();
-    self.buffer = str.String.fromOwnedSlice(try file.readToEndAlloc(allocr, std.math.maxInt(u32)));
+  const ReadLineError = error {
+    OutOfMemory,
+  };
+  
+  fn readLines(self: *TextHandler, E: *Editor, new_buffer: str.String) ReadLineError!void {
+    self.buffer = new_buffer;
     
     // first line
     try self.lineinfo.append(0);
@@ -192,7 +180,7 @@ pub const TextHandler = struct {
       const offset_start: u32 = self.lineinfo.getOffset(@intCast(row));
       const offset_end: u32 = self.getRowOffsetEnd(@intCast(row));
       for (self.buffer.items[offset_start..offset_end]) |byte| {
-        if (Encoding.isMultibyte(byte)) {
+        if (encoding.isMultibyte(byte)) {
           try self.lineinfo.setMultibyte(@intCast(row), true);
           break;
         }
@@ -265,7 +253,7 @@ pub const TextHandler = struct {
     var is_mb = false;
     var iter = self.iterate(offset_start);
     while (iter.nextCharUntil(offset_end)) |char| {
-      if (char.len > 1) {
+      if (encoding.isMultibyte(char[0])) {
         is_mb = true;
         break;
       }
@@ -346,7 +334,9 @@ pub const TextHandler = struct {
             break;
           }
           self.cursor.col += @intCast(char.len);
-          self.cursor.gfx_col += 1;
+          self.cursor.gfx_col += encoding.countCharCols(
+            std.unicode.utf8Decode(char) catch unreachable
+          );
         }
         self.scroll.col = 0;
         self.scroll.gfx_col = 0;
@@ -407,24 +397,35 @@ pub const TextHandler = struct {
     E.needs_update_cursor = true;
   }
   
-  fn goLeftTextPos(self: *const TextHandler, pos_in: TextPos, row_start: u32) TextPos {
+  fn goLeftTextPos(self: *const TextHandler,
+                   pos_in: TextPos,
+                   row_start: u32,
+                   opt_char_under_cursor: ?*u32) TextPos {
     var pos = pos_in;
     pos.col -= 1;
     var new_offset = row_start + pos.col;
-    const start_byte = self.getByte(new_offset) orelse unreachable;
-    if (Encoding.isContByte(start_byte)) {
+    const start_byte = self.getByte(new_offset).?;
+    var seqlen: usize = 1;
+    if (encoding.isContByte(start_byte)) {
       // prev char is multi byte
       while (new_offset > row_start) {
-        const maybe_cont_byte = self.getByte(new_offset) orelse unreachable;
-        if (Encoding.isContByte(maybe_cont_byte)) {
+        const maybe_cont_byte = self.getByte(new_offset).?;
+        if (encoding.isContByte(maybe_cont_byte)) {
           pos.col -= 1;
           new_offset -= 1;
+          seqlen += 1;
         } else {
           break;
         }
       }
     }
-    pos.gfx_col -= 1;
+    const bytes = self.getBytesStartingAt(new_offset).?[0..seqlen];
+    const char = std.unicode.utf8Decode(bytes) catch unreachable;
+    if (opt_char_under_cursor) |char_under_cursor| {
+      char_under_cursor.* = char;
+    }
+    const cols = encoding.countCharCols(char);
+    pos.gfx_col -= cols;
     return pos;
   }
   
@@ -433,20 +434,48 @@ pub const TextHandler = struct {
       return;
     }
     const row_start: u32 = self.lineinfo.getOffset(self.cursor.row);
-    self.cursor = self.goLeftTextPos(self.cursor, row_start);
+    self.cursor = self.goLeftTextPos(self.cursor, row_start, null);
     if (self.cursor.gfx_col < self.scroll.gfx_col) {
-      self.scroll = self.goLeftTextPos(self.scroll, row_start);
+      self.scroll = self.goLeftTextPos(self.scroll, row_start, null);
       E.needs_redraw = true;
     }
     E.needs_update_cursor = true;
   }
   
-  fn goRightTextPos(self: *const TextHandler, pos_in: TextPos, row_start: u32) TextPos {
+  pub fn goLeftWord(self: *TextHandler, E: *Editor) void {
+    if (self.cursor.col == 0) {
+      return;
+    }
+    self.goLeft(E);
+    const row_start: u32 = self.lineinfo.getOffset(self.cursor.row);
+    while (self.cursor.col > 0) {
+      var char: u32 = 0;
+      const new_cursor = self.goLeftTextPos(self.cursor, row_start, &char);
+      if (!encoding.isKeywordChar(char)) {
+        break;
+      }
+      self.cursor = new_cursor;
+      if (self.cursor.gfx_col < self.scroll.gfx_col) {
+        self.scroll = self.goLeftTextPos(self.scroll, row_start, null);
+        E.needs_redraw = true;
+      }
+    }
+    E.needs_update_cursor = true;
+  }
+  
+  fn goRightTextPos(self: *const TextHandler,
+                    pos_in: TextPos,
+                    row_start: u32,
+                    opt_char_under_cursor: ?*u32) TextPos {
     var pos = pos_in;
-    const start_byte = self.getByte(row_start + pos.col) orelse unreachable;
-    const seqlen = Encoding.sequenceLen(start_byte) orelse unreachable;
+    const bytes = self.getBytesStartingAt(row_start + pos.col).?;
+    const seqlen = encoding.sequenceLen(bytes[0]).?;
+    const char = std.unicode.utf8Decode(bytes[0..seqlen]) catch unreachable;
+    if (opt_char_under_cursor) |char_under_cursor| {
+      char_under_cursor.* = char;
+    }
     pos.col += seqlen;
-    pos.gfx_col += 1;
+    pos.gfx_col += encoding.countCharCols(char);
     return pos;
   }
   
@@ -455,10 +484,32 @@ pub const TextHandler = struct {
       return;
     }
     const row_start: u32 = self.lineinfo.getOffset(self.cursor.row);
-    self.cursor = self.goRightTextPos(self.cursor, row_start);
+    self.cursor = self.goRightTextPos(self.cursor, row_start, null);
     if ((self.scroll.gfx_col + E.getTextWidth()) <= self.cursor.gfx_col) {
-      self.scroll = self.goRightTextPos(self.scroll, row_start);
+      self.scroll = self.goRightTextPos(self.scroll, row_start, null);
       E.needs_redraw = true;
+    }
+    E.needs_update_cursor = true;
+  }
+  
+  pub fn goRightWord(self: *TextHandler, E: *Editor) void {
+    const rowlen = self.getRowLen(self.cursor.row);
+    if (self.cursor.col >= rowlen) {
+      return;
+    }
+    self.goRight(E);
+    const row_start: u32 = self.lineinfo.getOffset(self.cursor.row);
+    while (self.cursor.col < rowlen) {
+      var char: u32 = 0;
+      const new_cursor = self.goRightTextPos(self.cursor, row_start, &char);
+      if (!encoding.isKeywordChar(char)) {
+        break;
+      }
+      self.cursor = new_cursor;
+      if ((self.scroll.gfx_col + E.getTextWidth()) <= self.cursor.gfx_col) {
+        self.scroll = self.goRightTextPos(self.scroll, row_start, null);
+        E.needs_redraw = true;
+      }
     }
     E.needs_update_cursor = true;
   }
@@ -489,7 +540,7 @@ pub const TextHandler = struct {
       var iter = self.iterate(offset_start);
       while (iter.nextCharUntil(offset_end)) |char| {
         self.cursor.col += @intCast(char.len);
-        self.cursor.gfx_col += 1;
+        self.cursor.gfx_col += encoding.countCharCols(try std.unicode.utf8Decode(char));
       }
     }
     
@@ -522,8 +573,8 @@ pub const TextHandler = struct {
       const offset_start: u32 = self.lineinfo.getOffset(self.cursor.row);
       self.cursor.gfx_col = 0;
       var iter = self.iterate(offset_start);
-      while (iter.nextCharUntil(pos) != null) {
-        self.cursor.gfx_col += 1;
+      while (iter.nextCharUntil(pos)) |char| {
+        self.cursor.gfx_col += encoding.countCharCols(try std.unicode.utf8Decode(char));
       }
     }
     self.syncColumnScroll(E);
@@ -532,37 +583,40 @@ pub const TextHandler = struct {
   }
   
   pub fn syncColumnScroll(self: *TextHandler, E: *Editor) void {
-    if (self.scroll.gfx_col > self.cursor.gfx_col) {
+    var target_gfx_col: u32 = self.scroll.gfx_col;
+    if (target_gfx_col > self.cursor.gfx_col) {
       if (E.getTextWidth() < self.cursor.gfx_col) {
-        self.scroll.gfx_col = self.cursor.gfx_col - E.getTextWidth() + 1;
+        target_gfx_col = self.cursor.gfx_col - E.getTextWidth() + 1;
       } else if (self.cursor.gfx_col == 0) {
-        self.scroll.gfx_col = 0;
+        target_gfx_col = 0;
       } else {
-        self.scroll.gfx_col = self.cursor.gfx_col - 1;
+        target_gfx_col = self.cursor.gfx_col - 1;
       }
-    } else if ((self.scroll.gfx_col + self.cursor.gfx_col) > E.getTextWidth()) {
+    } else if ((target_gfx_col + self.cursor.gfx_col) > E.getTextWidth()) {
       if (E.getTextWidth() > self.cursor.gfx_col) {
-        self.scroll.gfx_col = E.getTextWidth() - self.cursor.gfx_col + 1;
+        target_gfx_col = E.getTextWidth() - self.cursor.gfx_col + 1;
       } else {
-        self.scroll.gfx_col = self.cursor.gfx_col - E.getTextWidth() + 1;
+        target_gfx_col = self.cursor.gfx_col - E.getTextWidth() + 1;
       }
     }
     
     if (!self.lineinfo.checkIsMultibyte(self.cursor.row)) {
-      self.scroll.col = self.scroll.gfx_col;
+      self.scroll.col = target_gfx_col;
+      self.scroll.gfx_col = target_gfx_col;
     } else {
       self.scroll.col = 0;
-      if (self.scroll.gfx_col != 0) {
+      self.scroll.gfx_col = 0;
+      if (target_gfx_col != 0) {
         const offset_start: u32 = self.lineinfo.getOffset(self.cursor.row);
         const offset_end: u32 = self.getRowOffsetEnd(self.cursor.row);
-        var gfx_col: u32 = 0;
         var iter = self.iterate(offset_start);
         while (iter.nextCharUntil(offset_end)) |char| {
-          if (gfx_col == self.scroll.gfx_col) {
+          const ccol = encoding.countCharCols(std.unicode.utf8Decode(char) catch unreachable);
+          self.scroll.col += @intCast(char.len);
+          self.scroll.gfx_col += ccol;
+          if (self.scroll.gfx_col >= target_gfx_col) {
             break;
           }
-          self.scroll.col += @intCast(char.len);
-          gfx_col += 1;
         }
       }
     }
@@ -656,10 +710,28 @@ pub const TextHandler = struct {
     try self.insertChar(E, char2, false);
   }
   
+  pub fn insertCharUnlessOverwrite(
+    self: *TextHandler, E: *Editor, char: []const u8
+  ) !void {
+    const insidx: u32 = self.calcOffsetFromCursor();
+    const bytes_starting = self.getBytesStartingAt(insidx) orelse {
+      return self.insertChar(E, char, true);
+    };
+    if (std.mem.startsWith(u8, bytes_starting, char)) {
+      self.goRight(E);
+      return;
+    }
+    try self.insertChar(E, char, true);
+  }
+  
   pub fn insertTab(self: *TextHandler, E: *Editor) !void {
     var indent: std.BoundedArray(u8, conf.MAX_TAB_SIZE) = .{};
-    for (0..@intCast(E.conf.tab_size)) |_| {
-      indent.append(' ') catch break;
+    if (E.conf.use_tabs) {
+      indent.append('\t') catch unreachable;
+    } else {
+      for (0..@intCast(E.conf.tab_size)) |_| {
+        indent.append(' ') catch break;
+      }
     }
     const insidx: u32 = self.calcOffsetFromCursor();
     try self.undo_mgr.doAppend(insidx, @intCast(indent.len));
@@ -765,13 +837,12 @@ pub const TextHandler = struct {
   }
   
   pub fn insertNewline(self: *TextHandler, E: *Editor) !void {
-    var indent: str.String = .{};
-    defer indent.deinit(E.allocr());
+    var indent: std.BoundedArray(u8, 32) = .{};
     
     var iter = self.iterate(self.lineinfo.getOffset(self.cursor.row));
-    while (iter.nextCharUntil(self.getRowOffsetEnd(self.cursor.row))) |char| {
+    while (iter.nextCharUntil(self.calcOffsetFromCursor())) |char| {
       if (std.mem.eql(u8, char, " ")) {
-        try indent.appendSlice(E.allocr(), char);
+        indent.appendSlice(char) catch break;
       } else {
         break;
       }
@@ -779,10 +850,10 @@ pub const TextHandler = struct {
     
     try self.insertChar(E, "\n", true);
     
-    if (indent.items.len > 0) {
+    if (indent.len > 0) {
       const insidx: u32 = self.calcOffsetFromCursor();
-      try self.undo_mgr.doAppend(insidx, @intCast(indent.items.len));
-      try self.insertSliceAtPosWithHints(E, insidx, indent.items, false, false);
+      try self.undo_mgr.doAppend(insidx, @intCast(indent.len));
+      try self.insertSliceAtPosWithHints(E, insidx, indent.constSlice(), false, false);
     }
   }
   
@@ -874,9 +945,10 @@ pub const TextHandler = struct {
       self.cursor.gfx_col = 0;
       var i: u32 = offset_start;
       while (i < insidx_end) {
-        const seqlen = Encoding.sequenceLen(self.buffer.items[i]);
-        i += @intCast(seqlen.?);
-        self.cursor.gfx_col += 1;
+        const seqlen = encoding.sequenceLen(self.buffer.items[i]).?;
+        const char = try std.unicode.utf8Decode(self.buffer.items[i..(i+seqlen)]);
+        self.cursor.gfx_col += encoding.countCharCols(char);
+        i += @intCast(seqlen);
       }
     }
     
@@ -908,13 +980,13 @@ pub const TextHandler = struct {
     
     if (delete_next_char) {
       const bytes_starting = self.getBytesStartingAt(delidx).?;
-      seqlen = @intCast(Encoding.sequenceLen(bytes_starting[0]).?);
+      seqlen = @intCast(encoding.sequenceLen(bytes_starting[0]).?);
       @memcpy(deleted_char[0..seqlen], bytes_starting[0..seqlen]);
     } else {
       delidx -= 1;
       while (true) {
         const byte = self.getByte(delidx).?;
-        if (Encoding.isContByte(byte)) {
+        if (encoding.isContByte(byte)) {
           seqlen += 1;
           delidx -= 1;
           // shift to right
@@ -1120,8 +1192,8 @@ pub const TextHandler = struct {
     } else {
       self.cursor.gfx_col = 0;
       var iter = self.iterate(row_start);
-      while (iter.nextCharUntil(delete_start) != null) {
-        self.cursor.gfx_col += 1;
+      while (iter.nextCharUntil(delete_start)) |char| {
+        self.cursor.gfx_col += encoding.countCharCols(try std.unicode.utf8Decode(char));
       }
     }
     
@@ -1159,7 +1231,20 @@ pub const TextHandler = struct {
     self.markers = null;
   }
   
-  /// Replacement
+  pub fn deleteLine(self: *TextHandler, E: *Editor) !void {
+    const offset_start: u32 = self.lineinfo.getOffset(self.cursor.row);
+    var offset_end: u32 = self.getRowOffsetEnd(self.cursor.row);
+    if (self.cursor.row < self.lineinfo.getLen() - 1) {
+      offset_end += 1; // include newline
+    }
+    if (offset_start == offset_end) {
+      return;
+    }
+    _ = try self.deleteRegionAtPos(E, offset_start, offset_end, true, false);
+  }
+  
+  // Replacement
+  
   pub fn replaceRegion(
     self: *TextHandler,
     E: *Editor,
@@ -1230,7 +1315,7 @@ pub const TextHandler = struct {
     var iter = self.iterate(self.lineinfo.getOffset(self.cursor.row));
     while (iter.nextCharUntil(new_replace_end)) |char| {
       self.cursor.col += @intCast(char.len);
-      self.cursor.gfx_col += 1;
+      self.cursor.gfx_col += encoding.countCharCols(try std.unicode.utf8Decode(char));
     }
     
     self.syncColumnScroll(E);
@@ -1265,7 +1350,11 @@ pub const TextHandler = struct {
       }
     }
     
-    fn checkMatch(self: *const ReplaceNeedle, haystack: []const u8) ?usize {
+    fn checkMatch(
+      self: *const ReplaceNeedle,
+      allocr: std.mem.Allocator,
+      haystack: []const u8
+    ) ?usize {
       switch (self.*) {
         .string => |needle| {
           if (std.mem.startsWith(u8, haystack, needle)) {
@@ -1275,7 +1364,9 @@ pub const TextHandler = struct {
           }
         },
         .regex => |*regex| {
-          const match = regex.checkMatch(haystack, .{}) catch return null;
+          const match = regex.checkMatch(
+            allocr, haystack, .{}
+          ) catch return null;
           if (match.pos > 0) {
             return match.pos;
           } else {
@@ -1304,7 +1395,7 @@ pub const TextHandler = struct {
     var slide: usize = 0;
     var replacements: usize = 0;
     while (slide < src_text.len) {
-      if (needle.checkMatch(src_text[slide..])) |len| {
+      if (needle.checkMatch(E.allocr(), src_text[slide..])) |len| {
         try replaced.appendSlice(E.allocr(), replacement);
         slide += len;
         replacements += 1;

@@ -14,6 +14,9 @@ const editor = @import("../editor.zig");
 
 const Expr = @import("../patterns/expr.zig");
 
+const this_shortcuts = @import("../shortcuts.zig").CMD_FIND;
+const this_shortcuts_help = @import("../shortcuts.zig").CMD_FIND_HELP;
+
 pub fn onUnset(self: *editor.Editor, next_state: editor.State) void {
   if (next_state == .text) {
     self.text_handler.markers = null;
@@ -41,9 +44,24 @@ fn findForwards(self: *editor.Editor, cmd_data: *editor.CommandData) !void {
   var opt_end: ?usize = null;
   if (cmd_data.args != null and cmd_data.args.?.find.regex != null) {
     const regex = cmd_data.args.?.find.regex.?;
-    if (try regex.find(text_handler.buffer.items[offset..])) |find_result| {
+    const opt_find_result = regex.find(
+      self.allocr(), text_handler.buffer.items[offset..]
+    ) catch |err| {
+      cmd_data.replacePromptOverlay(self, .{
+        .owned = try std.fmt.allocPrint(
+          self.allocr(),
+          "regex error: {}",
+          .{err}
+        ),
+      });
+      return;
+    };
+    if (opt_find_result) |find_result| {
       opt_pos = offset + find_result.start;
       opt_end = offset + find_result.end;
+    } else {
+      cmd_data.replacePromptOverlay(self, .{ .static = PROMPT_NOT_FOUND, });
+      return;
     }
   } else {
     opt_pos = std.mem.indexOfPos(
@@ -91,9 +109,24 @@ fn findBackwards(self: *editor.Editor, cmd_data: *editor.CommandData) !void {
   var opt_end: ?usize = null;
   if (cmd_data.args != null and cmd_data.args.?.find.regex != null) {
     const regex = cmd_data.args.?.find.regex.?;
-    if (try regex.findBackwards(text_handler.buffer.items[0..offset])) |find_result| {
+    const opt_find_result = regex.findBackwards(
+      self.allocr(), text_handler.buffer.items[0..offset]
+    ) catch |err| {
+      cmd_data.replacePromptOverlay(self, .{
+        .owned = try std.fmt.allocPrint(
+          self.allocr(),
+          "regex error: {}",
+          .{err}
+        ),
+      });
+      return;
+    };
+    if (opt_find_result) |find_result| {
       opt_pos = find_result.start;
       opt_end = find_result.end;
+    } else {
+      cmd_data.replacePromptOverlay(self, .{ .static = PROMPT_NOT_FOUND, });
+      return;
     }
   } else {
     opt_pos = std.mem.lastIndexOf(
@@ -199,37 +232,55 @@ pub fn onKey(self: *editor.Editor, keysym: kbd.Keysym) !bool {
     try Cmd.findForwards(self, cmd_data);
     return true;
   }
-  else if (keysym.ctrl_key and keysym.isChar('b')) {
+  else if (this_shortcuts.key("help", keysym)) {
+    self.help_msg = &this_shortcuts_help;
+    self.needs_redraw = true;
+    return true;
+  }
+  else if (this_shortcuts.key("block", keysym)) {
     try Cmd.toBlockMode(self, cmd_data);
     return true;
   }
-  else if (keysym.ctrl_key and keysym.isChar('r')) {
+  else if (this_shortcuts.key("rep", keysym)) {
     Cmd.toReplace(self, cmd_data);
     self.needs_update_cursor = true;
     return true;
   }
-  else if (keysym.ctrl_key and keysym.isChar('h')) {
+  else if (this_shortcuts.key("allrep", keysym)) {
     try Cmd.toReplaceAll(self, cmd_data);
     self.needs_update_cursor = true;
     return true;
   }
-  else if (keysym.ctrl_key and keysym.isChar('g')) {
+  else if (this_shortcuts.key("resub", keysym)) {
     if (try buildRegex(self)) {
       try Cmd.toReplaceAll(self, cmd_data);
       self.needs_update_cursor = true;
     }
     return true;
   }
-  else if (keysym.ctrl_key and keysym.isChar('e')) {
+  else if (this_shortcuts.key("refind", keysym)) {
     if (try buildRegex(self)) {
       try Cmd.findForwards(self, cmd_data);
+      self.needs_update_cursor = true;
     }
+    return true;
+  }
+  else if (this_shortcuts.key("refindb", keysym)) {
+    if (try buildRegex(self)) {
+      try Cmd.findBackwards(self, cmd_data);
+      self.needs_update_cursor = true;
+    }
+    return true;
+  }
+  else if (this_shortcuts.key("clear", keysym)) {
+    self.text_handler.markers = null;
+    self.needs_redraw = true;
     return true;
   }
   return false;
 }
 
-pub const PROMPT = "Find (next = Enter, ^b = to block, ^r = to replace, ^h = to repl. all):";
+pub const PROMPT = "Find (next = Enter, ^h = help):";
 pub const PROMPT_NOTHING_MARKED = "Nothing marked!";
 pub const PROMPT_NOT_FOUND = "Not found!";
 

@@ -3,21 +3,26 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
   const options = b.addOptions();
 
-  const opt_dbg_show_multibyte_line = b.option(
-    bool,
-    "dbg_show_multibyte_line",
-    "Show whether line is multibyte in line number"
-  ) orelse false;
   options.addOption(bool, "dbg_show_multibyte_line",
-    opt_dbg_show_multibyte_line);
+                    b.option(
+                      bool,
+                      "dbg_show_multibyte_line",
+                      "Show whether line is multibyte in line number"
+                    ) orelse false);
 
-  const opt_dbg_show_gap_buf = b.option(
-    bool,
-    "dbg_show_gap_buf",
-    "Show whether character is in gap buffer"
-  ) orelse false;
   options.addOption(bool, "dbg_show_gap_buf",
-    opt_dbg_show_gap_buf);
+                    b.option(
+                      bool,
+                      "dbg_show_gap_buf",
+                      "Show whether character is in gap buffer"
+                    ) orelse false);
+
+  options.addOption(bool, "dbg_print_read_byte",
+                    b.option(
+                      bool,
+                      "dbg_print_read_byte",
+                      "Print byte read from stdin"
+                    ) orelse false);
 
   const target = b.standardTargetOptions(.{});
   const optimize = b.standardOptimizeOption(.{});

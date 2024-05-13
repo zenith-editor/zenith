@@ -12,13 +12,14 @@ const kbd = @import("./kbd.zig");
 const str = @import("./str.zig");
 const text = @import("./text.zig");
 const sig = @import("./sig.zig");
+const shortcuts = @import("./shortcuts.zig");
+const encoding = @import("./encoding.zig");
 const Expr = @import("./patterns/expr.zig");
 
 pub const State = enum {
   text,
   command,
   mark,
-  quit,
   
   const INIT = State.text;
 };
@@ -51,7 +52,6 @@ const StateHandler = struct {
     &Text,
     &Command,
     &Mark,
-    &Text, // quit
   };
 };
 
@@ -155,29 +155,34 @@ pub const Editor = struct {
   
   in: std.fs.File,
   inr: std.fs.File.Reader,
-  in_buf: std.BoundedArray(u8, INPUT_BUFFER_SIZE),
-  in_read: usize,
+  in_buf: std.BoundedArray(u8, INPUT_BUFFER_SIZE) = .{},
+  in_read: usize = 0,
   
   out: std.fs.File,
   outw: std.fs.File.Writer,
   
-  orig_termios: ?std.posix.termios,
+  orig_termios: ?std.posix.termios = null,
   
-  needs_redraw: bool,
-  needs_update_cursor: bool,
+  needs_redraw: bool = true,
+  needs_update_cursor: bool = true,
   
   state_handler: *const StateHandler,
   
   alloc_gpa: std.heap.GeneralPurposeAllocator(.{}),
   
-  w_width: u32,
-  w_height: u32,
+  w_width: u32 = 0,
+  w_height: u32 = 0,
   
   text_handler: text.TextHandler,
   
   conf: config.Reader,
   
+  help_msg: ?*const shortcuts.HelpText = null,
+  
   _priv: Private,
+  
+  // terminal extensions
+  has_bracketed_paste: bool = false,
   
   pub fn create() !Editor {
     const stdin: std.fs.File = std.io.getStdIn();
@@ -188,17 +193,10 @@ pub const Editor = struct {
     return Editor {
       .in = stdin,
       .inr = stdin.reader(),
-      .in_buf = .{},
-      .in_read = 0,
       .out = stdout,
       .outw = stdout.writer(),
-      .orig_termios = null,
-      .needs_redraw = true,
-      .needs_update_cursor = true,
       .state_handler = &StateHandler.Text,
       .alloc_gpa = alloc_gpa,
-      .w_width = 0,
-      .w_height = 0,
       .text_handler = text_handler,
       .conf = conf,
       ._priv = .{
@@ -288,23 +286,29 @@ pub const Editor = struct {
     return self.inr.readByte();
   }
   
-  fn readRawIntoBuffer(self: *Editor) !usize {
+  fn readRawIntoBuffer(self: *Editor, size: usize) !void {
     self.in_buf.resize(INPUT_BUFFER_SIZE) catch unreachable;
     errdefer self.in_buf.resize(0) catch unreachable;
-    const n_read = try self.inr.read(self.in_buf.slice());
+    const n_read = try self.inr.read(self.in_buf.slice()[0..size]);
     self.in_buf.resize(n_read) catch unreachable;
-    return n_read;
   }
   
   fn readByte(self: *Editor) !u8 {
+    var byte: u8 = undefined;
     if (self.in_read < self.in_buf.len) {
-      const byte = self.in_buf.buffer[self.in_read];
+      byte = self.in_buf.buffer[self.in_read];
       self.in_read += 1;
-      return byte;
     } else {
-      const byte = try self.readRaw();
-      return byte;
+      byte = try self.readRaw();
     }
+    if (comptime build_config.dbg_print_read_byte) {
+      if (std.ascii.isPrint(byte)) {
+        std.debug.print("read: {} ({c})\n", .{byte, byte});
+      } else {
+        std.debug.print("read: {}\n", .{byte});
+      }
+    }
+    return byte;
   }
   
   fn flushConsoleInput(self: *Editor) void {
@@ -314,59 +318,70 @@ pub const Editor = struct {
     }
   }
   
+  const EscapeMatcher = struct {
+    buffered: std.BoundedArray(u8, 16) = .{},
+    editor: *Editor,
+    
+    inline fn readByte(self: *EscapeMatcher) u8 {
+      if (self.buffered.popOrNull()) |byte| {
+        return byte;
+      }
+      return self.editor.readByte() catch 0;
+    }
+    
+    inline fn match(self: *EscapeMatcher, bytes: []const u8) bool {
+      for (bytes, 0..bytes.len) |byte, i| {
+        const cmp = self.readByte();
+        if (cmp != byte) {
+          self.buffered.append(cmp) catch {
+            @panic("EscapeMatcher buffer too small");
+          };
+          var it = std.mem.reverseIterator(bytes[0..i]);
+          while (it.next()) |byte_read| {
+            self.buffered.append(byte_read) catch {
+              @panic("EscapeMatcher buffer too small");
+            };
+          }
+          return false;
+        }
+      }
+      return true;
+    }
+  };
+  
   fn readKey(self: *Editor) ?kbd.Keysym {
     const raw = self.readByte() catch return null;
     if (raw == kbd.Keysym.ESC) {
       if (self.readByte() catch null) |possibleEsc| {
         if (possibleEsc == '[') {
-          switch (self.readByte() catch 0) {
-            'A' => { return kbd.Keysym.initSpecial(.up); },
-            'B' => { return kbd.Keysym.initSpecial(.down); },
-            'C' => { return kbd.Keysym.initSpecial(.right); },
-            'D' => { return kbd.Keysym.initSpecial(.left); },
-            'F' => { return kbd.Keysym.initSpecial(.end); },
-            'H' => { return kbd.Keysym.initSpecial(.home); },
-            '3' => {
-              switch (self.readByte() catch 0) {
-                '~' => { return kbd.Keysym.initSpecial(.del); },
-                else => {
-                  self.flushConsoleInput();
-                  return null;
-                },
-              }
-            },
-            '5' => {
-              switch (self.readByte() catch 0) {
-                '~' => { return kbd.Keysym.initSpecial(.pgup); },
-                else => {
-                  self.flushConsoleInput();
-                  return null;
-                },
-              }
-            },
-            '6' => {
-              switch (self.readByte() catch 0) {
-                '~' => { return kbd.Keysym.initSpecial(.pgdown); },
-                else => {
-                  self.flushConsoleInput();
-                  return null;
-                },
-              }
-            },
-            else => {
-              // unknown escape sequence, empty the buffer
-              self.flushConsoleInput();
-              return null;
-            }
+          var matcher: EscapeMatcher = .{ .editor = self, };
+          // 4 bytes
+          if (matcher.match("200~")) { return kbd.Keysym.initSpecial(.paste_begin); }
+          else if (matcher.match("201~")) { return kbd.Keysym.initSpecial(.paste_end); }
+          else if (matcher.match("1;5D")) {
+            return .{ .raw = 0, .key = .left, .ctrl_key = true, };
           }
-        } else {
-          // unknown escape sequence, empty the buffer
-          self.flushConsoleInput();
-          return null;
+          else if (matcher.match("1;5C")) {
+            return .{ .raw = 0, .key = .right, .ctrl_key = true, };
+          }
+          // 2 bytes
+          else if (matcher.match("3~")) { return kbd.Keysym.initSpecial(.del); }
+          else if (matcher.match("5~")) { return kbd.Keysym.initSpecial(.pgup); }
+          else if (matcher.match("6~")) { return kbd.Keysym.initSpecial(.pgdown); }
+          // 1 byte
+          else if (matcher.match("A")) { return kbd.Keysym.initSpecial(.up); }
+          else if (matcher.match("B")) { return kbd.Keysym.initSpecial(.down); }
+          else if (matcher.match("C")) { return kbd.Keysym.initSpecial(.right); }
+          else if (matcher.match("D")) { return kbd.Keysym.initSpecial(.left); }
+          else if (matcher.match("F")) { return kbd.Keysym.initSpecial(.end); }
+          else if (matcher.match("H")) { return kbd.Keysym.initSpecial(.home); }
         }
+        // unknown escape sequence, empty the buffer
+        self.flushConsoleInput();
+        return null;
       }
     }
-    if (text.Encoding.sequenceLen(raw)) |seqlen| {
+    if (encoding.sequenceLen(raw)) |seqlen| {
       if (seqlen > 1) {
         var seq = std.BoundedArray(u8, 4).init(0) catch unreachable;
         seq.append(raw) catch unreachable;
@@ -386,11 +401,15 @@ pub const Editor = struct {
   
   // console output
   
-  pub const CLEAR_SCREEN = "\x1b[2J";
-  pub const CLEAR_LINE = "\x1b[2K";
-  pub const RESET_POS = "\x1b[H";
-  pub const COLOR_INVERT = "\x1b[7m";
-  pub const COLOR_DEFAULT = "\x1b[0m";
+  pub const ESC_CLEAR_SCREEN = "\x1b[2J";
+  pub const ESC_CLEAR_LINE = "\x1b[2K";
+  pub const ESC_RESET_POS = "\x1b[H";
+  pub const ESC_COLOR_INVERT = "\x1b[7m";
+  pub const ESC_COLOR_DEFAULT = "\x1b[0m";
+  pub const ESC_COLOR_GRAY = "\x1b[38;5;8m";
+  
+  pub const HTAB_CHAR = ESC_COLOR_GRAY ++ "\xc2\xbb " ++ ESC_COLOR_DEFAULT;
+  pub const HTAB_COLS = 2;
   
   pub fn writeAll(self: *Editor, bytes: []const u8) !void {
     return self.outw.writeAll(bytes);
@@ -418,8 +437,8 @@ pub const Editor = struct {
   }
   
   pub fn refreshScreen(self: *Editor) !void {
-    try self.writeAll(Editor.CLEAR_SCREEN);
-    try self.writeAll(Editor.RESET_POS);
+    try self.outw.writeAll(Editor.ESC_CLEAR_SCREEN);
+    try self.outw.writeAll(Editor.ESC_RESET_POS);
   }
   
   // console dims
@@ -456,10 +475,32 @@ pub const Editor = struct {
   
   // handle input
   
+  /// minimum number of consecutive bytes read to be considered
+  /// from clipboard. this is a heuristic to detect input from clipboard
+  /// if for some reason the vterm doesn't support it
   const TYPED_CLIPBOARD_BYTE_THRESHOLD = 3;
   
   fn handleInput(self: *Editor, is_clipboard: bool) !void {
     if (self.readKey()) |keysym| {
+      if (self.help_msg != null) {
+        self.help_msg = null;
+        self.needs_redraw = true;
+      }
+      switch (keysym.key) {
+        .paste_begin => {
+          // see https://invisible-island.net/xterm/xterm-paste64.html
+          while (self.readKey()) |keysym1| {
+            switch (keysym1.key) {
+              .paste_end => { break; },
+              else => {
+                try self.state_handler.handleInput(self, keysym1, true);
+              },
+            }
+          }
+          return;
+        },
+        else => {},
+      }
       try self.state_handler.handleInput(self, keysym, is_clipboard);
     }
   }
@@ -485,34 +526,39 @@ pub const Editor = struct {
           return self.handleInput(false);
         }
         
-        var int_bytes_avail: i32 = 0;
-        if (std.os.linux.ioctl(
-          std.posix.STDIN_FILENO,
-          std.os.linux.T.FIONREAD,
-          @intFromPtr(&int_bytes_avail)
-        ) < 0) {
-          // ignore error reading available bytes and return
-          return;
-        }
+        while (true) {
+          var int_bytes_avail: i32 = 0;
+          if (std.os.linux.ioctl(
+            std.posix.STDIN_FILENO,
+            std.os.linux.T.FIONREAD,
+            @intFromPtr(&int_bytes_avail)
+          ) < 0) {
+            // ignore error reading available bytes and return
+            return self.handleInput(false);
+          }
+          
+          // no more bytes left
+          if (int_bytes_avail == 0) {
+            return;
+          }
         
-        if (int_bytes_avail >= TYPED_CLIPBOARD_BYTE_THRESHOLD) {
-          const bytes_avail: usize = @intCast(int_bytes_avail);
-          var bytes_read: usize = 0;
-          var is_clipboard = true;
-          while (bytes_read < bytes_avail) {
-            self.in_read = 0;
-            bytes_read += try self.readRawIntoBuffer();
+          const bytes_avail: usize = @min(@as(usize, @intCast(int_bytes_avail)), self.in_buf.buffer.len);
+          try self.readRawIntoBuffer(bytes_avail);
+          if (self.has_bracketed_paste) {
+            // handled in handleInput
+            while (self.in_read < self.in_buf.len) {
+              try self.handleInput(false);
+            }
+            self.in_buf.resize(0) catch unreachable;
+          } else {
+            var is_clipboard = bytes_avail > TYPED_CLIPBOARD_BYTE_THRESHOLD;
             while (self.in_read < self.in_buf.len) {
               if (self.in_buf.slice()[self.in_read] == kbd.Keysym.ESC) {
                 is_clipboard = false;
               }
               try self.handleInput(is_clipboard);
             }
-          }
-          self.in_buf.resize(0) catch unreachable;
-        } else {
-          for (0..@intCast(int_bytes_avail)) |_| {
-            try self.handleInput(false);
+            self.in_buf.resize(0) catch unreachable;
           }
         }
       },
@@ -525,7 +571,15 @@ pub const Editor = struct {
   // handle output
   
   pub fn renderText(self: *Editor) !void {
+    if (self.getTextHeight() == 0) {
+      return;
+    }
+
     const text_handler: *const text.TextHandler = &self.text_handler;
+    
+    const text_width = self.getTextWidth();
+    const text_height = self.getTextHeight();
+
     var row: u32 = 0;
     const cursor_row: u32 = text_handler.cursor.row - text_handler.scroll.row;
     var lineno: [16]u8 = undefined;
@@ -533,8 +587,8 @@ pub const Editor = struct {
       const offset_start: u32 = text_handler.lineinfo.getOffset(@intCast(i));
       const offset_end: u32 = text_handler.getRowOffsetEnd(@intCast(i));
       
-      const colOffset: u32 = if (row == cursor_row) text_handler.scroll.col else 0;
-      var iter = text_handler.iterate(offset_start + colOffset);
+      const offset_col: u32 = if (row == cursor_row) text_handler.scroll.col else 0;
+      var iter = text_handler.iterate(offset_start + offset_col);
       
       try self.moveCursor(row, 0);
       
@@ -547,11 +601,13 @@ pub const Editor = struct {
           (comptime build_config.dbg_show_multibyte_line) and
           self.text_handler.lineinfo.checkIsMultibyte(@intCast(i))
         ) {
-          try self.writeAll(COLOR_INVERT);
-          try self.writeAll(lineno_slice);
-          try self.writeAll(COLOR_DEFAULT);
+          try self.outw.writeAll(ESC_COLOR_INVERT);
+          try self.outw.writeAll(lineno_slice);
+          try self.outw.writeAll(ESC_COLOR_DEFAULT);
         } else {
-          try self.writeAll(lineno_slice);
+          try self.outw.writeAll(ESC_COLOR_GRAY);
+          try self.outw.writeAll(lineno_slice);
+          try self.outw.writeAll(ESC_COLOR_DEFAULT);
         }
         try self.outw.writeByte(' ');
       }
@@ -560,15 +616,15 @@ pub const Editor = struct {
         var col: u32 = 0;
         var pos = offset_start;
         if (pos > markers.start and pos < markers.end) {
-          try self.writeAll(COLOR_INVERT);
+          try self.outw.writeAll(ESC_COLOR_INVERT);
         }
         while (iter.nextCharUntil(offset_end)) |bytes| {
-          if (!(try self.renderCharInLineMarked(bytes, &col, markers, pos))) {
+          if (!try self.renderCharInLineMarked(bytes, &col, text_width, markers, pos)) {
             break;
           }
           pos += @intCast(bytes.len);
         }
-        try self.writeAll(COLOR_DEFAULT);
+        try self.outw.writeAll(ESC_COLOR_DEFAULT);
       } else if (comptime build_config.dbg_show_gap_buf) {
         var col: u32 = 0;
         var pos = offset_start;
@@ -578,62 +634,119 @@ pub const Editor = struct {
           .start_cur = .{},
         };
         if (pos > gap_buf_markers.start and pos < gap_buf_markers.end) {
-          try self.writeAll(COLOR_INVERT);
+          try self.outw.writeAll(ESC_COLOR_INVERT);
         }
         while (iter.nextCharUntil(offset_end)) |bytes| {
-          if (!(try self.renderCharInLineMarked(bytes, &col, &gap_buf_markers, pos))) {
+          if (!try self.renderCharInLineMarked(bytes, &col, text_width, &gap_buf_markers, pos)) {
             break;
           }
           pos += @intCast(bytes.len);
         }
-        try self.writeAll(COLOR_DEFAULT);
+        try self.outw.writeAll(ESC_COLOR_DEFAULT);
       } else {
         var col: u32 = 0;
         while (iter.nextCharUntil(offset_end)) |bytes| {
-          if (!(try self.renderCharInLine(bytes, &col))) {
+          if (!try self.renderCharInLine(bytes, &col, text_width)) {
             break;
           }
         }
       }
       
       row += 1;
-      if (row == self.getTextHeight()) {
+      if (row == text_height) {
         break;
       }
     }
+    
+    try self.showUpperLayers();
+    
     self.needs_update_cursor = true;
   }
   
-  fn renderCharInLine(self: *Editor, bytes: []const u8, colref: *u32) !bool {
-    if (colref.* == self.getTextWidth()) {
+  fn renderCharInLine(self: *Editor, bytes: []const u8, colref: *u32, text_width: u32) !bool {
+    var cwidth: u32 = 0;
+    if (bytes.len == 1 and bytes[0] == '\t') {
+      cwidth = HTAB_COLS;
+    } else {
+      cwidth = encoding.cwidth(try std.unicode.utf8Decode(bytes));
+      if (cwidth == 0) {
+        return true;
+      }
+    }
+    if ((colref.* + cwidth) >= text_width) {
       return false;
     }
-    if (bytes.len == 1 and std.ascii.isControl(bytes[0])) {
-      return true;
+    if (bytes.len == 1 and bytes[0] == '\t') {
+      try self.outw.writeAll(HTAB_CHAR);
+    } else {
+      try self.outw.writeAll(bytes);
     }
-    try self.outw.writeAll(bytes);
-    colref.* += 1;
+    colref.* += cwidth;
     return true;
   }
   
   fn renderCharInLineMarked(
-    self: *Editor, bytes: []const u8, colref: *u32,
+    self: *Editor, bytes: []const u8, colref: *u32, text_width: u32,
     markers: *const text.TextHandler.Markers,
     pos: u32,
   ) !bool {
     if (pos == markers.start) {
-      try self.writeAll(COLOR_INVERT);
-      return self.renderCharInLine(bytes, colref);
+      try self.outw.writeAll(ESC_COLOR_INVERT);
+      return self.renderCharInLine(bytes, colref, text_width);
     } else if (pos >= markers.end) {
-      try self.writeAll(COLOR_DEFAULT);
-      return self.renderCharInLine(bytes, colref);
+      try self.outw.writeAll(ESC_COLOR_DEFAULT);
+      return self.renderCharInLine(bytes, colref, text_width);
     } else {
-      return self.renderCharInLine(bytes, colref);
+      return self.renderCharInLine(bytes, colref, text_width);
+    }
+  }
+  
+  fn showUpperLayers(self: *Editor) !void {
+    if (self.help_msg) |help_msg| {
+      var row: u32 = 0;
+      if (self.getTextHeight() >= help_msg.rows) {
+        row = self.getTextHeight() - help_msg.rows;
+      }
+      try self.moveCursor(row, 0);
+      try self.outw.writeAll(ESC_CLEAR_LINE);
+      for (help_msg.text) |char| {
+        if (char == '\n') {
+          row += 1;
+          try self.moveCursor(row, 0);
+          try self.outw.writeAll(ESC_CLEAR_LINE);
+        } else {
+          try self.outw.writeByte(char);
+        }
+      }
     }
   }
   
   fn handleOutput(self: *Editor) !void {
     try self.state_handler.handleOutput(self);
+  }
+  
+  // terminal extensions
+  
+  const ESC_EXT_PASTE = "\x1b[?2004h";
+  const ESC_EXT_PASTE_DISABLE = "\x1b[?2004l";
+  
+  fn enableTermExts(self: *Editor) !void {
+    try self.outw.writeAll(ESC_EXT_PASTE);
+    // TODO: check if terminal actually supports bracketed pastes
+    self.has_bracketed_paste = true;
+  }
+  fn disableTermExts(self: *Editor) !void {
+    if (self.has_bracketed_paste) {
+      try self.outw.writeAll(ESC_EXT_PASTE_DISABLE);
+    }
+  }
+  
+  // terminal restore
+  
+  pub fn restoreTerminal(self: *Editor) !void {
+    try self.disableTermExts();
+    try self.refreshScreen();
+    try self.disableRawMode();
   }
   
   // tick
@@ -644,14 +757,21 @@ pub const Editor = struct {
   pub fn run(self: *Editor) !void {
     try self.updateWinSize();
     try self.enableRawMode();
+    try self.enableTermExts();
     self.needs_redraw = true;
     var ts = std.time.microTimestamp();
-    while (self.getState() != State.quit) {
+    while (true) {
       if (sig.resized) {
         try self.updateWinSize();
         sig.resized = false;
       }
-      try self.handleInputPolling();
+      self.handleInputPolling() catch |err| {
+        if (err == error.Quit) {
+          break;
+        } else {
+          return err;
+        }
+      };
       try self.handleOutput();
       
       const new_ts = std.time.microTimestamp();
@@ -662,8 +782,7 @@ pub const Editor = struct {
       }
       ts = new_ts;
     }
-    try self.refreshScreen();
-    try self.disableRawMode();
+    self.restoreTerminal() catch {};
   }
   
   pub fn openAtStart(self: *Editor, opened_file_str: str.String) !void {

@@ -25,7 +25,7 @@ pub fn onInputtedGeneric(self: *editor.Editor) !?std.fs.File {
         cmd_data.replacePromptOverlay(self, .{
           .owned = try std.fmt.allocPrint(
             self.allocr(),
-            "Unable to create new file! (ERR: {})",
+            PROMPT_ERR_NEW_FILE,
             .{create_err}
           ),
         });
@@ -36,7 +36,7 @@ pub fn onInputtedGeneric(self: *editor.Editor) !?std.fs.File {
       cmd_data.replacePromptOverlay(self, .{
         .owned = try std.fmt.allocPrint(
           self.allocr(),
-          "Unable to open file! (ERR: {})",
+          PROMPT_ERR_OPEN_FILE,
           .{err}
         ),
       });
@@ -51,7 +51,7 @@ pub fn onInputtedGeneric(self: *editor.Editor) !?std.fs.File {
       cmd_data.replacePromptOverlay(self, .{
         .owned = try std.fmt.allocPrint(
           self.allocr(),
-          "Unable to open file! (ERR: {})",
+          PROMPT_ERR_OPEN_FILE,
           .{err}
         ),
       });
@@ -63,20 +63,29 @@ pub fn onInputtedGeneric(self: *editor.Editor) !?std.fs.File {
 
 pub fn onInputted(self: *editor.Editor) !void {
   if (try Cmd.onInputtedGeneric(self)) |opened_file| {
-    try self.text_handler.open(self, opened_file, true);
+    self.text_handler.open(self, opened_file, true) catch |err| {
+      self.getCmdData().replacePromptOverlay(self, .{
+        .owned = try std.fmt.allocPrint(
+          self.allocr(),
+          PROMPT_ERR_OPEN_FILE,
+          .{err}
+        ),
+      });
+      return;
+    };
     self.setState(.text);
     self.needs_redraw = true;
   }
 }
 
 pub fn setupUnableToSavePrompt(self: *editor.Editor, err: anyerror) !void {
-  self.getCmdData().promptoverlay = .{
+  self.getCmdData().replacePromptOverlay(self, .{
     .owned = try std.fmt.allocPrint(
       self.allocr(),
-      "Unable to save file, try saving to another location! (ERR: {})",
+      PROMPT_ERR_SAVE_FILE,
       .{err}
     ),
-  };
+  });
 }
 
 pub fn onInputtedTryToSave(self: *editor.Editor) !void {
@@ -94,6 +103,10 @@ pub fn onInputtedTryToSave(self: *editor.Editor) !void {
 pub const PROMPT_OPEN = "Open file:";
 pub const PROMPT_SAVE = "Save file:";
 pub const PROMPT_SAVE_NEW = "Save file to new location:";
+pub const PROMPT_ERR_NEW_FILE = "Unable to create new file! (ERR: {})";
+pub const PROMPT_ERR_OPEN_FILE = "Unable to open file! (ERR: {})";
+pub const PROMPT_ERR_SAVE_FILE =
+  "Unable to save file, try saving to another location! (ERR: {})";
 
 pub const Fns: editor.CommandData.FnTable = .{
   .onInputted = Cmd.onInputted,

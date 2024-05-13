@@ -8,6 +8,10 @@ const Impl = @This();
 const kbd = @import("../kbd.zig");
 const text = @import("../text.zig");
 const editor = @import("../editor.zig");
+const encoding = @import("../encoding.zig");
+
+const CMD_PROMPT = editor.Editor.ESC_COLOR_GRAY ++ " >" ++ editor.Editor.ESC_COLOR_DEFAULT;
+const CMD_PROMPT_COLS = 2;
 
 pub fn onUnset(self: *editor.Editor, next_state: editor.State) void {
   const cmd_data: *editor.CommandData = self.getCmdData();
@@ -63,7 +67,7 @@ pub fn handleInput(self: *editor.Editor, keysym: kbd.Keysym, is_clipboard: bool)
     cmd_data.cmdinp_pos.gfx_col = 0;
     while (cmd_data.cmdinp_pos.col < cmd_data.cmdinp.items.len) {
       const start_byte = cmd_data.cmdinp.items[cmd_data.cmdinp_pos.col];
-      const seqlen = text.Encoding.sequenceLen(start_byte) orelse unreachable;
+      const seqlen = encoding.sequenceLen(start_byte) orelse unreachable;
       cmd_data.cmdinp_pos.col += seqlen;
       cmd_data.cmdinp_pos.gfx_col += 1;
     }
@@ -86,7 +90,7 @@ pub fn handleInput(self: *editor.Editor, keysym: kbd.Keysym, is_clipboard: bool)
 
 pub fn renderStatus(self: *editor.Editor) !void {
   try self.moveCursor(self.getTextHeight(), 0);
-  try self.writeAll(editor.Editor.CLEAR_LINE);
+  try self.writeAll(editor.Editor.ESC_CLEAR_LINE);
   const cmd_data: *editor.CommandData = self.getCmdData();
   if (cmd_data.promptoverlay) |promptoverlay| {
     try self.writeAll(promptoverlay.slice());
@@ -94,9 +98,8 @@ pub fn renderStatus(self: *editor.Editor) !void {
     try self.writeAll(prompt);
   }
   try self.moveCursor((self.getTextHeight() + 1), 0);
-  try self.writeAll(editor.Editor.CLEAR_LINE);
-  const prompt = " >";
-  try self.writeAll(prompt);
+  try self.writeAll(editor.Editor.ESC_CLEAR_LINE);
+  try self.writeAll(CMD_PROMPT);
   var col: u32 = 0;
   for (cmd_data.cmdinp.items) |byte| {
     if (col > self.getTextWidth()) {
@@ -107,7 +110,7 @@ pub fn renderStatus(self: *editor.Editor) !void {
   }
   try self.moveCursor(
     (self.getTextHeight() + 1),
-    @intCast(prompt.len + cmd_data.cmdinp_pos.gfx_col)
+    @intCast(CMD_PROMPT_COLS + cmd_data.cmdinp_pos.gfx_col)
   );
 }
 
@@ -130,11 +133,11 @@ fn goLeft(self: *editor.Editor, cmd_data: *editor.CommandData) void {
   }
   pos.col -= 1;
   const start_byte = cmd_data.cmdinp.items[pos.col];
-  if (text.Encoding.isContByte(start_byte)) {
+  if (encoding.isContByte(start_byte)) {
     // prev char is multi byte
     while (pos.col > 0) {
       const maybe_cont_byte = cmd_data.cmdinp.items[pos.col];
-      if (text.Encoding.isContByte(maybe_cont_byte)) {
+      if (encoding.isContByte(maybe_cont_byte)) {
         pos.col -= 1;
       } else {
         break;
@@ -151,7 +154,7 @@ fn goRight(self: *editor.Editor, cmd_data: *editor.CommandData) void {
     return;
   }
   const start_byte = cmd_data.cmdinp.items[pos.col];
-  const seqlen = text.Encoding.sequenceLen(start_byte) orelse unreachable;
+  const seqlen = encoding.sequenceLen(start_byte) orelse unreachable;
   pos.col += seqlen;
   pos.gfx_col += 1;
   self.needs_update_cursor = true;
@@ -164,7 +167,7 @@ fn deleteCharBack(self: *editor.Editor, cmd_data: *editor.CommandData) void {
   }
   Impl.goLeft(self, cmd_data);
   const start_byte = cmd_data.cmdinp.items[pos.col];
-  const seqlen = text.Encoding.sequenceLen(start_byte) orelse unreachable;
+  const seqlen = encoding.sequenceLen(start_byte) orelse unreachable;
   cmd_data.cmdinp.replaceRangeAssumeCapacity(pos.col, seqlen, "");
   self.needs_update_cursor = true;
 }
@@ -175,7 +178,7 @@ fn deleteCharFront(self: *editor.Editor, cmd_data: *editor.CommandData) void {
     return;
   }
   const start_byte = cmd_data.cmdinp.items[pos.col];
-  const seqlen = text.Encoding.sequenceLen(start_byte) orelse unreachable;
+  const seqlen = encoding.sequenceLen(start_byte) orelse unreachable;
   cmd_data.cmdinp.replaceRangeAssumeCapacity(pos.col, seqlen, "");
   self.needs_update_cursor = true;
 }

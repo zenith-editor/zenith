@@ -37,7 +37,7 @@ fn genQualifier(
   switch (char) {
     '+' => {
       // (L0)    L0: <char>
-      // (len+0) split L0, L2
+      // (len+0) split L2, L0
       // (len+1) L2: ...
       const L2 = expr.instrs.items.len + 1;
       try expr.instrs.append(allocr, .{
@@ -48,6 +48,26 @@ fn genQualifier(
       return .{ .expr_shift = 0, };
     },
     '*' => {
+      // (L0)    L0: split L1, L2
+      // (L0+1)  L1: <char>
+      // len+0 accounts for new L0
+      // (len+1) jmp L0
+      // (len+2) L2: ...
+      const L1 = L0 + 1;
+      const L2 = expr.instrs.items.len + 2;
+      for (expr.instrs.items) |*instr| {
+        instr.incrPc(1, L0);
+      }
+      try expr.instrs.insert(allocr, L0, .{
+        // again, greedy match
+        .split = .{ .a = L2, .b = L1, },
+      });
+      try expr.instrs.append(allocr, .{
+        .jmp = L0,
+      });
+      return .{ .expr_shift = 1, };
+    },
+    '-' => {
       // (L0)    L0: split L1, L2
       // (L0+1)  L1: <char>
       // len+0 accounts for new L0
@@ -122,7 +142,7 @@ fn parseGroup(
     }
     
     switch (char) {
-      '+', '*', '?' => |qualifier| {
+      '+', '-', '*', '?' => |qualifier| {
         if (findLastSimpleExpr(expr)) |L0| {
           _ = try genQualifier(allocr, qualifier, expr, L0);
         } else {
@@ -266,7 +286,7 @@ fn parseGroup(
         
         if (self.str_idx < self.in_pattern.len) {
           switch (self.in_pattern[self.str_idx]) {
-            '+', '*', '?' => |qualifier| {
+            '+', '-', '*', '?' => |qualifier| {
               self.str_idx += 1;
               
               const L0 = group_or_root.instr_start;
@@ -336,7 +356,7 @@ fn parseGroup(
         } else {
           try expr.instrs.append(
             allocr,
-            .{ .char_inverse = std.ascii.control_code.cr, });
+            .{ .char_inverse = std.ascii.control_code.lf, });
         }
       },
       else => {
@@ -372,5 +392,6 @@ pub fn parse(
   try expr.instrs.append(allocr, .{
     .matched = {},
   });
+  try optimizer.optimizePrefixString(&expr, allocr);
   return expr;
 }

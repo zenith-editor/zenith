@@ -8,6 +8,14 @@
 // as described in the following article:
 //
 //   https://swtch.com/~rsc/regexp/regexp2.html
+//
+// The virtual machine is a simple backtracking-based implementation, with a
+// few optimizations to help reduce memory usage:
+//
+//   * Threads are stored in a run-length encoded stack, to handle the simple
+//     repetitions.
+//   * The thread stack can either be stored on the hardware stack, or the heap
+//     depending on the number of threads being ran.
 
 const Expr = @This();
 
@@ -118,29 +126,117 @@ const VM = struct {
   const Thread = struct {
     str_idx: usize,
     pc: usize,
-    fully_matched: bool = false,
+    str_idx_delta: u32 = 0,
+    str_idx_repeats: u32 = 0,
+  };
+  
+  const ThreadStack = struct {
+    const HEAP_THRESHOLD = 16;
+    
+    const Internal = union(enum) {
+      stackalloc: std.BoundedArray(Thread, HEAP_THRESHOLD),
+      heapalloc: std.ArrayListUnmanaged(Thread),
+    };
+    
+    internal: Internal = .{
+      .stackalloc = .{},
+    },
+    
+    fn deinit(self: *ThreadStack, allocr: std.mem.Allocator) void {
+      switch (self.internal) {
+        .heapalloc => |*heapalloc| { heapalloc.deinit(allocr); },
+        else => {},
+      }
+    }
+    
+    fn append(self: *ThreadStack, allocr: std.mem.Allocator, thread: Thread) !void {
+      var opt_new_heapalloc: ?std.ArrayListUnmanaged(Thread) = null;
+      switch (self.internal) {
+        .stackalloc => |*stackalloc| {
+          if (stackalloc.append(thread)) {
+            return;
+          } else |_| {
+            var heapalloc = try std.ArrayListUnmanaged(Thread)
+              .initCapacity(allocr, HEAP_THRESHOLD+1);
+            try heapalloc.appendSlice(allocr, stackalloc.constSlice());
+            opt_new_heapalloc = heapalloc;
+          }
+        },
+        else => {},
+      }
+      if (opt_new_heapalloc) |new_heapalloc| {
+        self.internal = .{ .heapalloc = new_heapalloc, };
+      }
+      try self.internal.heapalloc.append(allocr, thread);
+    }
+    
+    fn len(self: *ThreadStack) usize {
+      switch (self.internal) {
+        .stackalloc => |*stackalloc| { return stackalloc.len; },
+        .heapalloc => |*heapalloc| { return heapalloc.items.len; },
+      }
+    }
+    
+    fn top(self: *ThreadStack) ?*Thread {
+      switch (self.internal) {
+        .stackalloc => |*stackalloc| {
+          if (stackalloc.len > 0) {
+            return &stackalloc.buffer[stackalloc.len - 1];
+          }
+        },
+        .heapalloc => |*heapalloc| {
+          if (heapalloc.items.len > 0) {
+            return &heapalloc.items[heapalloc.items.len - 1];
+          }
+        },
+      }
+      return null;
+    }
+    
+    fn pop(self: *ThreadStack) Thread {
+      switch (self.internal) {
+        .stackalloc => |*stackalloc| {
+          return stackalloc.pop();
+        },
+        .heapalloc => |*heapalloc| {
+          return heapalloc.pop();
+        },
+      }
+    }
   };
   
   haystack: []const u8,
   instrs: []const Instr,
   options: *const MatchOptions,
-  thread_stack: std.BoundedArray(Thread, 128) = .{},
+  allocr: std.mem.Allocator,
+  thread_stack: ThreadStack = .{},
+  fully_matched: bool = false,
   
-  fn nextInstr(self: *VM, thread: *Thread) !bool {
-    // std.debug.print("{s}\n", .{self.haystack[thread.str_idx..]});
-    // std.debug.print(">>> {} {}\n", .{thread.pc,self.instrs[thread.pc]});
-    // std.debug.print("{any}\n", .{self.thread_stack.slice()});
+  fn deinit(self: *VM) void {
+    self.thread_stack.deinit(self.allocr);
+  }
+  
+  const NextInstrResult = enum {
+    Stop,
+    Continue,
+    Matched,
+  };
+  
+  fn nextInstr(self: *VM, thread: Thread) !void {
+//     std.debug.print("{s}\n", .{self.haystack[thread.str_idx..]});
+//     std.debug.print(">>> {} {}\n", .{thread.pc,self.instrs[thread.pc]});
+//     std.debug.print("{any}\n", .{self.thread_stack.items});
     switch (self.instrs[thread.pc]) {
       .abort => {
         @panic("abort opcode reached");
       },
       .matched => {
-        thread.fully_matched = true;
-        return false;
+        self.fully_matched = true;
+        return;
       },
       .any, .char, .char_inverse, .range, .range_inverse => {
         if (thread.str_idx >= self.haystack.len) {
-          return false;
+          return;
         }
         const seqlen = try std.unicode.utf8ByteSequenceLength(
           self.haystack[thread.str_idx]
@@ -155,12 +251,12 @@ const VM = struct {
           .any => {},
           .char => |char1| {
             if (char != char1) {
-              return false;
+              return;
             }
           },
           .char_inverse => |char1| {
             if (char == char1) {
-              return false;
+              return;
             }
           },
           .range => |ranges| {
@@ -172,89 +268,138 @@ const VM = struct {
               }
             }
             if (!matches) {
-              return false;
+              return;
             }
           },
           .range_inverse => |ranges| {
             for (ranges) |range| {
               if (range.from <= char and range.to >= char) {
-                return false;
+                return;
               }
             }
           },
           else => unreachable,
         }
-        thread.pc += 1;
-        thread.str_idx += seqlen;
-        return true;
+        try self.addThread(.{
+          .str_idx = thread.str_idx + seqlen,
+          .pc = thread.pc + 1,
+        });
+        return;
       },
-      .string => |string| {
+      .string => {
         // string is only here for optimizing find calls
-        std.debug.assert(thread.pc == 0);
-        
-        for (0..string.len) |i| {
-          if (thread.str_idx == self.haystack.len) {
-            return false;
-          }
-          if (self.haystack[thread.str_idx] == string[i]) {
-            thread.str_idx += 1;
-          } else {
-            return false;
-          }
-        }
-        
-        thread.pc += 1;
-        return true;
+        @panic("should be handled in exec");
       },
       .jmp => |target| {
-        thread.pc = target;
-        return true;
+        try self.addThread(.{
+          .str_idx = thread.str_idx,
+          .pc = target,
+        });
+        return;
       },
       .split => |split| {
-        self.thread_stack.append(.{
-          .pc = split.b,
+        try self.addThread(.{
           .str_idx = thread.str_idx,
-        }) catch return error.BacktrackOverflow;
-        thread.pc = split.a;
-        return true;
+          .pc = split.a,
+        });
+        try self.addThread(.{
+          .str_idx = thread.str_idx,
+          .pc = split.b,
+        });
+        return;
       },
       .group_start => |group_id| {
         if (self.options.group_out) |group_out| {
           group_out[group_id].start = thread.str_idx;
         }
-        thread.pc += 1;
-        return true;
+        try self.addThread(.{
+          .str_idx = thread.str_idx,
+          .pc = thread.pc + 1,
+        });
+        return;
       },
       .group_end => |group_id| {
         if (self.options.group_out) |group_out| {
           group_out[group_id].end = thread.str_idx;
         }
-        thread.pc += 1;
-        return true;
+        try self.addThread(.{
+          .str_idx = thread.str_idx,
+          .pc = thread.pc + 1,
+        });
+        return;
       },
     }
   }
   
-  fn exec(self: *VM) !MatchResult {
-    self.thread_stack.append(.{
-      .str_idx = 0,
-      .pc = 0,
-    }) catch unreachable;
-    while (self.thread_stack.len > 0) {
-      const thread_top: *Thread = &self.thread_stack.buffer[self.thread_stack.len - 1];
-      const thread_exec = try self.nextInstr(thread_top);
-      if (!thread_exec) {
-        const exitted_thread = self.thread_stack.pop();
-        if (self.thread_stack.len == 0 or exitted_thread.fully_matched) {
-          return .{
-            .pos = exitted_thread.str_idx,
-            .fully_matched = exitted_thread.fully_matched,
-          };
+  fn addThread(self: *VM, thread: Thread) !void {
+    if (self.thread_stack.top()) |top| {
+      // run length encode the thread stack so that less memory is used
+      // when greedy matching repetitive groups of characters
+      if (top.pc == thread.pc) {
+        if (top.str_idx_delta == 0) {
+          top.str_idx_delta = @intCast(thread.str_idx - top.str_idx);
+          top.str_idx_repeats = 1;
+          return;
+        } else if (
+          thread.str_idx > top.str_idx and
+          (top.str_idx + top.str_idx_delta * top.str_idx_repeats) == thread.str_idx
+        ) {
+          top.str_idx_repeats += 1;
+          return;
         }
       }
-      // _ = std.io.getStdIn().reader().readByte() catch {};
     }
-    unreachable;
+    try self.thread_stack.append(self.allocr, thread);
+  }
+  
+  fn popThread(self: *VM) !Thread {
+    var top = self.thread_stack.pop();
+    if (top.str_idx_delta == 0) {
+      return top;
+    }
+    var ret_thread = top;
+    ret_thread.str_idx = top.str_idx + top.str_idx_delta * top.str_idx_repeats;
+    if (top.str_idx_repeats > 0) {
+      top.str_idx_repeats -= 1;
+      try self.thread_stack.append(self.allocr, top);
+    }
+    return ret_thread;
+  }
+  
+  fn exec(self: *VM) !MatchResult {
+    if (self.instrs[0].getString()) |string| {
+      var str_idx: usize = 0;
+      for (0..string.len) |i| {
+        if (str_idx == self.haystack.len) {
+          return .{ .pos = str_idx, .fully_matched = false };
+        }
+        if (self.haystack[str_idx] == string[i]) {
+          str_idx += 1;
+        } else {
+          return .{ .pos = str_idx, .fully_matched = false };
+        }
+      }
+      try self.thread_stack.append(self.allocr, .{
+        .str_idx = str_idx,
+        .pc = 1,
+      });
+    } else {
+      try self.thread_stack.append(self.allocr, .{
+        .str_idx = 0,
+        .pc = 0,
+      });
+    }
+    while (true) {
+      const thread = try self.popThread();
+      try self.nextInstr(thread);
+      if (self.thread_stack.len() == 0 or self.fully_matched) {
+        return .{
+          .pos = thread.str_idx,
+          .fully_matched = self.fully_matched,
+        };
+      }
+//       _ = std.io.getStdIn().reader().readByte() catch {};
+    }
   }
 };
 
@@ -273,13 +418,14 @@ pub const MatchOptions = struct {
 };
 
 pub const MatchError = error {
+  OutOfMemory,
   InvalidGroupSize,
   InvalidUnicode,
-  BacktrackOverflow,
 };
 
 pub fn checkMatch(
   self: *const Expr,
+  allocr: std.mem.Allocator,
   haystack: []const u8,
   options: MatchOptions,
 ) MatchError!MatchResult {
@@ -292,7 +438,9 @@ pub fn checkMatch(
     .haystack = haystack,
     .instrs = self.instrs.items,
     .options = &options,
+    .allocr = allocr,
   };
+  defer vm.deinit();
   return vm.exec() catch |err| {
     switch(err) {
       error.Utf8InvalidStartByte,
@@ -302,7 +450,7 @@ pub fn checkMatch(
       error.Utf8CodepointTooLarge => {
         return error.InvalidUnicode;
       },
-      error.BacktrackOverflow => |suberr| {
+      error.OutOfMemory => |suberr| {
         return suberr;
       },
     }
@@ -314,12 +462,12 @@ pub const FindResult = struct {
   end: usize,
 };
 
-pub fn find(self: *const Expr, haystack: []const u8) !?FindResult {
+pub fn find(self: *const Expr, allocr: std.mem.Allocator, haystack: []const u8) !?FindResult {
   if (self.instrs.items[0].getString()) |string| {
     var skip: usize = 0;
     while (std.mem.indexOf(u8, haystack[skip..], string)) |rel_skip| {
       skip += rel_skip;
-      const match = try self.checkMatch(haystack[skip..], .{});
+      const match = try self.checkMatch(allocr, haystack[skip..], .{});
       if (match.fully_matched) {
         return .{
           .start = skip,
@@ -332,7 +480,7 @@ pub fn find(self: *const Expr, haystack: []const u8) !?FindResult {
   }
   
   for (0..haystack.len-1) |skip| {
-    const match = try self.checkMatch(haystack[skip..], .{});
+    const match = try self.checkMatch(allocr, haystack[skip..], .{});
     if (match.fully_matched) {
       return .{
         .start = skip,
@@ -343,12 +491,12 @@ pub fn find(self: *const Expr, haystack: []const u8) !?FindResult {
   return null;
 }
 
-pub fn findBackwards(self: *const Expr, haystack: []const u8) !?FindResult {
+pub fn findBackwards(self: *const Expr, allocr: std.mem.Allocator, haystack: []const u8) !?FindResult {
   if (self.instrs.items[0].getString()) |string| {
     var limit: usize = haystack.len;
     while (std.mem.lastIndexOf(u8, haystack[0..limit], string)) |rel_limit| {
       limit = rel_limit;
-      const match = try self.checkMatch(haystack[rel_limit..], .{});
+      const match = try self.checkMatch(allocr, haystack[rel_limit..], .{});
       if (match.fully_matched) {
         return .{
           .start = rel_limit,
@@ -363,7 +511,7 @@ pub fn findBackwards(self: *const Expr, haystack: []const u8) !?FindResult {
   var skip_it: usize = haystack.len;
   while (skip_it > 0) {
     const skip = skip_it - 1;
-    const match = try self.checkMatch(haystack[skip..], .{});
+    const match = try self.checkMatch(allocr, haystack[skip..], .{});
     if (match.fully_matched) {
       return .{
         .start = skip,
@@ -380,8 +528,8 @@ test "simple one" {
   const allocr = gpa.allocator();
   var expr = try Expr.create(allocr, "asdf", .{}).asErr();
   defer expr.deinit(allocr);
-  try std.testing.expectEqual(4, (try expr.checkMatch("asdf", .{})).pos);
-  try std.testing.expectEqual(2, (try expr.checkMatch("as", .{})).pos);
+  try std.testing.expectEqual(4, (try expr.checkMatch(allocr, "asdf", .{})).pos);
+  try std.testing.expectEqual(2, (try expr.checkMatch(allocr, "as", .{})).pos);
 }
 
 test "any" {
@@ -389,8 +537,8 @@ test "any" {
   const allocr = gpa.allocator();
   var expr = try Expr.create(allocr, "..", .{}).asErr();
   defer expr.deinit(allocr);
-  try std.testing.expectEqual(1, (try expr.checkMatch("a", .{})).pos);
-  try std.testing.expectEqual(2, (try expr.checkMatch("as", .{})).pos);
+  try std.testing.expectEqual(1, (try expr.checkMatch(allocr, "a", .{})).pos);
+  try std.testing.expectEqual(2, (try expr.checkMatch(allocr, "as", .{})).pos);
 }
 
 test "simple more than one" {
@@ -398,11 +546,11 @@ test "simple more than one" {
   const allocr = gpa.allocator();
   var expr = try Expr.create(allocr, "a+", .{}).asErr();
   defer expr.deinit(allocr);
-  try std.testing.expectEqual(1, (try expr.checkMatch("a", .{})).pos);
-  try std.testing.expectEqual(2, (try expr.checkMatch("aa", .{})).pos);
-  try std.testing.expectEqual(1, (try expr.checkMatch("aba", .{})).pos);
-  try std.testing.expectEqual(2, (try expr.checkMatch("aad", .{})).pos);
-  try std.testing.expectEqual(0, (try expr.checkMatch("daa", .{})).pos);
+  try std.testing.expectEqual(1, (try expr.checkMatch(allocr, "a", .{})).pos);
+  try std.testing.expectEqual(2, (try expr.checkMatch(allocr, "aa", .{})).pos);
+  try std.testing.expectEqual(1, (try expr.checkMatch(allocr, "aba", .{})).pos);
+  try std.testing.expectEqual(2, (try expr.checkMatch(allocr, "aad", .{})).pos);
+  try std.testing.expectEqual(0, (try expr.checkMatch(allocr, "daa", .{})).pos);
 }
 
 test "group more than one" {
@@ -410,9 +558,9 @@ test "group more than one" {
   const allocr = gpa.allocator();
   var expr = try Expr.create(allocr, "(ab)+", .{}).asErr();
   defer expr.deinit(allocr);
-  try std.testing.expectEqual(2, (try expr.checkMatch("ab", .{})).pos);
-  try std.testing.expectEqual(4, (try expr.checkMatch("abab", .{})).pos);
-  try std.testing.expectEqual(0, (try expr.checkMatch("dab", .{})).pos);
+  try std.testing.expectEqual(2, (try expr.checkMatch(allocr, "ab", .{})).pos);
+  try std.testing.expectEqual(4, (try expr.checkMatch(allocr, "abab", .{})).pos);
+  try std.testing.expectEqual(0, (try expr.checkMatch(allocr, "dab", .{})).pos);
 }
 
 test "group nested more than one" {
@@ -420,10 +568,10 @@ test "group nested more than one" {
   const allocr = gpa.allocator();
   var expr = try Expr.create(allocr, "(ax+b)+", .{}).asErr();
   defer expr.deinit(allocr);
-  try std.testing.expectEqual(3, (try expr.checkMatch("axb", .{})).pos);
-  try std.testing.expectEqual(6, (try expr.checkMatch("axbaxb", .{})).pos);
-  try std.testing.expectEqual(7, (try expr.checkMatch("axxbaxb", .{})).pos);
-  try std.testing.expectEqual(1, (try expr.checkMatch("ab", .{})).pos);
+  try std.testing.expectEqual(3, (try expr.checkMatch(allocr, "axb", .{})).pos);
+  try std.testing.expectEqual(6, (try expr.checkMatch(allocr, "axbaxb", .{})).pos);
+  try std.testing.expectEqual(7, (try expr.checkMatch(allocr, "axxbaxb", .{})).pos);
+  try std.testing.expectEqual(1, (try expr.checkMatch(allocr, "ab", .{})).pos);
 }
 
 test "simple zero or more" {
@@ -431,11 +579,22 @@ test "simple zero or more" {
   const allocr = gpa.allocator();
   var expr = try Expr.create(allocr, "a*b", .{}).asErr();
   defer expr.deinit(allocr);
-  try std.testing.expectEqual(2, (try expr.checkMatch("ab", .{})).pos);
-  try std.testing.expectEqual(3, (try expr.checkMatch("aab", .{})).pos);
-  try std.testing.expectEqual(2, (try expr.checkMatch("aba", .{})).pos);
-  try std.testing.expectEqual(2, (try expr.checkMatch("aad", .{})).pos);
-  try std.testing.expectEqual(0, (try expr.checkMatch("daa", .{})).pos);
+  try std.testing.expectEqual(2, (try expr.checkMatch(allocr, "ab", .{})).pos);
+  try std.testing.expectEqual(3, (try expr.checkMatch(allocr, "aab", .{})).pos);
+  try std.testing.expectEqual(2, (try expr.checkMatch(allocr, "aba", .{})).pos);
+  try std.testing.expectEqual(0, (try expr.checkMatch(allocr, "aad", .{})).pos);
+  try std.testing.expectEqual(0, (try expr.checkMatch(allocr, "daa", .{})).pos);
+}
+
+test "simple greedy zero or more" {
+  var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+  const allocr = gpa.allocator();
+  var expr = try Expr.create(allocr, "x.*b", .{}).asErr();
+  defer expr.deinit(allocr);
+  try std.testing.expectEqual(2, (try expr.checkMatch(allocr, "xb", .{})).pos);
+  try std.testing.expectEqual(3, (try expr.checkMatch(allocr, "xab", .{})).pos);
+  try std.testing.expectEqual(4, (try expr.checkMatch(allocr, "xaab", .{})).pos);
+  try std.testing.expectEqual(8, (try expr.checkMatch(allocr, "xaabxaab", .{})).pos);
 }
 
 test "group zero or more" {
@@ -443,10 +602,10 @@ test "group zero or more" {
   const allocr = gpa.allocator();
   var expr = try Expr.create(allocr, "(ab)*c", .{}).asErr();
   defer expr.deinit(allocr);
-  try std.testing.expectEqual(1, (try expr.checkMatch("c", .{})).pos);
-  try std.testing.expectEqual(3, (try expr.checkMatch("abc", .{})).pos);
-  try std.testing.expectEqual(5, (try expr.checkMatch("ababc", .{})).pos);
-  try std.testing.expectEqual(0, (try expr.checkMatch("xab", .{})).pos);
+  try std.testing.expectEqual(1, (try expr.checkMatch(allocr, "c", .{})).pos);
+  try std.testing.expectEqual(3, (try expr.checkMatch(allocr, "abc", .{})).pos);
+  try std.testing.expectEqual(5, (try expr.checkMatch(allocr, "ababc", .{})).pos);
+  try std.testing.expectEqual(0, (try expr.checkMatch(allocr, "xab", .{})).pos);
 }
 
 test "group nested zero or more" {
@@ -454,12 +613,12 @@ test "group nested zero or more" {
   const allocr = gpa.allocator();
   var expr = try Expr.create(allocr, "(a(xy)*b)*c", .{}).asErr();
   defer expr.deinit(allocr);
-  try std.testing.expectEqual(1, (try expr.checkMatch("c", .{})).pos);
-  try std.testing.expectEqual(3, (try expr.checkMatch("abc", .{})).pos);
-  try std.testing.expectEqual(5, (try expr.checkMatch("ababc", .{})).pos);
-  try std.testing.expectEqual(0, (try expr.checkMatch("xab", .{})).pos);
-  try std.testing.expectEqual(7, (try expr.checkMatch("axybabc", .{})).pos);
-  try std.testing.expectEqual(9, (try expr.checkMatch("axybaxybc", .{})).pos);
+  try std.testing.expectEqual(1, (try expr.checkMatch(allocr, "c", .{})).pos);
+  try std.testing.expectEqual(3, (try expr.checkMatch(allocr, "abc", .{})).pos);
+  try std.testing.expectEqual(5, (try expr.checkMatch(allocr, "ababc", .{})).pos);
+  try std.testing.expectEqual(0, (try expr.checkMatch(allocr, "xab", .{})).pos);
+  try std.testing.expectEqual(7, (try expr.checkMatch(allocr, "axybabc", .{})).pos);
+  try std.testing.expectEqual(9, (try expr.checkMatch(allocr, "axybaxybc", .{})).pos);
 }
 
 test "simple optional" {
@@ -467,10 +626,10 @@ test "simple optional" {
   const allocr = gpa.allocator();
   var expr = try Expr.create(allocr, "a?b", .{}).asErr();
   defer expr.deinit(allocr);
-  try std.testing.expectEqual(2, (try expr.checkMatch("ab", .{})).pos);
-  try std.testing.expectEqual(2, (try expr.checkMatch("aba", .{})).pos);
-  try std.testing.expectEqual(0, (try expr.checkMatch("db", .{})).pos);
-  try std.testing.expectEqual(1, (try expr.checkMatch("b", .{})).pos);
+  try std.testing.expectEqual(2, (try expr.checkMatch(allocr, "ab", .{})).pos);
+  try std.testing.expectEqual(2, (try expr.checkMatch(allocr, "aba", .{})).pos);
+  try std.testing.expectEqual(0, (try expr.checkMatch(allocr, "db", .{})).pos);
+  try std.testing.expectEqual(1, (try expr.checkMatch(allocr, "b", .{})).pos);
 }
 
 test "group optional" {
@@ -478,9 +637,9 @@ test "group optional" {
   const allocr = gpa.allocator();
   var expr = try Expr.create(allocr, "(ab)?c", .{}).asErr();
   defer expr.deinit(allocr);
-  try std.testing.expectEqual(3, (try expr.checkMatch("abc", .{})).pos);
-  try std.testing.expectEqual(1, (try expr.checkMatch("c", .{})).pos);
-  try std.testing.expectEqual(0, (try expr.checkMatch("b", .{})).pos);
+  try std.testing.expectEqual(3, (try expr.checkMatch(allocr, "abc", .{})).pos);
+  try std.testing.expectEqual(1, (try expr.checkMatch(allocr, "c", .{})).pos);
+  try std.testing.expectEqual(0, (try expr.checkMatch(allocr, "b", .{})).pos);
 }
 
 test "group nested optional" {
@@ -488,11 +647,22 @@ test "group nested optional" {
   const allocr = gpa.allocator();
   var expr = try Expr.create(allocr, "(a(xy)?b)?c", .{}).asErr();
   defer expr.deinit(allocr);
-  try std.testing.expectEqual(3, (try expr.checkMatch("abc", .{})).pos);
-  try std.testing.expectEqual(5, (try expr.checkMatch("axybc", .{})).pos);
-  try std.testing.expectEqual(2, (try expr.checkMatch("axbc", .{})).pos);
-  try std.testing.expectEqual(1, (try expr.checkMatch("c", .{})).pos);
-  try std.testing.expectEqual(0, (try expr.checkMatch("b", .{})).pos);
+  try std.testing.expectEqual(3, (try expr.checkMatch(allocr, "abc", .{})).pos);
+  try std.testing.expectEqual(5, (try expr.checkMatch(allocr, "axybc", .{})).pos);
+  try std.testing.expectEqual(2, (try expr.checkMatch(allocr, "axbc", .{})).pos);
+  try std.testing.expectEqual(1, (try expr.checkMatch(allocr, "c", .{})).pos);
+  try std.testing.expectEqual(0, (try expr.checkMatch(allocr, "b", .{})).pos);
+}
+
+test "simple lazy zero or more" {
+  var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+  const allocr = gpa.allocator();
+  var expr = try Expr.create(allocr, "x.-b", .{}).asErr();
+  defer expr.deinit(allocr);
+  try std.testing.expectEqual(2, (try expr.checkMatch(allocr, "xb", .{})).pos);
+  try std.testing.expectEqual(3, (try expr.checkMatch(allocr, "xab", .{})).pos);
+  try std.testing.expectEqual(4, (try expr.checkMatch(allocr, "xaab", .{})).pos);
+  try std.testing.expectEqual(4, (try expr.checkMatch(allocr, "xaabxaab", .{})).pos);
 }
 
 test "simple range" {
@@ -500,10 +670,10 @@ test "simple range" {
   const allocr = gpa.allocator();
   var expr = try Expr.create(allocr, "[a-z]+", .{}).asErr();
   defer expr.deinit(allocr);
-  try std.testing.expectEqual(2, (try expr.checkMatch("ab0", .{})).pos);
-  try std.testing.expectEqual(3, (try expr.checkMatch("aba0", .{})).pos);
-  try std.testing.expectEqual(2, (try expr.checkMatch("db0", .{})).pos);
-  try std.testing.expectEqual(1, (try expr.checkMatch("x0", .{})).pos);
+  try std.testing.expectEqual(2, (try expr.checkMatch(allocr, "ab0", .{})).pos);
+  try std.testing.expectEqual(3, (try expr.checkMatch(allocr, "aba0", .{})).pos);
+  try std.testing.expectEqual(2, (try expr.checkMatch(allocr, "db0", .{})).pos);
+  try std.testing.expectEqual(1, (try expr.checkMatch(allocr, "x0", .{})).pos);
 }
 
 test "simple range inverse" {
@@ -511,8 +681,8 @@ test "simple range inverse" {
   const allocr = gpa.allocator();
   var expr = try Expr.create(allocr, "[^b]", .{}).asErr();
   defer expr.deinit(allocr);
-  try std.testing.expectEqual(1, (try expr.checkMatch("0", .{})).pos);
-  try std.testing.expectEqual(0, (try expr.checkMatch("b", .{})).pos);
+  try std.testing.expectEqual(1, (try expr.checkMatch(allocr, "0", .{})).pos);
+  try std.testing.expectEqual(0, (try expr.checkMatch(allocr, "b", .{})).pos);
 }
 
 test "group" {
@@ -522,12 +692,12 @@ test "group" {
   defer expr.deinit(allocr);
   var groups = [1]MatchGroup{.{}} ** 2;
   const opts: MatchOptions = .{ .group_out = &groups, };
-  try std.testing.expectEqual(4, (try expr.checkMatch("abAB0", opts)).pos);
+  try std.testing.expectEqual(4, (try expr.checkMatch(allocr, "abAB0", opts)).pos);
   try std.testing.expectEqual(0, groups[0].start);
   try std.testing.expectEqual(2, groups[0].end);
   try std.testing.expectEqual(2, groups[1].start);
   try std.testing.expectEqual(4, groups[1].end);
-  try std.testing.expectEqual(2, (try expr.checkMatch("AB0", opts)).pos);
+  try std.testing.expectEqual(2, (try expr.checkMatch(allocr, "AB0", opts)).pos);
   try std.testing.expectEqual(0, groups[0].start);
   try std.testing.expectEqual(0, groups[0].end);
   try std.testing.expectEqual(0, groups[1].start);
@@ -539,10 +709,10 @@ test "simple alternate" {
   const allocr = gpa.allocator();
   var expr = try Expr.create(allocr, "[a-z]+|[A-Z]+", .{}).asErr();
   defer expr.deinit(allocr);
-  try std.testing.expectEqual(2, (try expr.checkMatch("ab", .{})).pos);
-  try std.testing.expectEqual(2, (try expr.checkMatch("AB", .{})).pos);
-  try std.testing.expectEqual(1, (try expr.checkMatch("aB", .{})).pos);
-  try std.testing.expectEqual(0, (try expr.checkMatch("00", .{})).pos);
+  try std.testing.expectEqual(2, (try expr.checkMatch(allocr, "ab", .{})).pos);
+  try std.testing.expectEqual(2, (try expr.checkMatch(allocr, "AB", .{})).pos);
+  try std.testing.expectEqual(1, (try expr.checkMatch(allocr, "aB", .{})).pos);
+  try std.testing.expectEqual(0, (try expr.checkMatch(allocr, "00", .{})).pos);
 }
 
 test "group alternate" {
@@ -550,10 +720,10 @@ test "group alternate" {
   const allocr = gpa.allocator();
   var expr = try Expr.create(allocr, "(a|z)(b|c)", .{}).asErr();
   defer expr.deinit(allocr);
-  try std.testing.expectEqual(2, (try expr.checkMatch("ab", .{})).pos);
-  try std.testing.expectEqual(1, (try expr.checkMatch("az", .{})).pos);
-  try std.testing.expectEqual(2, (try expr.checkMatch("zc", .{})).pos);
-  try std.testing.expectEqual(0, (try expr.checkMatch("c", .{})).pos);
+  try std.testing.expectEqual(2, (try expr.checkMatch(allocr, "ab", .{})).pos);
+  try std.testing.expectEqual(1, (try expr.checkMatch(allocr, "az", .{})).pos);
+  try std.testing.expectEqual(2, (try expr.checkMatch(allocr, "zc", .{})).pos);
+  try std.testing.expectEqual(0, (try expr.checkMatch(allocr, "c", .{})).pos);
 }
 
 test "integrate: string" {
@@ -565,18 +735,34 @@ test "integrate: string" {
     , .{}
   ).asErr();
   defer expr.deinit(allocr);
-  try std.testing.expectEqual(3, (try expr.checkMatch(
-    \\"a"
-  , .{})).pos);
-  try std.testing.expectEqual(4, (try expr.checkMatch(
-    \\"\\"
-  , .{})).pos);
-  try std.testing.expectEqual(4, (try expr.checkMatch(
-    \\"ab"
-  , .{})).pos);
-  try std.testing.expectEqual(6, (try expr.checkMatch(
-    \\"\"\""
-  , .{})).pos);
+  try std.testing.expectEqual(3, (try expr.checkMatch(allocr, \\"a"
+                                                      , .{})).pos);
+  try std.testing.expectEqual(4, (try expr.checkMatch(allocr, \\"\\"
+                                                      , .{})).pos);
+  try std.testing.expectEqual(4, (try expr.checkMatch(allocr, \\"ab"
+                                                      , .{})).pos);
+  try std.testing.expectEqual(6, (try expr.checkMatch(allocr, \\"\"\""
+                                                      , .{})).pos);
+}
+
+test "integrate: huge simple" {
+  var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+  const allocr = gpa.allocator();
+  var expr = try Expr.create(allocr, "a+", .{}).asErr();
+  defer expr.deinit(allocr);
+  try std.testing.expectEqual(1000, (try expr.checkMatch(allocr, 
+    &([_]u8{'a'}**1000), .{}
+  )).pos);
+}
+
+test "integrate: huge group" {
+  var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+  const allocr = gpa.allocator();
+  var expr = try Expr.create(allocr, "(ab)+", .{}).asErr();
+  defer expr.deinit(allocr);
+  try std.testing.expectEqual(1000, (try expr.checkMatch(allocr, 
+    &([_]u8{'a','b'}**500), .{}
+  )).pos);
 }
 
 test "find (1st pat el is string)" {
@@ -585,14 +771,26 @@ test "find (1st pat el is string)" {
   var expr = try Expr.create(allocr, "asdf?b", .{}).asErr();
   defer expr.deinit(allocr);
   {
-    const res = (try expr.find("000asdfbasdfb")).?;
+    const res = (try expr.find(allocr, "000asdfbasdfb")).?;
     try std.testing.expectEqual(3, res.start);
     try std.testing.expectEqual(8, res.end);
   }
   {
-    const res = (try expr.find("000asdbasdfb")).?;
+    const res = (try expr.find(allocr, "000asdbasdfb")).?;
     try std.testing.expectEqual(3, res.start);
     try std.testing.expectEqual(7, res.end);
+  }
+}
+
+test "find (1st pat el is char, more than one)" {
+  var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+  const allocr = gpa.allocator();
+  var expr = try Expr.create(allocr, "xab+", .{}).asErr();
+  defer expr.deinit(allocr);
+  {
+    const res = (try expr.find(allocr, "xabb")).?;
+    try std.testing.expectEqual(0, res.start);
+    try std.testing.expectEqual(4, res.end);
   }
 }
 
@@ -602,12 +800,12 @@ test "find (1st pat el is char)" {
   var expr = try Expr.create(allocr, "x+asdf?b", .{}).asErr();
   defer expr.deinit(allocr);
   {
-    const res = (try expr.find("000xxxasdfbasdfb")).?;
+    const res = (try expr.find(allocr, "000xxxasdfbasdfb")).?;
     try std.testing.expectEqual(3, res.start);
     try std.testing.expectEqual(11, res.end);
   }
   {
-    const res = (try expr.find("000xxxasdbasdfb")).?;
+    const res = (try expr.find(allocr, "000xxxasdbasdfb")).?;
     try std.testing.expectEqual(3, res.start);
     try std.testing.expectEqual(10, res.end);
   }
@@ -619,7 +817,7 @@ test "find reverse (1st pat el is string)" {
   var expr = try Expr.create(allocr, "asdf?b", .{}).asErr();
   defer expr.deinit(allocr);
   {
-    const res = (try expr.findBackwards("000asdfbasdfb")).?;
+    const res = (try expr.findBackwards(allocr, "000asdfbasdfb")).?;
     try std.testing.expectEqual(8, res.start);
     try std.testing.expectEqual(13, res.end);
   }
@@ -631,7 +829,7 @@ test "find reverse (1st pat el is char)" {
   var expr = try Expr.create(allocr, "x+asdf?b", .{}).asErr();
   defer expr.deinit(allocr);
   {
-    const res = (try expr.findBackwards("000xxxasdfbasdfbxxxasdfb")).?;
+    const res = (try expr.findBackwards(allocr, "000xxxasdfbasdfbxxxasdfb")).?;
     try std.testing.expectEqual(18, res.start);
     try std.testing.expectEqual(24, res.end);
   }
