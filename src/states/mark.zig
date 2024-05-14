@@ -14,6 +14,8 @@ const editor = @import("../editor.zig");
 const this_shortcuts = @import("../shortcuts.zig").STATE_MARK;
 const this_shortcuts_help = @import("../shortcuts.zig").STATE_MARK_HELP;
 
+const handleTextNavigation = @import("./text.zig").handleTextNavigation;
+
 pub fn onSet(self: *editor.Editor) void {
   if (self.text_handler.markers == null) {
     self.text_handler.markStart(self);
@@ -26,30 +28,20 @@ pub fn onUnset(self: *editor.Editor, next_state: editor.State) void {
   }
 }
 
-pub fn handleInput(self: *editor.Editor, keysym: kbd.Keysym, is_clipboard: bool) !void {
+pub fn handleInput(
+  self: *editor.Editor,
+  keysym: *const kbd.Keysym,
+  is_clipboard: bool
+) !void {
   _ = is_clipboard;
   
   if (keysym.raw == kbd.Keysym.ESC) {
     self.setState(.text);
     return;
   }
-  if (keysym.key == kbd.Keysym.Key.up) {
-    self.text_handler.goUp(self);
-  }
-  else if (keysym.key == kbd.Keysym.Key.down) {
-    self.text_handler.goDown(self);
-  }
-  else if (keysym.key == kbd.Keysym.Key.left) {
-    self.text_handler.goLeft(self);
-  }
-  else if (keysym.key == kbd.Keysym.Key.right) {
-    self.text_handler.goRight(self);
-  }
-  else if (keysym.key == kbd.Keysym.Key.home) {
-    self.text_handler.goHead(self);
-  }
-  else if (keysym.key == kbd.Keysym.Key.end) {
-    try self.text_handler.goTail(self);
+  
+  if (try handleTextNavigation(self, keysym)) {
+    return;
   }
   else if (keysym.raw == kbd.Keysym.NEWLINE) {
     if (self.text_handler.markers == null) {
@@ -84,14 +76,14 @@ pub fn handleInput(self: *editor.Editor, keysym: kbd.Keysym, is_clipboard: bool)
   
   else if (this_shortcuts.key("rep", keysym)) {
     self.setState(.command);
-    self.setCmdData(.{
+    self.setCmdData(&.{
       .prompt = editor.Commands.Replace.PROMPT,
       .fns = editor.Commands.Replace.Fns,
     });
   }
   else if (this_shortcuts.key("find", keysym)) {
     self.setState(.command);
-    self.setCmdData(.{
+    self.setCmdData(&.{
       .prompt = editor.Commands.Find.PROMPT,
       .fns = editor.Commands.Find.Fns,
     });

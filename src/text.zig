@@ -166,13 +166,9 @@ pub const TextHandler = struct {
     try self.lineinfo.append(0);
     
     // tail lines
-    {
-      var i: u32 = 0;
-      for (self.buffer.items) |byte| {
-        if (byte == '\n') {
-          try self.lineinfo.append(i + 1);
-        }
-        i += 1;
+    for (self.buffer.items, 0..self.buffer.items.len) |byte, i| {
+      if (byte == '\n') {
+        try self.lineinfo.append(@intCast(i + 1));
       }
     }
     
@@ -557,7 +553,7 @@ pub const TextHandler = struct {
     self.cursor.col = 0;
     self.cursor.gfx_col = 0;
     self.scroll.col = 0;
-    self.cursor.gfx_col = 0;
+    self.scroll.gfx_col = 0;
     E.needs_redraw = true;
   }
   
@@ -577,6 +573,8 @@ pub const TextHandler = struct {
         self.cursor.gfx_col += encoding.countCharCols(try std.unicode.utf8Decode(char));
       }
     }
+    self.scroll.col = 0;
+    self.scroll.gfx_col = 0;
     self.syncColumnScroll(E);
     self.syncRowScroll(E);
     E.needs_redraw = true;
@@ -593,6 +591,7 @@ pub const TextHandler = struct {
         target_gfx_col = self.cursor.gfx_col - 1;
       }
     } else if ((target_gfx_col + self.cursor.gfx_col) > E.getTextWidth()) {
+      // cursor is farther than horizontal edge
       if (E.getTextWidth() > self.cursor.gfx_col) {
         target_gfx_col = E.getTextWidth() - self.cursor.gfx_col + 1;
       } else {
@@ -604,12 +603,21 @@ pub const TextHandler = struct {
       self.scroll.col = target_gfx_col;
       self.scroll.gfx_col = target_gfx_col;
     } else {
-      self.scroll.col = 0;
-      self.scroll.gfx_col = 0;
-      if (target_gfx_col != 0) {
+      if (target_gfx_col == 0) {
+        self.scroll.col = 0;
+        self.scroll.gfx_col = 0;
+      } else {
         const offset_start: u32 = self.lineinfo.getOffset(self.cursor.row);
         const offset_end: u32 = self.getRowOffsetEnd(self.cursor.row);
-        var iter = self.iterate(offset_start);
+        var count_cols_from: u32 = offset_start;
+        if (target_gfx_col > self.scroll.gfx_col) {
+          count_cols_from += self.scroll.col;
+        } else {
+          count_cols_from += 0;
+          self.scroll.col = 0;
+          self.scroll.gfx_col = 0;
+        }
+        var iter = self.iterate(count_cols_from);
         while (iter.nextCharUntil(offset_end)) |char| {
           const ccol = encoding.countCharCols(std.unicode.utf8Decode(char) catch unreachable);
           self.scroll.col += @intCast(char.len);
@@ -928,7 +936,7 @@ pub const TextHandler = struct {
     const first_row_after_insidx: u32 = if (use_cursor_line_hint)
       self.cursor.row + 1
     else
-      self.lineinfo.findMinLineAfterOffset(insidx);
+      self.lineinfo.findMinLineAfterOffset(insidx, 0);
     
     const num_newlines = try self.shiftAndInsertNewLines(E, slice, insidx, first_row_after_insidx, is_slice_always_inline);
     
@@ -1241,6 +1249,16 @@ pub const TextHandler = struct {
       return;
     }
     _ = try self.deleteRegionAtPos(E, offset_start, offset_end, true, false);
+  }
+  
+  pub fn deleteWord(self: *TextHandler, E: *Editor) !void {
+    if (self.cursor.col == 0) {
+      return;
+    }
+    const delete_end = self.calcOffsetFromCursor();
+    self.goLeftWord(E);
+    const delete_start = self.calcOffsetFromCursor();
+    _ = try self.deleteRegionAtPos(E, delete_start, delete_end, true, false);
   }
   
   // Replacement

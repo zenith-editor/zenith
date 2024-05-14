@@ -7,10 +7,11 @@
 const std = @import("std");
 
 const str = @import("../str.zig");
+const Error = @import("../ds/error.zig").Error;
 
 pub const Value = union(enum) {
   uninitialized: void,
-  int: i32,
+  i32: i32,
   string: str.String,
   bool: bool,  
   
@@ -23,6 +24,12 @@ pub const Value = union(enum) {
     }
     self.* = .uninitialized;
   }
+};
+
+pub const AccessError = error {
+  ExpectedI32Value,
+  ExpectedBoolValue,
+  ExpectedStringValue,
 };
 
 pub const KV = struct {
@@ -43,6 +50,35 @@ pub const KV = struct {
       }
     }
   }
+  
+  pub inline fn get(self: *const KV, comptime T: type, key: []const u8) AccessError!?T {
+    if (!std.mem.eql(u8, self.key, key)) {
+      return null;
+    }
+    switch(T) {
+      inline i32 => {
+        switch(self.val) {
+          .i32 => |v| { return v; },
+          else => {return error.ExpectedI32Value;},
+        }
+      },
+      inline bool => {
+        switch(self.val) {
+          .bool => |v| { return v; },
+          else => {return error.ExpectedBoolValue;},
+        }
+      },
+      inline []const u8 => {
+        switch(self.val) {
+          .string => |*v| { return v.items; },
+          else => { return error.ExpectedBoolValue; },
+        }
+      },
+      else => {
+        @compileError("invalid type");
+      },
+    }
+  }
 };
 
 pub const Expr = union(enum) {
@@ -59,13 +95,14 @@ pub const Expr = union(enum) {
   }
 };
 
-pub const ParseErrorType = enum {
+pub const ParseErrorType = error {
   ExpectedNewline,
   EmptySection,
   ExpectedDigit,
   ExpectedValue,
   ExpectedEqual,
   InvalidEscapeSeq,
+  UnexpectedChar,
   UnexpectedEof,
   OutOfMemory,
 };
@@ -75,33 +112,8 @@ pub const ParseError = struct {
   pos: usize,
 };
 
-fn ParseResult(comptime T: type) type {
-  return union(enum) {
-    const Self = @This();
-  
-    ok: T,
-    err: ParseError,
-    
-    pub fn unwrap(self: *Self) T {
-      switch (self.*) {
-        .ok => |v| {
-          return v;
-        },
-        else => unreachable,
-      }
-    }
-    
-    pub fn isErr(self: *const Self) bool {
-      return switch(self.*) {
-        .err => true,
-        else => false,
-      };
-    }
-  };
-}
-
-const ValueResult = ParseResult(Value);
-const ExprOrNullResult = ParseResult(?Expr);
+const ValueResult = Error(Value, ParseError);
+const ExprOrNullResult = Error(?Expr, ParseError);
 
 pub const Parser = struct {
   buffer: []const u8,
@@ -286,6 +298,14 @@ pub const Parser = struct {
           },
         };
       }
+      else {
+        return .{ 
+          .err = .{
+            .type = ParseErrorType.UnexpectedChar,
+            .pos = self.pos,
+          },
+        };
+      }
     }
     return .{ .ok = null, };
   }
@@ -338,7 +358,7 @@ pub const Parser = struct {
   fn parseInteger(self: *Parser, init_digit: ?i32, is_neg: bool, start_pos: usize) ValueResult {
     var num: i32 = 0;
     if (init_digit == 0) {
-      return .{ .ok = .{ .int = 0, }, };
+      return .{ .ok = .{ .i32 = 0, }, };
     }
     else if (init_digit == null) {
       if (self.getch()) |char| {
@@ -349,7 +369,7 @@ pub const Parser = struct {
           },
           '0' => {
             self.pos += 1;
-            return .{ .ok = .{ .int = 0, }, };
+            return .{ .ok = .{ .i32 = 0, }, };
           },
           else => {
             return .{
@@ -384,11 +404,11 @@ pub const Parser = struct {
           self.pos += 1;
         },
         else => {
-          return .{ .ok = .{ .int = num, }, };
+          return .{ .ok = .{ .i32 = num, }, };
         },
       }
     }
-    return .{ .ok = .{ .int = num, }, };
+    return .{ .ok = .{ .i32 = num, }, };
   }
 
   fn parseStrInner(self: *Parser, allocr: std.mem.Allocator, start_pos: usize) !ValueResult {
@@ -484,7 +504,7 @@ test "parse section with int val" {
     var expr = parser.nextExpr(allocr).unwrap().?;
     defer expr.deinit(allocr);
     try std.testing.expectEqualSlices(u8, "key", expr.kv.key);
-    try std.testing.expectEqual(1, expr.kv.val.int);
+    try std.testing.expectEqual(1, expr.kv.val.i32);
   }
 }
 

@@ -22,24 +22,12 @@ pub fn onInputtedGeneric(self: *editor.Editor) !?std.fs.File {
         .read = true,
         .truncate = false
       }) catch |create_err| {
-        cmd_data.replacePromptOverlay(self, .{
-          .owned = try std.fmt.allocPrint(
-            self.allocr(),
-            PROMPT_ERR_NEW_FILE,
-            .{create_err}
-          ),
-        });
+        try cmd_data.replacePromptOverlayFmt(self, PROMPT_ERR_NEW_FILE, .{create_err});
         return null;
       };
     },
     else => {
-      cmd_data.replacePromptOverlay(self, .{
-        .owned = try std.fmt.allocPrint(
-          self.allocr(),
-          PROMPT_ERR_OPEN_FILE,
-          .{err}
-        ),
-      });
+      try cmd_data.replacePromptOverlayFmt(self, PROMPT_ERR_OPEN_FILE, .{err});
       return null;
     },
   };
@@ -48,13 +36,7 @@ pub fn onInputtedGeneric(self: *editor.Editor) !?std.fs.File {
       .mode = .read_write,
       .lock = .shared,
     }) catch |err| {
-      cmd_data.replacePromptOverlay(self, .{
-        .owned = try std.fmt.allocPrint(
-          self.allocr(),
-          PROMPT_ERR_OPEN_FILE,
-          .{err}
-        ),
-      });
+      try cmd_data.replacePromptOverlayFmt(self, PROMPT_ERR_OPEN_FILE, .{err});
       return null;
     };
   }
@@ -64,13 +46,7 @@ pub fn onInputtedGeneric(self: *editor.Editor) !?std.fs.File {
 pub fn onInputted(self: *editor.Editor) !void {
   if (try Cmd.onInputtedGeneric(self)) |opened_file| {
     self.text_handler.open(self, opened_file, true) catch |err| {
-      self.getCmdData().replacePromptOverlay(self, .{
-        .owned = try std.fmt.allocPrint(
-          self.allocr(),
-          PROMPT_ERR_OPEN_FILE,
-          .{err}
-        ),
-      });
+      try self.getCmdData().replacePromptOverlayFmt(self, PROMPT_ERR_OPEN_FILE, .{err});
       return;
     };
     self.setState(.text);
@@ -79,13 +55,7 @@ pub fn onInputted(self: *editor.Editor) !void {
 }
 
 pub fn setupUnableToSavePrompt(self: *editor.Editor, err: anyerror) !void {
-  self.getCmdData().replacePromptOverlay(self, .{
-    .owned = try std.fmt.allocPrint(
-      self.allocr(),
-      PROMPT_ERR_SAVE_FILE,
-      .{err}
-    ),
-  });
+  try self.getCmdData().replacePromptOverlayFmt(self, PROMPT_ERR_SAVE_FILE, .{err});
 }
 
 pub fn onInputtedTryToSave(self: *editor.Editor) !void {

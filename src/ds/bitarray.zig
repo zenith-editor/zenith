@@ -4,7 +4,6 @@
 // This work is licensed under the BSD 3-Clause License.
 //
 
-
 const std = @import("std");
 
 /// Custom implementation of a dynamically backed bit set.

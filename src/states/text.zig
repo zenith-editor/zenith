@@ -14,36 +14,57 @@ const editor = @import("../editor.zig");
 const this_shortcuts = @import("../shortcuts.zig").STATE_TEXT;
 const this_shortcuts_help = @import("../shortcuts.zig").STATE_TEXT_HELP;
 
-pub fn handleInput(self: *editor.Editor, keysym: kbd.Keysym, is_clipboard: bool) !void {
+pub fn handleTextNavigation(self: *editor.Editor, keysym: *const kbd.Keysym) !bool {
   if (!keysym.ctrl_key and keysym.key == kbd.Keysym.Key.up) {
     self.text_handler.goUp(self);
+    return true;
   }
   else if (!keysym.ctrl_key and keysym.key == kbd.Keysym.Key.down) {
     self.text_handler.goDown(self);
+    return true;
   }
   else if (!keysym.ctrl_key and keysym.key == kbd.Keysym.Key.left) {
     self.text_handler.goLeft(self);
+    return true;
   }
   else if (!keysym.ctrl_key and keysym.key == kbd.Keysym.Key.right) {
     self.text_handler.goRight(self);
+    return true;
   }
   else if (keysym.ctrl_key and keysym.key == kbd.Keysym.Key.left) {
     self.text_handler.goLeftWord(self);
+    return true;
   }
   else if (keysym.ctrl_key and keysym.key == kbd.Keysym.Key.right) {
     self.text_handler.goRightWord(self);
+    return true;
   }
   else if (keysym.key == kbd.Keysym.Key.pgup) {
     self.text_handler.goPgUp(self);
+    return true;
   }
   else if (keysym.key == kbd.Keysym.Key.pgdown) {
     self.text_handler.goPgDown(self);
+    return true;
   }
   else if (keysym.key == kbd.Keysym.Key.home) {
     self.text_handler.goHead(self);
+    return true;
   }
   else if (keysym.key == kbd.Keysym.Key.end) {
     try self.text_handler.goTail(self);
+    return true;
+  }
+  return false;
+}
+
+pub fn handleInput(
+  self: *editor.Editor,
+  keysym: *const kbd.Keysym,
+  is_clipboard: bool
+) !void {
+  if (try handleTextNavigation(self, keysym)) {
+    return;
   }
   else if (this_shortcuts.key("help", keysym)) {
     self.help_msg = &this_shortcuts_help;
@@ -55,14 +76,14 @@ pub fn handleInput(self: *editor.Editor, keysym: kbd.Keysym, is_clipboard: bool)
   else if (this_shortcuts.key("save", keysym)) {
     if (self.text_handler.file == null) {
       self.setState(editor.State.command);
-      self.setCmdData(.{
+      self.setCmdData(&.{
         .prompt = editor.Commands.Open.PROMPT_SAVE,
         .fns = editor.Commands.Open.FnsTryToSave,
       });
     } else {
       self.text_handler.save(self) catch |err| {
         self.setState(editor.State.command);
-        self.setCmdData(.{
+        self.setCmdData(&.{
           .prompt = editor.Commands.Open.PROMPT_SAVE_NEW,
           .fns = editor.Commands.Open.FnsTryToSave,
         });
@@ -72,14 +93,14 @@ pub fn handleInput(self: *editor.Editor, keysym: kbd.Keysym, is_clipboard: bool)
   }
   else if (this_shortcuts.key("open", keysym)) {
     self.setState(editor.State.command);
-    self.setCmdData(.{
+    self.setCmdData(&.{
       .prompt = editor.Commands.Open.PROMPT_OPEN,
       .fns = editor.Commands.Open.Fns,
     });
   }
-  else if (this_shortcuts.key("open", keysym)) {
+  else if (this_shortcuts.key("goto", keysym)) {
     self.setState(editor.State.command);
-    self.setCmdData(.{
+    self.setCmdData(&.{
       .prompt = editor.Commands.GotoLine.PROMPT,
       .fns = editor.Commands.GotoLine.Fns,
     });
@@ -98,6 +119,9 @@ pub fn handleInput(self: *editor.Editor, keysym: kbd.Keysym, is_clipboard: bool)
   else if (this_shortcuts.key("dup", keysym)) {
     try self.text_handler.duplicateLine(self);
   }
+  else if (this_shortcuts.key("delword", keysym)) {
+    try self.text_handler.deleteWord(self);
+  }
   else if (this_shortcuts.key("delline", keysym)) {
     try self.text_handler.deleteLine(self);
   }
@@ -106,7 +130,7 @@ pub fn handleInput(self: *editor.Editor, keysym: kbd.Keysym, is_clipboard: bool)
   }
   else if (this_shortcuts.key("find", keysym)) {
     self.setState(.command);
-    self.setCmdData(.{
+    self.setCmdData(&.{
       .prompt = editor.Commands.Find.PROMPT,
       .fns = editor.Commands.Find.Fns,
     });

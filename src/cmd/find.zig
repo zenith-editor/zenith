@@ -36,7 +36,7 @@ fn findForwards(self: *editor.Editor, cmd_data: *editor.CommandData) !void {
     (text_handler.calcOffsetFromCursor());
   
   if (offset >= text_handler.buffer.items.len) {
-    cmd_data.replacePromptOverlay(self, .{ .static = PROMPT_NOT_FOUND, });
+    cmd_data.replacePromptOverlay(self, PROMPT_NOT_FOUND);
     return;
   }
   
@@ -47,20 +47,14 @@ fn findForwards(self: *editor.Editor, cmd_data: *editor.CommandData) !void {
     const opt_find_result = regex.find(
       self.allocr(), text_handler.buffer.items[offset..]
     ) catch |err| {
-      cmd_data.replacePromptOverlay(self, .{
-        .owned = try std.fmt.allocPrint(
-          self.allocr(),
-          "regex error: {}",
-          .{err}
-        ),
-      });
+      try cmd_data.replacePromptOverlayFmt(self, PROMPT_ERR_REGEX, .{err});
       return;
     };
     if (opt_find_result) |find_result| {
       opt_pos = offset + find_result.start;
       opt_end = offset + find_result.end;
     } else {
-      cmd_data.replacePromptOverlay(self, .{ .static = PROMPT_NOT_FOUND, });
+      cmd_data.replacePromptOverlay(self, PROMPT_NOT_FOUND);
       return;
     }
   } else {
@@ -83,7 +77,7 @@ fn findForwards(self: *editor.Editor, cmd_data: *editor.CommandData) !void {
       .start_cur = self.text_handler.cursor,
     };
   } else {
-    cmd_data.replacePromptOverlay(self, .{ .static = PROMPT_NOT_FOUND, });
+    cmd_data.replacePromptOverlay(self, PROMPT_NOT_FOUND);
   }
 }
 
@@ -99,7 +93,7 @@ fn findBackwards(self: *editor.Editor, cmd_data: *editor.CommandData) !void {
     (text_handler.calcOffsetFromCursor());
   
   if (offset == 0) {
-    cmd_data.replacePromptOverlay(self, .{ .static = PROMPT_NOT_FOUND, });
+    cmd_data.replacePromptOverlay(self, PROMPT_NOT_FOUND);
     return;
   }
   
@@ -112,20 +106,14 @@ fn findBackwards(self: *editor.Editor, cmd_data: *editor.CommandData) !void {
     const opt_find_result = regex.findBackwards(
       self.allocr(), text_handler.buffer.items[0..offset]
     ) catch |err| {
-      cmd_data.replacePromptOverlay(self, .{
-        .owned = try std.fmt.allocPrint(
-          self.allocr(),
-          "regex error: {}",
-          .{err}
-        ),
-      });
+      try cmd_data.replacePromptOverlayFmt(self, PROMPT_ERR_REGEX, .{err});
       return;
     };
     if (opt_find_result) |find_result| {
       opt_pos = find_result.start;
       opt_end = find_result.end;
     } else {
-      cmd_data.replacePromptOverlay(self, .{ .static = PROMPT_NOT_FOUND, });
+      cmd_data.replacePromptOverlay(self, PROMPT_NOT_FOUND);
       return;
     }
   } else {
@@ -147,7 +135,7 @@ fn findBackwards(self: *editor.Editor, cmd_data: *editor.CommandData) !void {
       .start_cur = self.text_handler.cursor,
     };
   } else {
-    cmd_data.replacePromptOverlay(self, .{ .static = PROMPT_NOT_FOUND, });
+    cmd_data.replacePromptOverlay(self, PROMPT_NOT_FOUND);
   }
 }
 
@@ -162,18 +150,18 @@ fn toBlockMode(self: *editor.Editor, cmd_data: *editor.CommandData) !void {
     self.setState(editor.State.mark);
     self.needs_redraw = true;
   } else {
-    cmd_data.replacePromptOverlay(self, .{ .static = PROMPT_NOTHING_MARKED, });
+    cmd_data.replacePromptOverlay(self, PROMPT_NOTHING_MARKED);
   }
 }
 
 fn toReplace(self: *editor.Editor, cmd_data: *editor.CommandData) void {
   if (self.text_handler.markers != null) {
-    cmd_data.replace(self, .{
+    cmd_data.replace(self, &.{
       .prompt = editor.Commands.Replace.PROMPT,
       .fns = editor.Commands.Replace.Fns,
     });
   } else {
-    cmd_data.replacePromptOverlay(self, .{ .static = PROMPT_NOTHING_MARKED, });
+    cmd_data.replacePromptOverlay(self, PROMPT_NOTHING_MARKED);
   }
 }
 
@@ -190,7 +178,7 @@ fn toReplaceAll(self: *editor.Editor, cmd_data: *editor.CommandData) !void {
     needle = .{ .string = try cmd_data.cmdinp.toOwnedSlice(self.allocr()), };
   }
   
-  cmd_data.replace(self, .{
+  cmd_data.replace(self, &.{
     .prompt = editor.Commands.Replace.PROMPT_ALL,
     .fns = editor.Commands.Replace.FnsAll,
     .args = .{
@@ -203,26 +191,20 @@ fn buildRegex(self: *editor.Editor) !bool {
   const cmd_data: *editor.CommandData = self.getCmdData();
   switch (Expr.create(self.allocr(), cmd_data.cmdinp.items, .{})) {
     .ok => |expr| {
-      cmd_data.replaceArgs(self, .{ .find = .{
+      cmd_data.replaceArgs(self, &.{ .find = .{
         .regex = expr,
       }, });
       return true;
     },
     .err => |err| {
-      cmd_data.replacePromptOverlay(self, .{
-        .owned = try std.fmt.allocPrint(
-          self.allocr(),
-          "Invalid regex (ERR: {}@{})",
-          .{err.type, err.pos}
-        ),
-      });
+      try cmd_data.replacePromptOverlayFmt(self, PROMPT_ERR_REGEX_INVALID, .{err});
       self.needs_update_cursor = true;
       return false;
     },
   }
 }
 
-pub fn onKey(self: *editor.Editor, keysym: kbd.Keysym) !bool {
+pub fn onKey(self: *editor.Editor, keysym: *const kbd.Keysym) !bool {
   const cmd_data: *editor.CommandData = self.getCmdData();
   if (keysym.key == kbd.Keysym.Key.up) {
     try Cmd.findBackwards(self, cmd_data);
@@ -283,6 +265,8 @@ pub fn onKey(self: *editor.Editor, keysym: kbd.Keysym) !bool {
 pub const PROMPT = "Find (next = Enter, ^h = help):";
 pub const PROMPT_NOTHING_MARKED = "Nothing marked!";
 pub const PROMPT_NOT_FOUND = "Not found!";
+pub const PROMPT_ERR_REGEX = "Error using regex (ERR: {})";
+pub const PROMPT_ERR_REGEX_INVALID = "Invalid regex (ERR: {})";
 
 pub const Fns: editor.CommandData.FnTable = .{
   .onInputted = Cmd.onInputted,

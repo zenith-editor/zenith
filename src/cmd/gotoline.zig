@@ -12,27 +12,26 @@ const kbd = @import("../kbd.zig");
 const text = @import("../text.zig");
 const editor = @import("../editor.zig");
 
-
 pub fn onInputted(self: *editor.Editor) !void {
   self.needs_update_cursor = true;
   var text_handler: *text.TextHandler = &self.text_handler;
   var cmd_data: *editor.CommandData = self.getCmdData();
   const line: u32 = std.fmt.parseInt(u32, cmd_data.cmdinp.items, 10) catch {
-    cmd_data.replacePromptOverlay(self, .{ .static = PROMPT_INVALID_INTEGER, });
+    cmd_data.replacePromptOverlay(self, PROMPT_INVALID_INTEGER);
     return;
   };
   if (line == 0) {
-    cmd_data.replacePromptOverlay(self, .{ .static = PROMPT_LINE_STARTS_AT_ONE });
+    cmd_data.replacePromptOverlay(self, PROMPT_LINE_STARTS_AT_ONE);
     return;
   }
   text_handler.gotoLine(self, line - 1) catch {
-    cmd_data.replacePromptOverlay(self, .{ .static = PROMPT_OUT_OF_BOUNDS });
+    cmd_data.replacePromptOverlay(self, PROMPT_OUT_OF_BOUNDS);
     return;
   };
   self.setState(.text);
 }
 
-pub fn onKey(self: *editor.Editor, keysym: kbd.Keysym) !bool {
+pub fn onKey(self: *editor.Editor, keysym: *const kbd.Keysym) !bool {
   if (keysym.getPrint()) |key| {
     if (key == 'g') {
       try self.text_handler.gotoLine(self, 0);

@@ -21,7 +21,11 @@ pub fn onUnset(self: *editor.Editor, next_state: editor.State) void {
   self.unsetCmdData();
 }
 
-pub fn handleInput(self: *editor.Editor, keysym: kbd.Keysym, is_clipboard: bool) !void {
+pub fn handleInput(
+  self: *editor.Editor,
+  keysym: *const kbd.Keysym,
+  is_clipboard: bool
+) !void {
   _ = is_clipboard;
   
   var cmd_data: *editor.CommandData = self.getCmdData();

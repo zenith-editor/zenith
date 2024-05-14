@@ -29,17 +29,12 @@ fn onInputtedRepAll(self: *editor.Editor) !void {
     cmd_data.args.?.replace_all.needle,
     cmd_data.cmdinp.items
   );
-  cmd_data.replacePromptOverlay(self, .{
-    .owned = try std.fmt.allocPrint(
-      self.allocr(),
-      "{} reps done",
-      .{replacements}
-    ),
-  });
+  try cmd_data.replacePromptOverlayFmt(self, PROMPT_REPS_DONE, .{replacements});
 }
 
 pub const PROMPT = "Replace with:";
 pub const PROMPT_ALL = "Replace every instance with:";
+pub const PROMPT_REPS_DONE = "{} reps done";
 
 pub const Fns: editor.CommandData.FnTable = .{
   .onInputted = Cmd.onInputted,

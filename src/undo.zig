@@ -59,7 +59,7 @@ const Action = union(enum) {
 const ActionStack = std.DoublyLinkedList(Action);
 
 pub const UndoManager = struct {
-  const AllocGPAConfig: std.heap.GeneralPurposeAllocatorConfig = .{
+  const GPAConfig: std.heap.GeneralPurposeAllocatorConfig = .{
     .enable_memory_limit = true,
   };
 
@@ -68,12 +68,12 @@ pub const UndoManager = struct {
   
   undo_stack: ActionStack = .{},
   redo_stack: ActionStack = .{},
-  alloc_gpa: std.heap.GeneralPurposeAllocator(AllocGPAConfig) = .{
+  gpa: std.heap.GeneralPurposeAllocator(GPAConfig) = .{
     .requested_memory_limit = DEFAULT_MEM_LIMIT,
   },
 
   fn allocr(self: *UndoManager) std.mem.Allocator {
-    return self.alloc_gpa.allocator();
+    return self.gpa.allocator();
   }
   
   pub fn clear(self: *UndoManager) void {
@@ -89,18 +89,18 @@ pub const UndoManager = struct {
     }
   }
   
-  fn appendAction(self: *UndoManager, action: Action) !void {
+  fn appendAction(self: *UndoManager, action: *const Action) !void {
     std.debug.assert(self.redo_stack.first == null);
-    var alloc_gpa = &self.alloc_gpa;
-    const allocator = alloc_gpa.allocator();
-    while ((alloc_gpa.total_requested_bytes + @sizeOf(ActionStack.Node)) > alloc_gpa.requested_memory_limit) {
+    var gpa = &self.gpa;
+    const allocator = gpa.allocator();
+    while ((gpa.total_requested_bytes + @sizeOf(ActionStack.Node)) > gpa.requested_memory_limit) {
       const opt_action_ptr = self.undo_stack.popFirst();
       if (opt_action_ptr) |action_ptr| {
         self.destroyActionNode(action_ptr);
       }
     }
     const action_node: *ActionStack.Node = try allocator.create(ActionStack.Node);
-    action_node.* = ActionStack.Node { .data = action, };
+    action_node.* = ActionStack.Node { .data = action.*, };
     self.undo_stack.append(action_node);
   } 
   
@@ -132,7 +132,7 @@ pub const UndoManager = struct {
         else => {},
       }
     }
-    try self.appendAction(.{
+    try self.appendAction(&.{
       .append = Action.Append {
         .pos = pos,
         .len = len,
@@ -168,7 +168,7 @@ pub const UndoManager = struct {
     );
     errdefer orig_buffer.deinit(self.allocr());
     
-    try self.appendAction(.{
+    try self.appendAction(&.{
       .delete = Action.Delete {
         .pos = pos,
         .orig_buffer = orig_buffer,
@@ -185,7 +185,7 @@ pub const UndoManager = struct {
     const a_new_buffer = try self.allocr().dupe(u8, new_buffer);
     errdefer self.allocr().free(a_new_buffer);
     
-    try self.appendAction(.{
+    try self.appendAction(&.{
       .replace = Action.Replace {
         .pos = pos,
         .orig_buffer = a_orig_buffer,

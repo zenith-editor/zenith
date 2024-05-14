@@ -4,7 +4,7 @@
 // This work is licensed under the BSD 3-Clause License.
 //
 const std = @import("std");
-const BitArray = @import("./bitarray.zig").BitArray;
+const BitArray = @import("./ds/bitarray.zig").BitArray;
 
 fn lower_u32(context: void, lhs: u32, rhs: u32) bool {
   _ = context;
@@ -12,7 +12,7 @@ fn lower_u32(context: void, lhs: u32, rhs: u32) bool {
 }
 
 pub const LineInfoList = struct {  
-  alloc_gpa: std.heap.GeneralPurposeAllocator(.{}),
+  gpa: std.heap.GeneralPurposeAllocator(.{}),
   
   /// Logical offsets to start of lines. These offsets are defined based on
   /// positions within the logical text buffer above.
@@ -23,8 +23,8 @@ pub const LineInfoList = struct {
   multibyte_bits: BitArray,
   
   pub fn init() !LineInfoList {
-    var alloc_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
-    const allocator: std.mem.Allocator = alloc_gpa.allocator();
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    const allocator: std.mem.Allocator = gpa.allocator();
     
     var offsets = try std.ArrayListUnmanaged(u32).initCapacity(allocator, 1);
     try offsets.append(allocator, 0);
@@ -32,14 +32,14 @@ pub const LineInfoList = struct {
     const multibyte_bits = try BitArray.initCapacity(allocator, 1);
     
     return LineInfoList {
-      .alloc_gpa = alloc_gpa,
+      .gpa = gpa,
       .offsets = offsets,
       .multibyte_bits = multibyte_bits,
     };
   }
 
   fn allocr(self: *LineInfoList) std.mem.Allocator {
-    return self.alloc_gpa.allocator();
+    return self.gpa.allocator();
   }
   
   pub fn getLen(self: *const LineInfoList) u32 {
@@ -122,14 +122,14 @@ pub const LineInfoList = struct {
     return @intCast(idx);
   }
   
-  pub fn findMinLineAfterOffset(self: *const LineInfoList, offset: u32) u32 {
+  pub fn findMinLineAfterOffset(self: *const LineInfoList, offset: u32, from_line: u32) u32 {
     return @intCast(std.sort.upperBound(
       u32,
       offset,
-      self.offsets.items,
+      self.offsets.items[from_line..],
       {},
       lower_u32,
-    ));
+    ) + from_line);
   }
   
   fn moveTail(self: *LineInfoList, line_pivot_dest: u32, line_pivot_src: u32) void {
@@ -158,13 +158,13 @@ pub const LineInfoList = struct {
   ) u32 {
     std.debug.assert(delete_end > delete_start);
     
-    const line_start = self.findMinLineAfterOffset(delete_start);
+    const line_start = self.findMinLineAfterOffset(delete_start, 0);
     if (line_start == self.getLen()) {
       // region starts in last line
       return line_start - 1;
     }
     
-    const line_end = self.findMinLineAfterOffset(delete_end);
+    const line_end = self.findMinLineAfterOffset(delete_end, line_start);
     if (line_end == self.getLen()) {
       // region ends at last line
       self.offsets.shrinkRetainingCapacity(line_start);

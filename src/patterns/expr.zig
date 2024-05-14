@@ -27,7 +27,7 @@ const Parser = @import("./parser.zig");
 pub const CreateErrorType = error {
   EmptyRegex,
   OutOfMemory,
-  InvalidUnicode,
+  InvalidUtf8,
   ExpectedSimpleExpr,
   ExpectedEscapeBeforeDashInRange,
   UnbalancedGroupBrackets,
@@ -103,7 +103,7 @@ pub fn create(
       error.Utf8CodepointTooLarge => {
         return .{
           .err = .{
-            .type = error.InvalidUnicode,
+            .type = error.InvalidUtf8,
             .pos = parser.str_idx,
           },
         };
@@ -149,7 +149,16 @@ const VM = struct {
       }
     }
     
-    fn append(self: *ThreadStack, allocr: std.mem.Allocator, thread: Thread) !void {
+    fn append(
+      self: *ThreadStack,
+      allocr: std.mem.Allocator,
+      str_idx: usize,
+      pc: usize,
+    ) !void {
+      const thread: Thread = .{
+        .str_idx = str_idx,
+        .pc = pc,
+      };
       var opt_new_heapalloc: ?std.ArrayListUnmanaged(Thread) = null;
       switch (self.internal) {
         .stackalloc => |*stackalloc| {
@@ -222,10 +231,10 @@ const VM = struct {
     Matched,
   };
   
-  fn nextInstr(self: *VM, thread: Thread) !void {
-//     std.debug.print("{s}\n", .{self.haystack[thread.str_idx..]});
-//     std.debug.print(">>> {} {}\n", .{thread.pc,self.instrs[thread.pc]});
-//     std.debug.print("{any}\n", .{self.thread_stack.items});
+  fn nextInstr(self: *VM, thread: *const Thread) !void {
+    // std.debug.print("{s}\n", .{self.haystack[thread.str_idx..]});
+    // std.debug.print(">>> {} {}\n", .{thread.pc,self.instrs[thread.pc]});
+    // std.debug.print("{any}\n", .{self.thread_stack.items});
     switch (self.instrs[thread.pc]) {
       .abort => {
         @panic("abort opcode reached");
@@ -280,10 +289,7 @@ const VM = struct {
           },
           else => unreachable,
         }
-        try self.addThread(.{
-          .str_idx = thread.str_idx + seqlen,
-          .pc = thread.pc + 1,
-        });
+        try self.addThread(thread.str_idx + seqlen, thread.pc + 1);
         return;
       },
       .string => {
@@ -291,77 +297,63 @@ const VM = struct {
         @panic("should be handled in exec");
       },
       .jmp => |target| {
-        try self.addThread(.{
-          .str_idx = thread.str_idx,
-          .pc = target,
-        });
+        try self.addThread(thread.str_idx, target);
         return;
       },
       .split => |split| {
-        try self.addThread(.{
-          .str_idx = thread.str_idx,
-          .pc = split.a,
-        });
-        try self.addThread(.{
-          .str_idx = thread.str_idx,
-          .pc = split.b,
-        });
+        try self.addThread(thread.str_idx, split.a);
+        try self.addThread(thread.str_idx, split.b);
         return;
       },
       .group_start => |group_id| {
         if (self.options.group_out) |group_out| {
           group_out[group_id].start = thread.str_idx;
         }
-        try self.addThread(.{
-          .str_idx = thread.str_idx,
-          .pc = thread.pc + 1,
-        });
+        try self.addThread(thread.str_idx, thread.pc + 1);
         return;
       },
       .group_end => |group_id| {
         if (self.options.group_out) |group_out| {
           group_out[group_id].end = thread.str_idx;
         }
-        try self.addThread(.{
-          .str_idx = thread.str_idx,
-          .pc = thread.pc + 1,
-        });
+        try self.addThread(thread.str_idx, thread.pc + 1);
         return;
       },
     }
   }
   
-  fn addThread(self: *VM, thread: Thread) !void {
+  fn addThread(self: *VM, str_idx: usize, pc: usize) !void {
     if (self.thread_stack.top()) |top| {
       // run length encode the thread stack so that less memory is used
       // when greedy matching repetitive groups of characters
-      if (top.pc == thread.pc) {
+      if (top.pc == pc) {
         if (top.str_idx_delta == 0) {
-          top.str_idx_delta = @intCast(thread.str_idx - top.str_idx);
+          top.str_idx_delta = @intCast(str_idx - top.str_idx);
           top.str_idx_repeats = 1;
           return;
         } else if (
-          thread.str_idx > top.str_idx and
-          (top.str_idx + top.str_idx_delta * top.str_idx_repeats) == thread.str_idx
+          str_idx > top.str_idx and
+          (top.str_idx + top.str_idx_delta * top.str_idx_repeats) == str_idx
         ) {
           top.str_idx_repeats += 1;
           return;
         }
       }
     }
-    try self.thread_stack.append(self.allocr, thread);
+    try self.thread_stack.append(self.allocr, str_idx, pc);
   }
   
   fn popThread(self: *VM) !Thread {
-    var top = self.thread_stack.pop();
+    var top: *Thread = self.thread_stack.top().?;
     if (top.str_idx_delta == 0) {
-      return top;
+      return self.thread_stack.pop();
     }
-    var ret_thread = top;
+    var ret_thread: Thread = top.*;
     ret_thread.str_idx = top.str_idx + top.str_idx_delta * top.str_idx_repeats;
     if (top.str_idx_repeats > 0) {
       top.str_idx_repeats -= 1;
-      try self.thread_stack.append(self.allocr, top);
+    } else {
+      _ = self.thread_stack.pop();
     }
     return ret_thread;
   }
@@ -379,26 +371,20 @@ const VM = struct {
           return .{ .pos = str_idx, .fully_matched = false };
         }
       }
-      try self.thread_stack.append(self.allocr, .{
-        .str_idx = str_idx,
-        .pc = 1,
-      });
+      try self.thread_stack.append(self.allocr, str_idx, 1);
     } else {
-      try self.thread_stack.append(self.allocr, .{
-        .str_idx = 0,
-        .pc = 0,
-      });
+      try self.thread_stack.append(self.allocr, 0, 0);
     }
     while (true) {
       const thread = try self.popThread();
-      try self.nextInstr(thread);
+      try self.nextInstr(&thread);
       if (self.thread_stack.len() == 0 or self.fully_matched) {
         return .{
           .pos = thread.str_idx,
           .fully_matched = self.fully_matched,
         };
       }
-//       _ = std.io.getStdIn().reader().readByte() catch {};
+      // _ = std.io.getStdIn().reader().readByte() catch {};
     }
   }
 };
@@ -420,7 +406,7 @@ pub const MatchOptions = struct {
 pub const MatchError = error {
   OutOfMemory,
   InvalidGroupSize,
-  InvalidUnicode,
+  InvalidUtf8,
 };
 
 pub fn checkMatch(
@@ -448,7 +434,7 @@ pub fn checkMatch(
       error.Utf8OverlongEncoding,
       error.Utf8EncodesSurrogateHalf,
       error.Utf8CodepointTooLarge => {
-        return error.InvalidUnicode;
+        return error.InvalidUtf8;
       },
       error.OutOfMemory => |suberr| {
         return suberr;

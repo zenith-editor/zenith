@@ -25,7 +25,7 @@ pub const State = enum {
 };
 
 const StateHandler = struct {
-  handleInput: *const fn (self: *Editor, keysym: kbd.Keysym, is_clipboard: bool) anyerror!void,
+  handleInput: *const fn (self: *Editor, keysym: *const kbd.Keysym, is_clipboard: bool) anyerror!void,
   handleOutput: *const fn (self: *Editor) anyerror!void,
   onSet: ?*const fn (self: *Editor) void,
   onUnset: ?*const fn (self: *Editor, next_state: State) void,
@@ -59,7 +59,7 @@ pub const CommandData = struct {
   pub const FnTable = struct {
     onInputted: *const fn (self: *Editor) anyerror!void,
     /// Handle key, returns false if no key is handled
-    onKey: ?*const fn (self: *Editor, keysym: kbd.Keysym) anyerror!bool = null,
+    onKey: ?*const fn (self: *Editor, keysym: *const kbd.Keysym) anyerror!bool = null,
     onUnset: ?*const fn (self: *Editor, next_state: State) void = null,
   };
   
@@ -117,23 +117,32 @@ pub const CommandData = struct {
     self.cmdinp.deinit(E.allocr());
   }
   
-  pub fn replace(self: *CommandData, E: *Editor, new_cmd_data: CommandData) void {
+  pub fn replace(self: *CommandData, E: *Editor, new_cmd_data: *const CommandData) void {
     self.deinit(E);
-    self.* = new_cmd_data;
+    self.* = new_cmd_data.*;
   }
   
-  pub fn replaceArgs(self: *CommandData, E: *Editor, new_args: Args) void {
+  pub fn replaceArgs(self: *CommandData, E: *Editor, new_args: *const Args) void {
     if (self.args != null) {
       self.args.?.deinit(E.allocr());
     }
-    self.args = new_args;
+    self.args = new_args.*;
   }
   
-  pub fn replacePromptOverlay(self: *CommandData, E: *Editor, promptoverlay: ?str.MaybeOwnedSlice) void {
+  pub fn replacePromptOverlay(self: *CommandData, E: *Editor, static: []const u8) void {
     if (self.promptoverlay != null) {
       self.promptoverlay.?.deinit(E.allocr());
     }
-    self.promptoverlay = promptoverlay;
+    self.promptoverlay = .{ .static = static, };
+  }
+  
+  pub fn replacePromptOverlayFmt(self: *CommandData, E: *Editor, comptime fmt: []const u8, args: anytype) !void {
+    if (self.promptoverlay != null) {
+      self.promptoverlay.?.deinit(E.allocr());
+    }
+    self.promptoverlay = .{
+      .owned = try std.fmt.allocPrint(E.allocr(), fmt, args),
+    };
   }
 };
 
@@ -189,7 +198,23 @@ pub const Editor = struct {
     const stdout: std.fs.File = std.io.getStdOut();
     var alloc_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
     const text_handler: text.TextHandler = try text.TextHandler.init();
-    const conf: config.Reader = config.Reader.open(alloc_gpa.allocator()) catch .{};
+    var conf: config.Reader = .{};
+    switch (config.Reader.open(alloc_gpa.allocator())) {
+      .ok => |conf_ok| {
+        conf = conf_ok;
+      },
+      .err => |err| {
+        switch (err.type) {
+          error.FileNotFound => {},
+          else => {
+            const writer = stdout.writer();
+            try writer.print("Unable to read config file: {}\n", .{err});
+            try writer.print("Press Enter to continue...\n",.{});
+            _ = stdin.reader().readByte() catch {};
+          },
+        }
+      },
+    }
     return Editor {
       .in = stdin,
       .inr = stdin.reader(),
@@ -236,9 +261,9 @@ pub const Editor = struct {
     return &self._priv.cmd_data.?;
   }
   
-  pub fn setCmdData(self: *Editor, cmd_data: CommandData) void {
+  pub fn setCmdData(self: *Editor, cmd_data: *const CommandData) void {
     std.debug.assert(self._priv.cmd_data == null);
-    self._priv.cmd_data = cmd_data;
+    self._priv.cmd_data = cmd_data.*;
   }
   
   pub fn unsetCmdData(self: *Editor) void {
@@ -319,7 +344,7 @@ pub const Editor = struct {
   }
   
   const EscapeMatcher = struct {
-    buffered: std.BoundedArray(u8, 16) = .{},
+    buffered: std.BoundedArray(u8, 4) = .{},
     editor: *Editor,
     
     inline fn readByte(self: *EscapeMatcher) u8 {
@@ -493,7 +518,7 @@ pub const Editor = struct {
             switch (keysym1.key) {
               .paste_end => { break; },
               else => {
-                try self.state_handler.handleInput(self, keysym1, true);
+                try self.state_handler.handleInput(self, &keysym1, true);
               },
             }
           }
@@ -501,7 +526,7 @@ pub const Editor = struct {
         },
         else => {},
       }
-      try self.state_handler.handleInput(self, keysym, is_clipboard);
+      try self.state_handler.handleInput(self, &keysym, is_clipboard);
     }
   }
   
@@ -673,7 +698,7 @@ pub const Editor = struct {
         return true;
       }
     }
-    if ((colref.* + cwidth) >= text_width) {
+    if ((colref.* + cwidth) > text_width) {
       return false;
     }
     if (bytes.len == 1 and bytes[0] == '\t') {
@@ -787,7 +812,7 @@ pub const Editor = struct {
   
   pub fn openAtStart(self: *Editor, opened_file_str: str.String) !void {
     self.setState(.command);
-    self.setCmdData(CommandData {
+    self.setCmdData(&.{
       .prompt = Commands.Open.PROMPT_OPEN,
       .fns = Commands.Open.Fns,
       .cmdinp = opened_file_str,

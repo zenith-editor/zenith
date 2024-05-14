@@ -11,6 +11,7 @@ const parser = @import("./parser.zig");
 const conf = @import("../config.zig");
 const str = @import("../str.zig");
 const editor = @import("../editor.zig");
+const Error = @import("../ds/error.zig").Error;
 
 const Reader = @This();
 
@@ -18,19 +19,28 @@ const ConfigSection = enum {
   global,
 };
 
-pub const ConfigError = error {
-  ExpectedIntValue,
+pub const ConfigErrorType = parser.ParseErrorType || OpenDirError || error {
+  OutOfMemory,
+  ExpectedI32Value,
   ExpectedBoolValue,
   ExpectedStringValue,
   InvalidSection,
   UnknownKey,
 };
 
+pub const ConfigError = struct {
+  type: ConfigErrorType,
+  pos: ?usize = null,
+};
+
+const ParseResult = Error(void, ConfigError);
+pub const ConfigResult = Error(Reader, ConfigError);
+
 const CONFIG_DIR = "zenith";
 const CONFIG_FILENAME = "zenith.conf";
 
 config_dir: ?std.fs.Dir = null,
-file_path: ?[]u8 = null,
+config_file: ?[]u8 = null,
 
 // config fields
 
@@ -41,7 +51,15 @@ show_line_numbers: bool = true,
 
 // methods
 
-fn openDir(comptime dirs: anytype) !std.fs.Dir {
+const OpenDirError =
+  std.fs.File.OpenError
+  || std.fs.File.ReadError
+  || std.fs.Dir.RealPathAllocError
+  || error {
+    EnvironmentVariableNotFound,
+  };
+
+fn openDir(comptime dirs: anytype) OpenDirError!std.fs.Dir {
   var opt_path: ?std.fs.Dir = null;
   inline for (dirs) |dir| {
     var path_str: []const u8 = undefined;
@@ -49,7 +67,7 @@ fn openDir(comptime dirs: anytype) !std.fs.Dir {
       if (std.posix.getenv(dir[1..])) |env| {
         path_str = env;
       } else {
-        return error.EnvVarNotSet;
+        return error.EnvironmentVariableNotFound;
       }
     } else {
       path_str = dir;
@@ -63,9 +81,9 @@ fn openDir(comptime dirs: anytype) !std.fs.Dir {
   return opt_path.?;
 }
 
-fn getConfigDir() !std.fs.Dir {
+fn getConfigDir() OpenDirError!std.fs.Dir {
   const os = builtin.target.os.tag;
-  if (os == .linux or os.isBSD()) {
+  if (comptime (os == .linux or os.isBSD())) {
     var config_dir: std.fs.Dir = undefined;
     if (openDir(.{ "$XDG_CONFIG_HOME" })) |config_path_env| {
       config_dir = config_path_env;
@@ -78,87 +96,109 @@ fn getConfigDir() !std.fs.Dir {
   }
 }
 
-fn getConfigFile(allocr: std.mem.Allocator, config_dir: std.fs.Dir) ![]u8 {
+fn getConfigFile(
+  allocr: std.mem.Allocator,
+  config_dir: std.fs.Dir
+) std.fs.Dir.RealPathAllocError![]u8 {
   return config_dir.realpathAlloc(allocr, CONFIG_FILENAME);
 }
 
-pub fn open(allocr: std.mem.Allocator) !Reader {
+const OpenWithoutParsingResult = struct {
+  reader: Reader,
+  source: []u8,
+};
+
+fn openWithoutParsing(allocr: std.mem.Allocator) ConfigErrorType!OpenWithoutParsingResult {
   var config_dir: std.fs.Dir = try Reader.getConfigDir();
   errdefer config_dir.close();
   
   const config_file: []u8 = try Reader.getConfigFile(allocr, config_dir);
   errdefer allocr.free(config_file);
   
-  var reader: Reader = .{
+  const reader: Reader = .{
     .config_dir = config_dir,
-    .file_path = config_file,
+    .config_file = config_file,
   };
   
-  const file = try std.fs.openFileAbsolute(reader.file_path.?, .{.mode = .read_only});
-  errdefer file.close();
+  const file = try std.fs.openFileAbsolute(reader.config_file.?, .{.mode = .read_only});
+  defer file.close();
   
   const source = try file.readToEndAlloc(allocr, 1 << 24);
   errdefer allocr.free(source);
   
-  try reader.parse(allocr, source);
-  
-  return reader;
+  return .{ .reader = reader, .source = source, };
 }
 
-fn parse(self: *Reader, allocr: std.mem.Allocator, source: []const u8) !void {
+pub fn open(allocr: std.mem.Allocator) ConfigResult {
+  var res = openWithoutParsing(allocr) catch |err| {
+    return .{ .err = .{ .type = err, }, };
+  };
+  switch(res.reader.parse(allocr, res.source)) {
+    .ok => {
+      res.reader.config_dir.?.close();
+      res.reader.config_dir = null;
+      allocr.free(res.reader.config_file.?);
+      res.reader.config_file = null;
+      return .{ .ok = res.reader, };
+    },
+    .err => |err| {
+      return .{ .err = err, };
+    }
+  }
+}
+
+fn parseInner(self: *Reader,
+              expr: *parser.Expr,
+              config_section: *ConfigSection) !void {
+  switch (expr.*) {
+    .kv => |*kv| {
+      switch (config_section.*) {
+        .global => {
+          if (try kv.get(i32, "tab-size")) |int| {
+            if (int > conf.MAX_TAB_SIZE) {
+              self.tab_size = conf.MAX_TAB_SIZE;
+            } else if (int < 0) {
+              self.tab_size = 2;
+            } else {
+              self.tab_size = int;
+            }
+          } else if (try kv.get(bool, "use-tabs")) |b| {
+            self.use_tabs = b;
+          } else if (try kv.get(bool, "use-native-clipboard")) |b| {
+            self.use_native_clipboard = b;
+          } else if (try kv.get(bool, "show-line-numbers")) |b| {
+            self.show_line_numbers = b;
+          } else {
+            return error.UnknownKey;
+          }
+        },
+      }
+    },
+    .section => |section| {
+      if (std.mem.eql(u8, section, "global")) {
+        config_section.* = ConfigSection.global;
+      } else {
+        return error.InvalidSection;
+      }
+    },
+  }
+}
+
+fn parse(self: *Reader, allocr: std.mem.Allocator, source: []const u8) ParseResult {
   var P = parser.Parser.init(source);
   var config_section = ConfigSection.global;
   while (true) {
+    const expr_start = P.pos;
     var expr = switch (P.nextExpr(allocr)) {
       .ok => |val| val,
       .err => |err| {
-        _ = err;
-        // TODO
-        return;
+        return .{ .err = .{ .type = err.type, .pos = err.pos, } };
       },
-    } orelse return;
+    } orelse break;
     errdefer expr.deinit(allocr);
-    switch (expr) {
-      .kv => |*kv| {
-        if (std.mem.eql(u8, kv.key, "tab-size")) {
-          switch (kv.val) {
-            .int => |int| {
-              if (int > conf.MAX_TAB_SIZE) {
-                self.tab_size = conf.MAX_TAB_SIZE;
-              } else if (int < 0) {
-                self.tab_size = 2;
-              } else {
-                self.tab_size = int;
-              }
-            },
-            else => { return ConfigError.ExpectedIntValue; },
-          }
-        } else if (std.mem.eql(u8, kv.key, "use-tabs")) {
-          switch (kv.val) {
-            .bool => |b| { self.use_tabs = b; },
-            else => { return ConfigError.ExpectedBoolValue; },
-          }
-        } else if (std.mem.eql(u8, kv.key, "use-native-clipboard")) {
-          switch (kv.val) {
-            .bool => |b| { self.use_native_clipboard = b; },
-            else => { return ConfigError.ExpectedBoolValue; },
-          }
-        } else if (std.mem.eql(u8, kv.key, "show-line-numbers")) {
-          switch (kv.val) {
-            .bool => |b| { self.show_line_numbers = b; },
-            else => { return ConfigError.ExpectedBoolValue; },
-          }
-        } else {
-          return ConfigError.UnknownKey;
-        }
-      },
-      .section => |section| {
-        if (std.mem.eql(u8, section, "global")) {
-          config_section = ConfigSection.global;
-        } else {
-          return ConfigError.InvalidSection;
-        }
-      },
-    }
+    self.parseInner(&expr, &config_section) catch |err| {
+      return .{ .err = .{ .type = err, .pos = expr_start, } };
+    };
   }
+  return .{ .ok = {}, };
 }

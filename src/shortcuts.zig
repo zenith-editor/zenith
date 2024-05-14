@@ -10,7 +10,9 @@ pub const Section = struct {
   name: []const u8,
   list: []const Shortcut,
   
-  pub fn key(comptime self: *const Section, comptime id: []const u8, keysym: kbd.Keysym) bool {
+  pub fn key(comptime self: *const Section,
+             comptime id: []const u8,
+             keysym: *const kbd.Keysym) bool {
     inline for (self.list) |*shortcut| {
       if (comptime std.mem.eql(u8, shortcut.id, id)) {
         return shortcut.checkKey(keysym);
@@ -49,7 +51,7 @@ pub const Shortcut = struct {
   id: []const u8,
   desc: []const u8,
   
-  fn checkKey(comptime self: *const Shortcut, keysym: kbd.Keysym) bool {
+  fn checkKey(comptime self: *const Shortcut, keysym: *const kbd.Keysym) bool {
     if (self.ctrl and !keysym.ctrl_key)
       return false;
     if (!keysym.isChar(self.key))
@@ -79,6 +81,7 @@ pub const STATE_TEXT = Section {
     .{ .key='b', .ctrl=true, .id="block", .desc="block mode (cmd)" },
     .{ .key='d', .ctrl=true, .id="dup", .desc="duplicate line" },
     .{ .key='k', .ctrl=true, .id="delline", .desc="delete line" },
+    .{ .key='w', .ctrl=true, .id="delword", .desc="delete word" },
     .{ .key='v', .ctrl=true, .id="paste", .desc="paste" },
     .{ .key='z', .ctrl=true, .id="undo", .desc="undo" },
     .{ .key='y', .ctrl=true, .id="redo", .desc="redo" },
