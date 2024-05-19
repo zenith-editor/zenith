@@ -606,6 +606,9 @@ pub const Editor = struct {
     
     inline fn setColor(self: *ColumnPrinter, color_code: ?[]const u8) !void {
       if (color_code == null) {
+        if (self.color_code == null) {
+          return;
+        }
       } else if (self.color_code) |cur_color_code| {
         if (cur_color_code.ptr == color_code.?.ptr) {
           return;
