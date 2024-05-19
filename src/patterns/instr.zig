@@ -51,7 +51,7 @@ pub const Instr = union(enum) {
   
   pub fn deinit(self: *Instr, allocr: std.mem.Allocator) void {
     switch(self.*) {
-      .range => |ptr| allocr.free(ptr),
+      .range, .range_inverse => |ptr| allocr.free(ptr),
       .string => |ptr| allocr.free(ptr),
       else => {},
     }
@@ -59,7 +59,7 @@ pub const Instr = union(enum) {
   
   pub fn isSimpleMatcher(self: *const Instr) bool {
     return switch(self.*) {
-      .any, .char, .char_inverse, .range, .range_inverse => true,
+      .any, .char, .char_inverse, .range, .range_inverse, .range_opt => true,
       else => false,
     };
   }

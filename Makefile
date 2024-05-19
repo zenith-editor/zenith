@@ -26,6 +26,10 @@ $(ZIG_CACHE):
 release:
 	$(ZIG) build -Doptimize=ReleaseSafe
 
+.PHONY: test
+test:
+	$(ZIG) build test
+
 .PHONY: clean
 clean:
 	rm -rf zig-out

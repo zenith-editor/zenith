@@ -5,8 +5,8 @@
 //
 const std = @import("std");
 const builtin = @import("builtin");
-
 const build_config = @import("config");
+
 const config = @import("./config.zig");
 const kbd = @import("./kbd.zig");
 const str = @import("./str.zig");
@@ -14,7 +14,8 @@ const text = @import("./text.zig");
 const sig = @import("./sig.zig");
 const shortcuts = @import("./shortcuts.zig");
 const encoding = @import("./encoding.zig");
-const Expr = @import("./patterns/expr.zig");
+
+const Expr = @import("./patterns.zig").Expr;
 
 pub const State = enum {
   text,

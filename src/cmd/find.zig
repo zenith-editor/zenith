@@ -12,7 +12,7 @@ const kbd = @import("../kbd.zig");
 const text = @import("../text.zig");
 const editor = @import("../editor.zig");
 
-const Expr = @import("../patterns/expr.zig");
+const Expr = @import("../patterns.zig").Expr;
 
 const this_shortcuts = @import("../shortcuts.zig").CMD_FIND;
 const this_shortcuts_help = @import("../shortcuts.zig").CMD_FIND_HELP;

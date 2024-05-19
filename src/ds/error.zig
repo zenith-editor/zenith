@@ -11,8 +11,8 @@ pub fn Error(comptime T: type, comptime E: type) type {
     ok: T,
     err: E,
     
-    pub fn unwrap(self: *Self) T {
-      switch (self.*) {
+    pub fn unwrap(self: Self) T {
+      switch (self) {
         .ok => |v| {
           return v;
         },

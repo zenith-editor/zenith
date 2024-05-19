@@ -14,7 +14,7 @@ const encoding = @import("./encoding.zig");
 const heap = @import("./ds/heap.zig");
 
 const Editor = @import("./editor.zig").Editor;
-const Expr = @import("./patterns/expr.zig");
+const Expr = @import("./patterns.zig").Expr;
 
 pub const TextPos = struct {
   /// Row

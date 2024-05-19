@@ -5,5 +5,6 @@
 //
 
 pub const Reader = @import("./config/reader.zig");
+pub const parser = @import("./config/parser.zig");
 
 pub const MAX_TAB_SIZE = 8;
