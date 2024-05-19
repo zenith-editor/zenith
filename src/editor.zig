@@ -702,14 +702,18 @@ pub const Editor = struct {
       };
       
       if (text_handler.markers) |*markers| {
+        if (iter.pos >= markers.start and iter.pos < markers.end) {
+          try printer.setColor(ESC_COLOR_INVERT);
+        }
+        
         while (iter.nextCodepointSliceUntil(offset_end)) |bytes| {
-          if (iter.pos == markers.end) {
+          if (!try printer.writeAll(bytes)) {
+            break;
+          }
+          if (iter.pos >= markers.end) {
             try printer.setColor(null);
           } else if (iter.pos >= markers.start) {
             try printer.setColor(ESC_COLOR_INVERT);
-          }
-          if (!try printer.writeAll(bytes)) {
-            break;
           }
         }
       }
@@ -719,6 +723,10 @@ pub const Editor = struct {
         const logical_gap_buf_end: u32 =
           @intCast(logical_gap_buf_start + self.text_handler.gap.items.len);
           
+        if (iter.pos >= logical_gap_buf_start and iter.pos < logical_gap_buf_end) {
+          try printer.setColor(ESC_COLOR_INVERT);
+        }
+        
         while (iter.nextCodepointSliceUntil(offset_end)) |bytes| {
           if (iter.pos == logical_gap_buf_end) {
             try printer.setColor(null);

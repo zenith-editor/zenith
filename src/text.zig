@@ -211,9 +211,10 @@ pub const TextHandler = struct {
     const last_row: u32 = self.lineinfo.getLen() - 1;
     self.lineinfo.setMultibyte(last_row, is_mb);
     
-    try self.wrapText(E);
-    
     self.calcLineDigits(E);
+    
+    // wrap text must be done after calcLineDigits
+    try self.wrapText(E);
   }
   
   // general manip
