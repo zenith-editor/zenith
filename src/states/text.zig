@@ -211,5 +211,8 @@ pub fn renderStatus(self: *editor.Editor) !void {
   } else {
     try self.writeAll("[ ]");
   }
-  try self.writeFmt(" {}:{}", .{text_handler.cursor.row+1, text_handler.cursor.gfx_col+1});
+  try self.writeFmt(" {}:{}", .{
+    text_handler.lineinfo.getLineNo(text_handler.cursor.row),
+    text_handler.cursor.gfx_col+1
+  });
 }

@@ -4,151 +4,442 @@
 // This work is licensed under the BSD 3-Clause License.
 //
 const std = @import("std");
-const BitArray = @import("./ds/bitarray.zig").BitArray;
 
-fn lower_u32(context: void, lhs: u32, rhs: u32) bool {
-  _ = context;
-  return lhs < rhs;
-}
+const text = @import("./text.zig");
+const encoding = @import("./encoding.zig");
+const Editor = @import("./editor.zig").Editor;
 
-pub const LineInfoList = struct {  
-  gpa: std.heap.GeneralPurposeAllocator(.{}),
-  
-  /// Logical offsets to start of lines. These offsets are defined based on
-  /// positions within the logical text buffer above.
-  /// These offsets do contain the newline character.
-  offsets: std.ArrayListUnmanaged(u32),
-  
-  /// Bit set to store whether line has multibyte characters
-  multibyte_bits: BitArray,
-  
-  pub fn init() !LineInfoList {
-    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
-    const allocator: std.mem.Allocator = gpa.allocator();
+const LineData = packed struct {
+  const Flags = packed struct {
+    is_multibyte: bool = false,
+    /// True for if line is continuation of the previous
+    /// line, used for line wrapping
+    is_cont_line: bool = false,
+    _padding: u30 = 0,
     
-    var offsets = try std.ArrayListUnmanaged(u32).initCapacity(allocator, 1);
-    try offsets.append(allocator, 0);
-    
-    const multibyte_bits = try BitArray.initCapacity(allocator, 1);
-    
-    return LineInfoList {
-      .gpa = gpa,
-      .offsets = offsets,
-      .multibyte_bits = multibyte_bits,
-    };
+    comptime {
+      std.debug.assert(@bitSizeOf(@This()) == @bitSizeOf(u32));
+    }
+  };
+  
+  offset: u32,
+  /// Cont-lines must have the same line_no as parent
+  line_no: u32,
+  _padding: u32 = 0,
+  flags: Flags,
+  
+  comptime {
+    std.debug.assert(@sizeOf(LineData) == 16);
   }
+  
+  fn debugPrint(self: *const LineData) void {
+    std.debug.print("{}: {} {}\n", .{
+      self.line_no, self.offset, self.flags
+    });
+  }
+};
+
+
+pub const LineInfoList = struct {
+  const MAX_LINES = std.math.maxInt(u32);
+  
+  gpa: std.heap.GeneralPurposeAllocator(.{}) = .{},
+  
+  line_data: std.ArrayListUnmanaged(LineData) = .{},
 
   fn allocr(self: *LineInfoList) std.mem.Allocator {
     return self.gpa.allocator();
   }
   
+  pub fn create() !LineInfoList {
+    var list = LineInfoList {};
+    try list.append(0);
+    return list;
+  }
+  
+  pub fn debugPrint(self: *const LineInfoList) void {
+    for (self.line_data.items) |*line_data| {
+      line_data.debugPrint();
+    }
+  }
+  
+  // General manipiulation
+  
   pub fn getLen(self: *const LineInfoList) u32 {
-    return @intCast(self.offsets.items.len);
-  }
-  
-  pub fn getOffset(self: *const LineInfoList, idx: u32) u32 {
-    return self.offsets.items[idx];
-  }
-  
-  pub fn checkIsMultibyte(self: *const LineInfoList, idx: u32) bool {
-    return self.multibyte_bits.get(idx) == 1;
+    return @intCast(self.line_data.items.len);
   }
   
   pub fn clear(self: *LineInfoList) void {
-    self.offsets.clearRetainingCapacity();
-    self.multibyte_bits.clearRetainingCapacity();
+    self.line_data.clearRetainingCapacity();
   }
   
   pub fn remove(self: *LineInfoList, idx: u32) void {
-    _ = self.offsets.orderedRemove(idx);
-    _ = self.multibyte_bits.remove(idx);
-  }
-  
-  pub fn shrinkRetainingCapacity(self: *LineInfoList, len: u32) void {
-    self.offsets.shrinkRetainingCapacity(len);
-    self.multibyte_bits.shrinkRetainingCapacity(len);
+    const line_data = self.line_data.orderedRemove(idx);
+    if (!line_data.flags.is_cont_line) {
+      self.recalcLineNosFrom(idx);
+    }
   }
   
   pub fn append(self: *LineInfoList, offset: u32) !void {
-    try self.offsets.append(self.allocr(), offset);
+    if (self.line_data.items.len + 1 == MAX_LINES) {
+      return error.OutOfMemory;
+    }
+    
+    var line_no: u32 = undefined;
+    if (self.line_data.items.len == 0) {
+      line_no = 1;
+    } else {
+      line_no = self.line_data.items[self.line_data.items.len - 1].line_no + 1;
+    }
+    try self.line_data.append(self.allocr(), .{
+      .offset = offset,
+      .line_no = line_no,
+      .flags = .{},
+    });
   }
   
-  pub fn setMultibyte(self: *LineInfoList, idx: u32, is_multibyte: bool) !void {
-    try self.multibyte_bits.set(self.allocr(), idx, if (is_multibyte) 1 else 0);
+  pub fn ensureTotalCapacity(self: *LineInfoList, cap: u32) !void {
+    if (cap > MAX_LINES) {
+      return error.OutOfMemory;
+    }
+    return self.line_data.ensureTotalCapacity(
+      self.allocr(),
+      @intCast(cap)
+    );
   }
   
-  pub fn insert(self: *LineInfoList, idx: u32, offset: u32, is_multibyte: bool) !void {
-    try self.offsets.insert(self.allocr(), idx, offset);
-    try self.multibyte_bits.insert(self.allocr(), idx, if (is_multibyte) 1 else 0);
+  /// Returns true if a new line has actually been added
+  pub fn insert(self: *LineInfoList, idx: u32, offset: u32, is_multibyte: bool) !bool {
+    if (self.line_data.items.len + 1 == MAX_LINES) {
+      return error.OutOfMemory;
+    }
+    
+    var line_no: u32 = undefined;
+    if (idx == 0) {
+      line_no = 1;
+    } else {
+      line_no = self.line_data.items[idx - 1].line_no + 1;
+    }
+    
+    const line_data: LineData = .{
+      .offset = offset,
+      .line_no = line_no,
+      .flags = .{
+        .is_multibyte = is_multibyte,
+      },
+    };
+    
+    if (idx == self.line_data.items.len) { 
+      try self.line_data.append(self.allocr(), line_data);
+      return true;
+    }
+    
+    if (
+      idx > 0 and
+      self.line_data.items[idx - 1].flags.is_cont_line and
+      self.line_data.items[idx - 1].offset + 1 == offset
+    ) {
+      self.line_data.items[idx - 1] = line_data;
+      self.recalcLineNosFrom(idx);
+      return false;
+    }
+    else if (
+      idx > 0 and
+      self.line_data.items[idx - 1].flags.is_cont_line and
+      self.line_data.items[idx].flags.is_cont_line
+    ) {
+      self.line_data.items[idx] = line_data;
+      self.recalcLineNosFrom(idx+1);
+    } else {
+      try self.line_data.insert(self.allocr(), idx, line_data);
+      self.recalcLineNosFrom(idx+1);
+    }
+    
+    return true;
   }
   
   pub fn insertSlice(
     self: *LineInfoList,
     idx: u32,
-    slice: []const u32,
+    offsets: []const u32,
   ) !void {
-    try self.offsets.insertSlice(self.allocr(), idx, slice);
-    for (0..slice.len) |_| {
-      try self.multibyte_bits.insert(self.allocr(), idx, 0);
+    if (self.line_data.items.len + offsets.len == MAX_LINES) {
+      return error.OutOfMemory;
+    }
+    
+    var line_no: u32 = undefined;
+    if (idx == 0) {
+      line_no = 1;
+    } else {
+      line_no = self.line_data.items[idx - 1].line_no + 1;
+    }
+    const new_line_data: []LineData =
+      try self.line_data.addManyAt(self.allocr(), idx, offsets.len);
+    for (new_line_data, offsets) |*line_data, offset| {
+      line_data.* = .{
+        .offset = offset,
+        .line_no = line_no,
+        .flags = .{},
+      };
+      line_no += 1;
+    }
+    self.recalcLineNosFrom(idx+1);
+  }
+  
+  // Offsets
+  
+  pub fn findMaxLineBeforeOffset(self: *const LineInfoList, offset: u32, from_line: u32) u32 {
+    const idx = blk: {
+      var left: u32 = from_line;
+      var right: u32 = @intCast(self.line_data.items.len);
+      
+      while (left < right) {
+        const mid = left + (right - left) / 2;
+        if (self.line_data.items[mid].offset < offset) {
+          left = mid + 1;
+        } else {
+          right = mid;
+        }
+      }
+      
+      break :blk left;
+    };
+    
+    if (idx == self.getLen()) {
+      return self.getLen() - 1;
+    }
+    
+    if (self.line_data.items[idx].offset > offset) {
+      return idx - 1;
+    }
+    
+    return idx;
+  }
+  
+  pub fn findMinLineAfterOffset(self: *const LineInfoList, offset: u32, from_line: u32) u32 {
+    const idx = blk: {
+      var left: u32 = from_line;
+      var right: u32 = @intCast(self.line_data.items.len);
+      
+      while (left < right) {
+        const mid = left + (right - left) / 2;
+        if (!(offset < self.line_data.items[mid].offset)) {
+          left = mid + 1;
+        } else {
+          right = mid;
+        }
+      }
+      
+      break :blk left;
+    };
+    
+    return idx;
+  }
+  
+  pub fn findLineWithLineNo(self: *const LineInfoList, line_no: u32) ?u32 {
+    var left: u32 = 0;
+    var right: u32 = @intCast(self.line_data.items.len);
+    
+    while (left < right) {
+      const mid = left + (right - left) / 2;
+      const line_data = &self.line_data.items[mid];
+      switch (std.math.order(line_no, line_data.line_no)) {
+        .eq => {
+          if (line_data.flags.is_cont_line) {
+            right = mid;
+            continue;
+          }
+          return mid;
+        },
+        .gt => left = mid + 1,
+        .lt => right = mid,
+      }
+    }
+    
+    return null;
+  }
+  
+  pub fn getOffset(self: *const LineInfoList, idx: u32) u32 {
+    return self.line_data.items[idx].offset;
+  }
+  
+  fn modifyOffsets(
+    self: *LineInfoList, from: u32, delta: u32, comptime increase: bool
+  ) void {
+    for (self.line_data.items[from..]) |*line_data| {
+      if (comptime increase) {
+        line_data.offset += delta;
+      } else {
+        line_data.offset -= delta;
+      }
     }
   }
   
   pub fn increaseOffsets(self: *LineInfoList, from: u32, delta: u32) void {
-    for (self.offsets.items[from..]) |*offset| {
-       offset.* += delta;
-    }
+    return self.modifyOffsets(from, delta, true);
   }
   
   pub fn decreaseOffsets(self: *LineInfoList, from: u32, delta: u32) void {
-    for (self.offsets.items[from..]) |*offset| {
-       offset.* -= delta;
+    return self.modifyOffsets(from, delta, false);
+  }
+  
+  // Line numbers
+  
+  fn recalcLineNosFrom(self: *LineInfoList, from: u32) void {
+    // std.debug.print("recalc line from {}\n", .{from});
+    var i = from;
+    while (i < self.line_data.items.len) {
+      if (i == 0) {
+        self.line_data.items[i].line_no = 1;
+      } else if (self.line_data.items[i].flags.is_cont_line) {
+        self.line_data.items[i].line_no = self.line_data.items[i - 1].line_no;
+      } else {
+        self.line_data.items[i].line_no = self.line_data.items[i - 1].line_no + 1;
+      }
+      i += 1;
     }
   }
   
-  pub fn findMaxLineBeforeOffset(self: *const LineInfoList, offset: u32) u32 {
-    const idx = std.sort.lowerBound(
-      u32,
-      offset,
-      self.offsets.items,
-      {},
-      lower_u32,
-    );
-    if (idx >= self.offsets.items.len) {
-      return @intCast(self.offsets.items.len - 1);
-    }
-    if (self.offsets.items[idx] > offset) {
-      return @intCast(idx - 1);
-    }
-    return @intCast(idx);
+  pub fn getLineNo(self: *const LineInfoList, idx: u32) u32 {
+    return self.line_data.items[idx].line_no;
   }
   
-  pub fn findMinLineAfterOffset(self: *const LineInfoList, offset: u32, from_line: u32) u32 {
-    return @intCast(std.sort.upperBound(
-      u32,
-      offset,
-      self.offsets.items[from_line..],
-      {},
-      lower_u32,
-    ) + from_line);
+  pub fn getMaxLineNo(self: *const LineInfoList) u32 {
+    return self.line_data.items[self.line_data.items.len - 1].line_no;
   }
   
-  fn moveTail(self: *LineInfoList, line_pivot_dest: u32, line_pivot_src: u32) void {
-    if (line_pivot_dest == line_pivot_src) {
-      return;
+  // Multibyte
+  
+  pub fn checkIsMultibyte(self: *const LineInfoList, idx: u32) bool {
+    return self.line_data.items[idx].flags.is_multibyte;
+  }
+  
+  pub fn setMultibyte(self: *LineInfoList, idx: u32, is_multibyte: bool) void {
+    self.line_data.items[idx].flags.is_multibyte = is_multibyte;
+  }
+  
+  // Cont line
+  
+  pub fn isContLine(self: *const LineInfoList, idx: u32) bool {
+    return self.line_data.items[idx].flags.is_cont_line;
+  }
+  
+  pub const UpdateLineWrapResult = struct {
+    len_change: i64,
+    next_line: u32
+  };
+  
+  pub fn findNextNonContLine(self: *const LineInfoList, line: u32) ?u32 {
+    for ((line+1)..self.line_data.items.len) |cur_line| {
+      const line_data = &self.line_data.items[cur_line];
+      if (!line_data.flags.is_cont_line) {
+        // - 1 to account for new line
+        return @intCast(cur_line);
+      }
+    }
+    return null;
+  }
+  
+  pub fn updateLineWrap(
+    self: *LineInfoList,
+    text_handler: *const text.TextHandler,
+    E: *Editor,
+    start_line_idx: u32,
+  ) !UpdateLineWrapResult {
+    const columns = E.getTextWidth() - 1;
+    var next_line_offset: u32 = text_handler.getLogicalLen();
+    var next_line_idx: u32 = self.getLen();
+    if (self.findNextNonContLine(start_line_idx)) |idx| {
+      // - 1 to account for new line
+      next_line_offset = self.getOffset(idx) - 1;
+      next_line_idx = idx;
     }
     
-    const new_len = self.offsets.items.len - (line_pivot_src - line_pivot_dest);
-    std.mem.copyForwards(
-      u32,
-      self.offsets.items[line_pivot_dest..new_len],
-      self.offsets.items[line_pivot_src..]
-    );
-    self.offsets.shrinkRetainingCapacity(new_len);
+    const start_line_offset: u32 = self.line_data.items[start_line_idx].offset;
+    const start_line_is_mb =
+      self.line_data.items[start_line_idx].flags.is_multibyte;
+      
+    var new_cont_lines = std.ArrayList(u32).init(E.allocr());
+    defer new_cont_lines.deinit();
     
-    const n_deleted = line_pivot_src - line_pivot_dest;
-    for(0..n_deleted) |_| {
-      _ = self.multibyte_bits.remove(line_pivot_dest);
+    if (start_line_is_mb) {
+      var iter = text_handler.iterate(start_line_offset);
+      
+      var cur_line_cols: u32 = 0;
+      var last_iter_pos: u32 = 0;
+      
+      while (iter.nextCodepointSliceUntil(next_line_offset)) |bytes| {
+        const ccols = encoding.countCharCols(
+          std.unicode.utf8Decode(bytes) catch unreachable
+        );
+        if ((cur_line_cols + ccols) > columns) {
+          try new_cont_lines.append(last_iter_pos);
+          cur_line_cols = ccols;
+          continue;
+        }
+        cur_line_cols += ccols;
+        last_iter_pos = iter.pos;
+      }
+    } else {
+      // add column to offset to account for first non-cont line
+      var offset = start_line_offset + columns;
+      while (offset < next_line_offset) {
+        try new_cont_lines.append(offset);
+        offset += columns;
+      }
     }
+    const next_line_idx_new: u32 =
+      @intCast(start_line_idx + 1 + new_cont_lines.items.len);
+    
+    // Reserve/delete space for new cont-lines
+    
+    if (next_line_idx_new < next_line_idx) {
+      const new_len = self.line_data.items.len - (next_line_idx - next_line_idx_new);
+      std.mem.copyForwards(
+        LineData,
+        self.line_data.items[next_line_idx_new..new_len],
+        self.line_data.items[next_line_idx..]
+      );
+      self.line_data.shrinkRetainingCapacity(new_len);
+    } else if (next_line_idx_new > next_line_idx) {
+      const old_len = self.line_data.items.len;
+      const new_len = self.line_data.items.len + (next_line_idx_new - next_line_idx);
+      try self.line_data.resize(self.allocr(), new_len);
+      std.mem.copyBackwards(
+        LineData,
+        self.line_data.items[next_line_idx_new..],
+        self.line_data.items[next_line_idx..old_len]
+      );
+    }
+    
+    if (new_cont_lines.items.len > 0) {
+      // Fill in line info
+      const line_no: u32 = self.line_data.items[start_line_idx].line_no;
+      
+      std.debug.assert(
+        self.line_data.items[(start_line_idx+1)..next_line_idx_new].len ==
+        new_cont_lines.items.len
+      );
+      
+      for (
+        self.line_data.items[(start_line_idx+1)..next_line_idx_new],
+        new_cont_lines.items
+      ) |*line_data, cont_line_offset| {
+        line_data.* = .{
+          .offset = cont_line_offset,
+          .line_no = line_no,
+          .flags = .{
+            .is_cont_line = true,
+            .is_multibyte = start_line_is_mb
+          },
+        };
+      }
+    }
+    
+    return .{
+      .len_change = @as(i64, next_line_idx_new) - @as(i64, next_line_idx),
+      .next_line = next_line_idx_new,
+    };
   }
   
   /// Remove the lines specified in range
@@ -167,21 +458,25 @@ pub const LineInfoList = struct {
     const line_end = self.findMinLineAfterOffset(delete_end, line_start);
     if (line_end == self.getLen()) {
       // region ends at last line
-      self.offsets.shrinkRetainingCapacity(line_start);
+      self.line_data.shrinkRetainingCapacity(line_start);
       return line_start - 1;
     }
     
-    std.debug.assert(self.offsets.items[line_start] > delete_start);
-    std.debug.assert(self.offsets.items[line_end] > delete_end);
+    std.debug.assert(self.line_data.items[line_start].offset > delete_start);
+    std.debug.assert(self.line_data.items[line_end].offset > delete_end);
     
     const chars_deleted = delete_end - delete_start;
-    
-    for (self.offsets.items[line_end..]) |*offset| {
-      offset.* -= chars_deleted;
-    }
+    self.decreaseOffsets(line_end, chars_deleted);
     
     // remove the line offsets between the region
-    self.moveTail(line_start, line_end);
+    self.line_data.replaceRangeAssumeCapacity(
+      line_start,
+      line_end - line_start,
+      &[_]LineData{},
+    );
+    
+    // Line number must be recalculated here
+    self.recalcLineNosFrom(line_start - 1);
     
     return line_start - 1;
   }

@@ -24,6 +24,13 @@ pub fn build(b: *std.Build) void {
                       "Print byte read from stdin"
                     ) orelse false);
 
+  options.addOption(bool, "dbg_show_cont_line_no",
+                    b.option(
+                      bool,
+                      "dbg_show_cont_line_no",
+                      "Show line numbers even for cont-lines"
+                    ) orelse false);
+
   const target = b.standardTargetOptions(.{});
   const optimize = b.standardOptimizeOption(.{});
 

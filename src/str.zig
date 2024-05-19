@@ -5,7 +5,8 @@
 //
 const std = @import("std");
 
-pub const String = std.ArrayListUnmanaged(u8);
+pub const StringUnmanaged = std.ArrayListUnmanaged(u8);
+pub const String = std.ArrayList(u8);
 
 pub const MaybeOwnedSlice = union(enum) {
   owned: []u8,

@@ -25,7 +25,7 @@ const Action = union(enum) {
   
   const Delete = struct {
     pos: u32,
-    orig_buffer: str.String,
+    orig_buffer: str.StringUnmanaged,
     
     fn deinit(self: *Delete, allocr: std.mem.Allocator) void {
       self.orig_buffer.deinit(allocr);
@@ -161,7 +161,7 @@ pub const UndoManager = struct {
       }
     }
     
-    var orig_buffer: str.String = .{};
+    var orig_buffer: str.StringUnmanaged = .{};
     try orig_buffer.appendSlice(
       self.allocr(),
       del_contents,

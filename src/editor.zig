@@ -96,7 +96,7 @@ pub const CommandData = struct {
   promptoverlay: ?str.MaybeOwnedSlice = null,
   
   /// Input for command
-  cmdinp: str.String = .{},
+  cmdinp: str.StringUnmanaged = .{},
   
   /// Position of cursor in cmdinp
   cmdinp_pos: text.TextPos = .{},
@@ -197,7 +197,7 @@ pub const Editor = struct {
     const stdin: std.fs.File = std.io.getStdIn();
     const stdout: std.fs.File = std.io.getStdOut();
     var alloc_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
-    const text_handler: text.TextHandler = try text.TextHandler.init();
+    const text_handler: text.TextHandler = try text.TextHandler.create();
     var conf: config.Reader = .{};
     switch (config.Reader.open(alloc_gpa.allocator())) {
       .ok => |conf_ok| {
@@ -215,7 +215,7 @@ pub const Editor = struct {
         }
       },
     }
-    return Editor {
+    var editor = Editor {
       .in = stdin,
       .inr = stdin.reader(),
       .out = stdout,
@@ -229,6 +229,8 @@ pub const Editor = struct {
         .cmd_data = null,
       },
     };
+    try editor.updateWinSize();
+    return editor;
   }
   
   pub fn allocr(self: *Editor) std.mem.Allocator {
@@ -420,7 +422,7 @@ pub const Editor = struct {
         }
         return kbd.Keysym.initMultibyte(seq.constSlice());
       }
-    }
+    } else |_| {}
     return kbd.Keysym.init(raw);
   }
   
@@ -435,6 +437,7 @@ pub const Editor = struct {
   
   pub const HTAB_CHAR = ESC_COLOR_GRAY ++ "\xc2\xbb " ++ ESC_COLOR_DEFAULT;
   pub const HTAB_COLS = 2;
+  pub const LINEWRAP_SYM = ESC_COLOR_GRAY ++ "\xe2\x8f\x8e" ++ ESC_COLOR_DEFAULT;
   
   pub fn writeAll(self: *Editor, bytes: []const u8) !void {
     return self.outw.writeAll(bytes);
@@ -486,7 +489,7 @@ pub const Editor = struct {
     }
   }
   
-  pub fn getTextWidth(self: *Editor) u32 {
+  pub fn getTextWidth(self: *const Editor) u32 {
     if (self.conf.show_line_numbers) {
       return self.w_width - self.text_handler.line_digits - 1;
     } else {
@@ -494,7 +497,7 @@ pub const Editor = struct {
     }
   }
   
-  pub fn getTextHeight(self: *Editor) u32 {
+  pub fn getTextHeight(self: *const Editor) u32 {
     return self.w_height - STATUS_BAR_HEIGHT;
   }
   
@@ -595,6 +598,50 @@ pub const Editor = struct {
   
   // handle output
   
+  const ColumnPrinter = struct {
+    editor: *Editor,
+    col: u32 = 0,
+    text_width: u32,
+    color_code: ?[]const u8 = null,
+    
+    inline fn setColor(self: *ColumnPrinter, color_code: ?[]const u8) !void {
+      if (color_code == null) {
+      } else if (self.color_code) |cur_color_code| {
+        if (cur_color_code.ptr == color_code.?.ptr) {
+          return;
+        }
+      }
+      self.color_code = color_code;
+      try self.writeColorCode();
+    }
+    
+    fn writeColorCode(self: *ColumnPrinter) !void {
+      try self.editor.writeAll(self.color_code orelse ESC_COLOR_DEFAULT);
+    }
+    
+    fn writeAll(self: *ColumnPrinter, bytes: []const u8) !bool {
+      var cwidth: u32 = 0;
+      if (bytes.len == 1 and bytes[0] == '\t') {
+        cwidth = HTAB_COLS;
+      } else {
+        cwidth = encoding.cwidth(std.unicode.utf8Decode(bytes) catch unreachable);
+        if (cwidth == 0) {
+          return true;
+        }
+      }
+      if ((self.col + cwidth) > self.text_width) {
+        return false;
+      }
+      if (bytes.len == 1 and bytes[0] == '\t') {
+        try self.editor.writeAll(HTAB_CHAR);
+      } else {
+        try self.editor.writeAll(bytes);
+      }
+      self.col += cwidth;
+      return true;
+    }
+  };
+  
   pub fn renderText(self: *Editor) !void {
     if (self.getTextHeight() == 0) {
       return;
@@ -617,8 +664,18 @@ pub const Editor = struct {
       
       try self.moveCursor(row, 0);
       
+      // Line number
+      
+      const line_no: u32 = text_handler.lineinfo.getLineNo(@intCast(i));
+      
       if (self.conf.show_line_numbers) {
-        const lineno_slice = try std.fmt.bufPrint(&lineno, "{d}", .{i+1});
+        const lineno_slice = if (
+          text_handler.lineinfo.isContLine(@intCast(i)) and
+          comptime !build_config.dbg_show_cont_line_no
+        )
+          ">"
+        else
+          try std.fmt.bufPrint(&lineno, "{d}", .{line_no});
         for(0..(self.text_handler.line_digits - lineno_slice.len)) |_| {
           try self.outw.writeByte(' ');
         }
@@ -637,44 +694,55 @@ pub const Editor = struct {
         try self.outw.writeByte(' ');
       }
       
+      // Column
+      
+      var printer: ColumnPrinter = .{
+        .editor = self,
+        .text_width = text_width,
+      };
+      
       if (text_handler.markers) |*markers| {
-        var col: u32 = 0;
-        var pos = offset_start;
-        if (pos > markers.start and pos < markers.end) {
-          try self.outw.writeAll(ESC_COLOR_INVERT);
-        }
-        while (iter.nextCharUntil(offset_end)) |bytes| {
-          if (!try self.renderCharInLineMarked(bytes, &col, text_width, markers, pos)) {
-            break;
+        while (iter.nextCodepointSliceUntil(offset_end)) |bytes| {
+          if (iter.pos == markers.end) {
+            try printer.setColor(null);
+          } else if (iter.pos >= markers.start) {
+            try printer.setColor(ESC_COLOR_INVERT);
           }
-          pos += @intCast(bytes.len);
-        }
-        try self.outw.writeAll(ESC_COLOR_DEFAULT);
-      } else if (comptime build_config.dbg_show_gap_buf) {
-        var col: u32 = 0;
-        var pos = offset_start;
-        const gap_buf_markers: text.TextHandler.Markers = .{
-          .start = self.text_handler.head_end,
-          .end = self.text_handler.head_end + self.text_handler.gap.len,
-          .start_cur = .{},
-        };
-        if (pos > gap_buf_markers.start and pos < gap_buf_markers.end) {
-          try self.outw.writeAll(ESC_COLOR_INVERT);
-        }
-        while (iter.nextCharUntil(offset_end)) |bytes| {
-          if (!try self.renderCharInLineMarked(bytes, &col, text_width, &gap_buf_markers, pos)) {
-            break;
-          }
-          pos += @intCast(bytes.len);
-        }
-        try self.outw.writeAll(ESC_COLOR_DEFAULT);
-      } else {
-        var col: u32 = 0;
-        while (iter.nextCharUntil(offset_end)) |bytes| {
-          if (!try self.renderCharInLine(bytes, &col, text_width)) {
+          if (!try printer.writeAll(bytes)) {
             break;
           }
         }
+      }
+      
+      else if (comptime build_config.dbg_show_gap_buf) {
+        const logical_gap_buf_start: u32 = self.text_handler.head_end;
+        const logical_gap_buf_end: u32 =
+          @intCast(logical_gap_buf_start + self.text_handler.gap.items.len);
+          
+        while (iter.nextCodepointSliceUntil(offset_end)) |bytes| {
+          if (iter.pos == logical_gap_buf_end) {
+            try printer.setColor(null);
+          } else if (iter.pos >= logical_gap_buf_start) {
+            try printer.setColor(ESC_COLOR_INVERT);
+          }
+          if (!try printer.writeAll(bytes)) {
+            break;
+          }
+        }
+      }
+      
+      else {
+        while (iter.nextCodepointSliceUntil(offset_end)) |bytes| {
+          if (!try printer.writeAll(bytes)) {
+            break;
+          }
+        }
+      }
+      
+      try printer.setColor(null);
+      
+      if ((i+1) < text_handler.lineinfo.getLen() and text_handler.lineinfo.isContLine(@intCast(i + 1))) {
+        try self.outw.writeAll(LINEWRAP_SYM);
       }
       
       row += 1;
@@ -686,44 +754,6 @@ pub const Editor = struct {
     try self.showUpperLayers();
     
     self.needs_update_cursor = true;
-  }
-  
-  fn renderCharInLine(self: *Editor, bytes: []const u8, colref: *u32, text_width: u32) !bool {
-    var cwidth: u32 = 0;
-    if (bytes.len == 1 and bytes[0] == '\t') {
-      cwidth = HTAB_COLS;
-    } else {
-      cwidth = encoding.cwidth(try std.unicode.utf8Decode(bytes));
-      if (cwidth == 0) {
-        return true;
-      }
-    }
-    if ((colref.* + cwidth) > text_width) {
-      return false;
-    }
-    if (bytes.len == 1 and bytes[0] == '\t') {
-      try self.outw.writeAll(HTAB_CHAR);
-    } else {
-      try self.outw.writeAll(bytes);
-    }
-    colref.* += cwidth;
-    return true;
-  }
-  
-  fn renderCharInLineMarked(
-    self: *Editor, bytes: []const u8, colref: *u32, text_width: u32,
-    markers: *const text.TextHandler.Markers,
-    pos: u32,
-  ) !bool {
-    if (pos == markers.start) {
-      try self.outw.writeAll(ESC_COLOR_INVERT);
-      return self.renderCharInLine(bytes, colref, text_width);
-    } else if (pos >= markers.end) {
-      try self.outw.writeAll(ESC_COLOR_DEFAULT);
-      return self.renderCharInLine(bytes, colref, text_width);
-    } else {
-      return self.renderCharInLine(bytes, colref, text_width);
-    }
   }
   
   fn showUpperLayers(self: *Editor) !void {
@@ -780,7 +810,6 @@ pub const Editor = struct {
   const REFRESH_RATE_MS = REFRESH_RATE_NS / 1000000;
   
   pub fn run(self: *Editor) !void {
-    try self.updateWinSize();
     try self.enableRawMode();
     try self.enableTermExts();
     self.needs_redraw = true;
@@ -810,7 +839,8 @@ pub const Editor = struct {
     self.restoreTerminal() catch {};
   }
   
-  pub fn openAtStart(self: *Editor, opened_file_str: str.String) !void {
+  /// opened_file_str must be allocated by E.allocr()
+  pub fn openAtStart(self: *Editor, opened_file_str: str.StringUnmanaged) !void {
     self.setState(.command);
     self.setCmdData(&.{
       .prompt = Commands.Open.PROMPT_OPEN,

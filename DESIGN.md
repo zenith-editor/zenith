@@ -2,10 +2,37 @@
 
 ## Guidelines
 
-* Follow the principle of locality: functions, variables and classes that are related
-should be closer together in the source.
+These are some guidelines I try to follow when writing code:
 
-## Pain points relating to Zig
+* Follow the principle of locality of behavior: functions, variables and
+classes that have the same behavior should be placed closer together.
+* Constructor functions should be named `create` if it has side-effects (such as
+allocating memory), `init` if not.
+* Don't be too smart. When picking data structures, prioritize the use of "primitive
+data structures" unless you are aware of the trade-offs that come with other
+data structures.
+* Method names should be verb (+ object). i.e. `getProperty()` instead of
+`property()`
+* Always use blocks for if/while/for statements.
+
+* Follow some rules about complexity Rob Pike wrote about in
+"Notes on Programming in C":
+
+> Rule 1.  You can't tell where a program is going to spend its time.  Bottlenecks occur in surprising places, so don't try to second guess and put in a speed hack until you've proven that's where the bottleneck is.
+> Rule 2.  Measure.  Don't tune for speed until you've measured, and even then don't unless one part of the code overwhelms the rest.
+> Rule 3.  Fancy algorithms are slow when n is small, and n is usually small.  Fancy algorithms have big constants. Until you know that n is frequently going to be big, don't get fancy.  (Even if n does get big, use Rule 2 first.)   For example, binary trees are always faster than splay trees for workaday problems.
+> Rule 4.  Fancy algorithms are buggier than simple ones, and they're much harder to implement.  Use simple algorithms as well as simple data structures.
+>
+> The following data structures are a complete list for almost all practical programs:
+>  * array
+>  * linked list
+>  * hash table
+>  * binary tree
+> Of course, you must also be prepared to collect these into compound data structures.  For instance, a symbol table might be implemented as a hash table containing linked lists of arrays of characters.
+>
+> Rule 5.  Data dominates.  If you've chosen the right data structures and organized things well, the algorithms will almost always be self-evident.  Data structures, not algorithms, are central to programming
+
+## Pain points regarding Zig
 
 * Passing structs by value does not guarantee that the struct will actually
 be passed as a value, and not a reference. I wish it was explicit.

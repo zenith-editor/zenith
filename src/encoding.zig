@@ -16,14 +16,8 @@ pub fn isMultibyte(byte: u8) bool {
   };
 }
 
-pub fn sequenceLen(first_byte: u8) ?u3 {
-  return switch (first_byte) {
-    0b0000_0000...0b0111_1111 => 1,
-    0b1100_0000...0b1101_1111 => 2,
-    0b1110_0000...0b1110_1111 => 3,
-    0b1111_0000...0b1111_0111 => 4,
-    else => null,
-  };
+pub fn sequenceLen(first_byte: u8) !u3 {
+  return std.unicode.utf8ByteSequenceLength(first_byte);
 }
 
 pub fn countChars(buf: []const u8) !usize {

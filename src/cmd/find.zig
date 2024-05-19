@@ -28,7 +28,9 @@ fn findForwards(self: *editor.Editor, cmd_data: *editor.CommandData) !void {
   if (cmd_data.cmdinp.items.len == 0) {
     return;
   }
-  try self.text_handler.flushGapBuffer(self);
+  
+  // TODO: find without flushing
+  try self.text_handler.flushGapBuffer();
   
   const offset = if (self.text_handler.markers) |*markers|
     (markers.end)
@@ -97,7 +99,8 @@ fn findBackwards(self: *editor.Editor, cmd_data: *editor.CommandData) !void {
     return;
   }
   
-  try self.text_handler.flushGapBuffer(self);
+  // TODO: find without flushing
+  try self.text_handler.flushGapBuffer();
   
   var opt_pos: ?usize = null;
   var opt_end: ?usize = null;
@@ -189,7 +192,7 @@ fn toReplaceAll(self: *editor.Editor, cmd_data: *editor.CommandData) !void {
 
 fn buildRegex(self: *editor.Editor) !bool {
   const cmd_data: *editor.CommandData = self.getCmdData();
-  switch (Expr.create(self.allocr(), cmd_data.cmdinp.items, .{})) {
+  switch (Expr.create(self.allocr(), cmd_data.cmdinp.items, &.{})) {
     .ok => |expr| {
       cmd_data.replaceArgs(self, &.{ .find = .{
         .regex = expr,

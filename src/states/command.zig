@@ -71,7 +71,7 @@ pub fn handleInput(
     cmd_data.cmdinp_pos.gfx_col = 0;
     while (cmd_data.cmdinp_pos.col < cmd_data.cmdinp.items.len) {
       const start_byte = cmd_data.cmdinp.items[cmd_data.cmdinp_pos.col];
-      const seqlen = encoding.sequenceLen(start_byte) orelse unreachable;
+      const seqlen = encoding.sequenceLen(start_byte) catch unreachable;
       cmd_data.cmdinp_pos.col += seqlen;
       cmd_data.cmdinp_pos.gfx_col += 1;
     }
@@ -158,7 +158,7 @@ fn goRight(self: *editor.Editor, cmd_data: *editor.CommandData) void {
     return;
   }
   const start_byte = cmd_data.cmdinp.items[pos.col];
-  const seqlen = encoding.sequenceLen(start_byte) orelse unreachable;
+  const seqlen = encoding.sequenceLen(start_byte) catch unreachable;
   pos.col += seqlen;
   pos.gfx_col += 1;
   self.needs_update_cursor = true;
@@ -171,7 +171,7 @@ fn deleteCharBack(self: *editor.Editor, cmd_data: *editor.CommandData) void {
   }
   Impl.goLeft(self, cmd_data);
   const start_byte = cmd_data.cmdinp.items[pos.col];
-  const seqlen = encoding.sequenceLen(start_byte) orelse unreachable;
+  const seqlen = encoding.sequenceLen(start_byte) catch unreachable;
   cmd_data.cmdinp.replaceRangeAssumeCapacity(pos.col, seqlen, "");
   self.needs_update_cursor = true;
 }
@@ -182,7 +182,7 @@ fn deleteCharFront(self: *editor.Editor, cmd_data: *editor.CommandData) void {
     return;
   }
   const start_byte = cmd_data.cmdinp.items[pos.col];
-  const seqlen = encoding.sequenceLen(start_byte) orelse unreachable;
+  const seqlen = encoding.sequenceLen(start_byte) catch unreachable;
   cmd_data.cmdinp.replaceRangeAssumeCapacity(pos.col, seqlen, "");
   self.needs_update_cursor = true;
 }

@@ -11,6 +11,7 @@ const conf = @import("./config.zig");
 const lineinfo = @import("./lineinfo.zig");
 const clipboard = @import("./clipboard.zig");
 const encoding = @import("./encoding.zig");
+const heap = @import("./ds/heap.zig");
 
 const Editor = @import("./editor.zig").Editor;
 const Expr = @import("./patterns/expr.zig");
@@ -33,26 +34,41 @@ pub const TextIterator = struct {
   text_handler: *const TextHandler,
   pos: u32 = 0,
   
-  pub fn nextChar(self: *TextIterator) ?[]const u8 {
-    if (self.text_handler.getBytesStartingAt(self.pos)) |bytes| {
-      const seqlen = encoding.sequenceLen(bytes[0]).?;
+  pub fn nextCodepointSlice(self: *TextIterator) ?[]const u8 {
+    if (self.text_handler.bytesStartingAt(self.pos)) |bytes| {
+      const seqlen = encoding.sequenceLen(bytes[0]) catch unreachable;
       self.pos += seqlen;
       return bytes[0..seqlen];
     }
     return null;
   }
   
-  pub fn nextCharUntil(self: *TextIterator, offset_end: u32) ?[]const u8 {
+  pub fn nextCodepointSliceUntil(self: *TextIterator, offset_end: u32) ?[]const u8 {
     if (self.pos >= offset_end) {
       return null;
     }
-    return self.nextChar();
+    return self.nextCodepointSlice();
+  }
+  
+  pub fn prevCodepointSlice(self: *TextIterator) ?[]const u8 {
+    if (self.pos == 0) {
+      return null;
+    }
+    self.pos -= 1;
+    var seqlen: usize = 1;
+    while (true) {
+      const bytes = self.text_handler.bytesStartingAt(self.pos).?;
+      if (encoding.isContByte(bytes[0])) {
+        self.pos -= 1;
+        seqlen += 1;
+        continue;
+      }
+      return bytes[0..seqlen];
+    }
   }
 };
 
 pub const TextHandler = struct {
-  const GAP_SIZE = 512;
-  
   pub const Markers = struct {
     /// Logical position of starting marker
     start: u32,
@@ -62,12 +78,13 @@ pub const TextHandler = struct {
     start_cur: TextPos,
   };
   
+  const BufferAllocator = std.heap.page_allocator;
+  
   file: ?std.fs.File = null,
   
   /// Buffer of characters. Logical text buffer is then:
-  ///
-  /// text = buffer[0..(head_end)] ++ gap ++ buffer[tail_start..]
-  buffer: str.String = .{},
+  ///   text = buffer[0..(head_end)] ++ gap ++ buffer[tail_start..]
+  buffer: str.String,
   
   /// Real position where the head of the text ends (excluding the last
   /// character)
@@ -76,8 +93,8 @@ pub const TextHandler = struct {
   /// Real position where the tail of the text starts
   tail_start: u32 = 0,
   
-  /// Gap buffer
-  gap: std.BoundedArray(u8, GAP_SIZE) = .{},
+  /// Gap buffer, allocated by PageAllocator
+  gap: str.String,
   
   /// Line information
   lineinfo: lineinfo.LineInfoList,
@@ -90,23 +107,37 @@ pub const TextHandler = struct {
   
   markers: ?Markers = null,
   
-  clipboard: str.String = .{},
+  clipboard: str.String,
   
   undo_mgr: undo.UndoManager = .{},
   
   buffer_changed: bool = false,
   
-  pub fn init() !TextHandler {
+  pub fn create() !TextHandler {
     return TextHandler {
-      .lineinfo = try lineinfo.LineInfoList.init(),
+      .lineinfo = try lineinfo.LineInfoList.create(),
+      .buffer = str.String.init(BufferAllocator),
+      .gap = .{
+        // get the range 0..0 to set the length to zero
+        .items = (try BufferAllocator.alloc(u8, std.mem.page_size))[0..0],
+        .capacity = std.mem.page_size,
+        .allocator = heap.null_allocator,
+      },
+      .clipboard = str.String.init(BufferAllocator),
     };
   }
   
   // io
   pub fn open(self: *TextHandler, E: *Editor, file: std.fs.File, flush_buffer: bool) !void {
-    const new_buffer = str.String.fromOwnedSlice(
-      try file.readToEndAlloc(E.allocr(), std.math.maxInt(u32))
-    );
+    const stat = try file.stat();
+    const size = stat.size;
+    if (size > std.math.maxInt(u32)) {
+      return error.FileTooBig;
+    }
+    var new_buffer = str.String.init(BufferAllocator);
+    errdefer new_buffer.deinit();
+    const new_buffer_slice = try new_buffer.addManyAsSlice(size);
+    _ = try file.readAll(new_buffer_slice);
     if (!std.unicode.utf8ValidateSlice(new_buffer.items)) {
       return error.InvalidUtf8;
     }
@@ -115,23 +146,23 @@ pub const TextHandler = struct {
     }
     self.file = file;
     if (flush_buffer) {
-      self.clearBuffersForFile(E);
+      self.clearBuffersForFile();
       self.readLines(E, new_buffer) catch |err| {
-        self.clearBuffersForFile(E);
+        self.clearBuffersForFile();
         return err;
       };
     }
   }
   
-  fn clearBuffersForFile(self: *TextHandler, E: *Editor) void {
+  fn clearBuffersForFile(self: *TextHandler) void {
     self.cursor = .{};
     self.scroll = .{};
     self.markers = null;
-    self.buffer.clearAndFree(E.allocr());
+    self.buffer.clearAndFree();
     self.lineinfo.clear();
     self.head_end = 0;
     self.tail_start = 0;
-    self.gap.resize(0) catch unreachable;
+    self.gap.shrinkRetainingCapacity(0);
     self.undo_mgr.clear();
     self.buffer_changed = false;
   }
@@ -141,15 +172,9 @@ pub const TextHandler = struct {
     try file.seekTo(0);
     try file.setEndPos(0);
     const writer: std.fs.File.Writer = file.writer();
-    for (self.buffer.items[0..self.head_end]) |byte| {
-      try writer.writeByte(byte);
-    }
-    for (self.gap.slice()) |byte| {
-      try writer.writeByte(byte);
-    }
-    for (self.buffer.items[self.tail_start..]) |byte| {
-      try writer.writeByte(byte);
-    }
+    try writer.writeAll(self.buffer.items[0..self.head_end]);
+    try writer.writeAll(self.gap.items);
+    try writer.writeAll(self.buffer.items[self.tail_start..]);
     self.buffer_changed = false;
     // buffer save status is handled by status bar
     E.needs_update_cursor = true;
@@ -159,6 +184,7 @@ pub const TextHandler = struct {
     OutOfMemory,
   };
   
+  /// Read lines from new_buffer
   fn readLines(self: *TextHandler, E: *Editor, new_buffer: str.String) ReadLineError!void {
     self.buffer = new_buffer;
     
@@ -166,22 +192,26 @@ pub const TextHandler = struct {
     try self.lineinfo.append(0);
     
     // tail lines
-    for (self.buffer.items, 0..self.buffer.items.len) |byte, i| {
+    var is_mb = false;
+    for (self.buffer.items, 0..self.buffer.items.len) |byte, offset| {
+      if (encoding.isMultibyte(byte)) {
+        is_mb = true;
+      }
       if (byte == '\n') {
-        try self.lineinfo.append(@intCast(i + 1));
+        const prev_row: u32 = self.lineinfo.getLen() - 1;
+        // next line must be appended first so that the prev_row
+        // has corrects bounds needed for wrapLineWithCols
+        try self.lineinfo.append(@intCast(offset + 1));
+        
+        self.lineinfo.setMultibyte(prev_row, is_mb);
+        is_mb = false;
       }
     }
     
-    for (0..self.lineinfo.getLen()) |row| {
-      const offset_start: u32 = self.lineinfo.getOffset(@intCast(row));
-      const offset_end: u32 = self.getRowOffsetEnd(@intCast(row));
-      for (self.buffer.items[offset_start..offset_end]) |byte| {
-        if (encoding.isMultibyte(byte)) {
-          try self.lineinfo.setMultibyte(@intCast(row), true);
-          break;
-        }
-      }
-    }
+    const last_row: u32 = self.lineinfo.getLen() - 1;
+    self.lineinfo.setMultibyte(last_row, is_mb);
+    
+    try self.wrapText(E);
     
     self.calcLineDigits(E);
   }
@@ -193,21 +223,28 @@ pub const TextHandler = struct {
   }
   
   pub fn getLogicalLen(self: *const TextHandler) u32 {
-    return @intCast(self.head_end + self.gap.len + (self.buffer.items.len - self.tail_start));
+    return @intCast(self.head_end + self.gap.items.len + (self.buffer.items.len - self.tail_start));
   }
   
   fn calcLineDigits(self: *TextHandler, E: *const Editor) void {
     if (E.conf.show_line_numbers) {
-      self.line_digits = std.math.log10(self.lineinfo.getLen()) + 1;
+      self.line_digits = std.math.log10(self.lineinfo.getMaxLineNo()) + 1;
     }
+    return;
   }
   
   pub fn getRowOffsetEnd(self: *const TextHandler, row: u32) u32 {
     // The newline character of the current line is not counted
-    return if ((row + 1) < self.lineinfo.getLen())
-      (self.lineinfo.getOffset(row + 1) - 1)
-    else
-      self.getLogicalLen();
+    if ((row + 1) < self.lineinfo.getLen()) {
+      const offset = self.lineinfo.getOffset(row + 1);
+      if (self.lineinfo.isContLine(row + 1)) {
+        // cont lines do not have newlines
+        return offset;
+      }
+      return offset - 1;
+    } else {
+      return self.getLogicalLen();
+    }
   }
   
   pub fn getRowLen(self: *const TextHandler, row: u32) u32 {
@@ -220,13 +257,13 @@ pub const TextHandler = struct {
     return self.lineinfo.getOffset(self.cursor.row) + self.cursor.col;
   }
   
-  fn getBytesStartingAt(self: *const TextHandler, offset: u32) ?[]const u8 {
-    const logical_tail_start = self.head_end + self.gap.len;
+  fn bytesStartingAt(self: *const TextHandler, offset: u32) ?[]const u8 {
+    const logical_tail_start = self.head_end + self.gap.items.len;
     if (offset < self.head_end) {
       return self.buffer.items[offset..];
     } else if (offset >= self.head_end and offset < logical_tail_start) {
       const gap_relidx = offset - self.head_end;
-      return self.gap.slice()[gap_relidx..];
+      return self.gap.items[gap_relidx..];
     } else {
       const real_tailidx = self.tail_start + (offset - logical_tail_start);
       if (real_tailidx >= self.buffer.items.len) {
@@ -236,61 +273,80 @@ pub const TextHandler = struct {
     }
   }
   
-  fn getByte(self: *const TextHandler, offset: u32) ?u8 {
-    if (self.getBytesStartingAt(offset)) |bytes| {
-      return bytes[0];
-    }
-    return null;
-  }
-  
-  fn recheckIsMultibyte(self: *TextHandler, row: u32) !void {
-    const offset_start: u32 = self.lineinfo.getOffset(row);
-    const offset_end: u32 = self.getRowOffsetEnd(row);
+  fn recheckIsMultibyte(self: *TextHandler, from_line: u32) !void {
+    const offset_start: u32 = self.lineinfo.getOffset(from_line);
+    const opt_next_real_line = self.lineinfo.findNextNonContLine(from_line);
+    const offset_end: u32 = self.getRowOffsetEnd(
+      if (opt_next_real_line) |next_real_line| next_real_line - 1
+      else from_line
+    );
     var is_mb = false;
     var iter = self.iterate(offset_start);
-    while (iter.nextCharUntil(offset_end)) |char| {
-      if (encoding.isMultibyte(char[0])) {
+    while (iter.nextCodepointSliceUntil(offset_end)) |bytes| {
+      if (encoding.isMultibyte(bytes[0])) {
         is_mb = true;
         break;
       }
     }
-    try self.lineinfo.setMultibyte(row, is_mb);
+    self.lineinfo.setMultibyte(from_line, is_mb);
+    
+    if (opt_next_real_line) |next_real_line| {
+      for ((from_line+1)..next_real_line) |line| {
+        self.lineinfo.setMultibyte(@intCast(line), is_mb);
+      }
+    }
   }
   
-  fn recheckIsMultibyteAfterDelete(self: *TextHandler, row: u32, deleted_char_is_mb: bool) !void {
-    if (!self.lineinfo.checkIsMultibyte(row) and !deleted_char_is_mb) {
+  fn recheckIsMultibyteAfterDelete(self: *TextHandler, line: u32, deleted_char_is_mb: bool) !void {
+    if (!self.lineinfo.checkIsMultibyte(line) and !deleted_char_is_mb) {
       // fast path to avoid looping through the string
       return;
     }
-    return self.recheckIsMultibyte(row);
+    return self.recheckIsMultibyte(line);
+  }
+  
+  fn srcView(self: *const TextHandler) Expr.SrcView {
+    const funcs = struct {
+      fn codepointSliceAt(ctx: *const anyopaque, pos: usize)
+        error{ InvalidUtf8 }!?[]const u8 {
+        const self_: *const TextHandler = @ptrCast(@alignCast(ctx));
+        return self_.codepointSliceAt(pos);
+      }
+    };
+    return .{
+      .ptr = self,
+      .vtable = .{
+        .codepointSliceAt = funcs.codepointSliceAt,
+      },
+    };
   }
   
   // gap
   
-  pub fn flushGapBuffer(self: *TextHandler, E: *Editor) !void {
+  pub fn flushGapBuffer(self: *TextHandler) !void {
     if (self.tail_start > self.head_end) {
       // buffer contains deleted characters
       const deleted_chars = self.tail_start - self.head_end;
-      const logical_tail_start = self.head_end + self.gap.len;
+      const logical_tail_start = self.head_end + self.gap.items.len;
       const logical_len = self.getLogicalLen();
-      if (deleted_chars > self.gap.len) {
+      if (deleted_chars > self.gap.items.len) {
         const gapdest: []u8 = self.buffer.items[self.head_end..logical_tail_start];
-        @memcpy(gapdest, self.gap.slice());
+        @memcpy(gapdest, self.gap.items);
         const taildest: []u8 = self.buffer.items[logical_tail_start..logical_len];
         std.mem.copyForwards(u8, taildest, self.buffer.items[self.tail_start..]);
       } else {
-        const reserved_chars = self.gap.len - deleted_chars;
-        _ = try self.buffer.addManyAt(E.allocr(), self.head_end, reserved_chars);
+        const reserved_chars = self.gap.items.len - deleted_chars;
+        _ = try self.buffer.addManyAt(self.head_end, reserved_chars);
         const dest: []u8 = self.buffer.items[self.head_end..logical_tail_start];
-        @memcpy(dest, self.gap.slice());
+        @memcpy(dest, self.gap.items);
       }
       self.buffer.shrinkRetainingCapacity(logical_len);
     } else {
-      try self.buffer.insertSlice(E.allocr(), self.head_end, self.gap.slice());
+      try self.buffer.insertSlice(self.head_end, self.gap.items);
     }
     self.head_end = 0;
     self.tail_start = 0;
-    self.gap = .{};
+    self.gap.shrinkRetainingCapacity(0);
   } 
   
   // cursor
@@ -325,13 +381,13 @@ pub const TextHandler = struct {
         self.cursor.col = 0;
         self.cursor.gfx_col = 0;
         var iter = self.iterate(offset_start);
-        while (iter.nextCharUntil(offset_end)) |char| {
+        while (iter.nextCodepointSliceUntil(offset_end)) |bytes| {
           if (self.cursor.gfx_col == old_gfx_col) {
             break;
           }
-          self.cursor.col += @intCast(char.len);
+          self.cursor.col += @intCast(bytes.len);
           self.cursor.gfx_col += encoding.countCharCols(
-            std.unicode.utf8Decode(char) catch unreachable
+            std.unicode.utf8Decode(bytes) catch unreachable
           );
         }
         self.scroll.col = 0;
@@ -371,10 +427,11 @@ pub const TextHandler = struct {
   }
   
   pub fn goPgUp(self: *TextHandler, E: *Editor) void {
-    if (self.cursor.row < E.getTextHeight()) {
+    const scroll_delta = E.getTextHeight() + 1;
+    if (self.cursor.row < scroll_delta) {
       self.cursor.row = 0;
     } else {
-      self.cursor.row -= E.getTextHeight() + 1;
+      self.cursor.row -= scroll_delta;
     }
     self.syncColumnAfterCursor(E);
     self.syncRowScroll(E);
@@ -383,7 +440,8 @@ pub const TextHandler = struct {
   }
   
   pub fn goPgDown(self: *TextHandler, E: *Editor) void {
-    self.cursor.row += E.getTextHeight() + 1;
+    const scroll_delta = E.getTextHeight() + 1;
+    self.cursor.row += scroll_delta;
     if (self.cursor.row >= self.lineinfo.getLen()) {
       self.cursor.row = self.lineinfo.getLen() - 1;
     }
@@ -397,31 +455,17 @@ pub const TextHandler = struct {
                    pos_in: TextPos,
                    row_start: u32,
                    opt_char_under_cursor: ?*u32) TextPos {
-    var pos = pos_in;
-    pos.col -= 1;
-    var new_offset = row_start + pos.col;
-    const start_byte = self.getByte(new_offset).?;
-    var seqlen: usize = 1;
-    if (encoding.isContByte(start_byte)) {
-      // prev char is multi byte
-      while (new_offset > row_start) {
-        const maybe_cont_byte = self.getByte(new_offset).?;
-        if (encoding.isContByte(maybe_cont_byte)) {
-          pos.col -= 1;
-          new_offset -= 1;
-          seqlen += 1;
-        } else {
-          break;
-        }
-      }
-    }
-    const bytes = self.getBytesStartingAt(new_offset).?[0..seqlen];
+    var iter = self.iterate(row_start + pos_in.col);
+    const bytes = iter.prevCodepointSlice().?;
+    
     const char = std.unicode.utf8Decode(bytes) catch unreachable;
     if (opt_char_under_cursor) |char_under_cursor| {
       char_under_cursor.* = char;
     }
-    const cols = encoding.countCharCols(char);
-    pos.gfx_col -= cols;
+    
+    var pos = pos_in;
+    pos.col -= @intCast(bytes.len);
+    pos.gfx_col -= encoding.countCharCols(char);
     return pos;
   }
   
@@ -464,8 +508,8 @@ pub const TextHandler = struct {
                     row_start: u32,
                     opt_char_under_cursor: ?*u32) TextPos {
     var pos = pos_in;
-    const bytes = self.getBytesStartingAt(row_start + pos.col).?;
-    const seqlen = encoding.sequenceLen(bytes[0]).?;
+    const bytes = self.bytesStartingAt(row_start + pos.col).?;
+    const seqlen = encoding.sequenceLen(bytes[0]) catch unreachable;
     const char = std.unicode.utf8Decode(bytes[0..seqlen]) catch unreachable;
     if (opt_char_under_cursor) |char_under_cursor| {
       char_under_cursor.* = char;
@@ -534,9 +578,11 @@ pub const TextHandler = struct {
       self.cursor.gfx_col = 0;
       
       var iter = self.iterate(offset_start);
-      while (iter.nextCharUntil(offset_end)) |char| {
-        self.cursor.col += @intCast(char.len);
-        self.cursor.gfx_col += encoding.countCharCols(try std.unicode.utf8Decode(char));
+      while (iter.nextCodepointSliceUntil(offset_end)) |bytes| {
+        self.cursor.col += @intCast(bytes.len);
+        self.cursor.gfx_col += encoding.countCharCols(
+          std.unicode.utf8Decode(bytes) catch unreachable
+        );
       }
     }
     
@@ -544,11 +590,49 @@ pub const TextHandler = struct {
     E.needs_redraw = true;
   }
   
-  pub fn gotoLine(self: *TextHandler, E: *Editor, row: u32) !void {
-    if (row >= self.lineinfo.getLen()) {
-      return error.Overflow;
+  pub fn goDownHead(self: *TextHandler, E: *Editor) void {
+    self.cursor.row += 1;
+    self.cursor.col = 0;
+    self.cursor.gfx_col = 0;
+    if ((self.scroll.row + E.getTextHeight()) <= self.cursor.row) {
+      self.scroll.row += 1;
     }
-    self.cursor.row = row;
+    self.scroll.col = 0;
+    self.scroll.gfx_col = 0;
+    E.needs_redraw = true;
+  }
+  
+  pub fn gotoFirstLine(self: *TextHandler, E: *Editor) void {
+    self.cursor.row = 0;
+    self.syncRowScroll(E);
+    self.cursor.col = 0;
+    self.cursor.gfx_col = 0;
+    self.scroll.col = 0;
+    self.scroll.gfx_col = 0;
+    E.needs_redraw = true;
+  }
+  
+  pub fn gotoLastLine(self: *TextHandler, E: *Editor) void {
+    self.cursor.row = self.lineinfo.getLen();
+    while(self.cursor.row > 0) {
+      self.cursor.row -= 1;
+      if (!self.lineinfo.isContLine(self.cursor.row)) {
+        break;
+      }
+    }
+    self.syncRowScroll(E);
+    self.cursor.col = 0;
+    self.cursor.gfx_col = 0;
+    self.scroll.col = 0;
+    self.scroll.gfx_col = 0;
+    E.needs_redraw = true;
+  }
+  
+  pub fn gotoLineNo(self: *TextHandler, E: *Editor, line: u32)
+    error{Overflow}!void {
+    self.cursor.row = self.lineinfo.findLineWithLineNo(line) orelse {
+      return error.Overflow;
+    };
     self.syncRowScroll(E);
     self.cursor.col = 0;
     self.cursor.gfx_col = 0;
@@ -561,7 +645,7 @@ pub const TextHandler = struct {
     if (pos >= self.getLogicalLen()) {
       return error.Overflow;
     }
-    self.cursor.row = self.lineinfo.findMaxLineBeforeOffset(pos);
+    self.cursor.row = self.lineinfo.findMaxLineBeforeOffset(pos, 0);
     self.cursor.col = pos - self.lineinfo.getOffset(self.cursor.row);
     if (!self.lineinfo.checkIsMultibyte(self.cursor.row)) {
       self.cursor.gfx_col = self.cursor.col;
@@ -569,7 +653,7 @@ pub const TextHandler = struct {
       const offset_start: u32 = self.lineinfo.getOffset(self.cursor.row);
       self.cursor.gfx_col = 0;
       var iter = self.iterate(offset_start);
-      while (iter.nextCharUntil(pos)) |char| {
+      while (iter.nextCodepointSliceUntil(pos)) |char| {
         self.cursor.gfx_col += encoding.countCharCols(try std.unicode.utf8Decode(char));
       }
     }
@@ -581,21 +665,27 @@ pub const TextHandler = struct {
   }
   
   pub fn syncColumnScroll(self: *TextHandler, E: *Editor) void {
+    const text_width = E.getTextWidth();
+    
     var target_gfx_col: u32 = self.scroll.gfx_col;
-    if (target_gfx_col > self.cursor.gfx_col) {
-      if (E.getTextWidth() < self.cursor.gfx_col) {
-        target_gfx_col = self.cursor.gfx_col - E.getTextWidth() + 1;
+    
+    if (self.lineinfo.isContLine(self.cursor.row)) {
+      std.debug.assert(self.cursor.gfx_col < text_width);
+      target_gfx_col = 0;
+    } else if (target_gfx_col > self.cursor.gfx_col) {
+      if (text_width < self.cursor.gfx_col) {
+        target_gfx_col = self.cursor.gfx_col - text_width + 1;
       } else if (self.cursor.gfx_col == 0) {
         target_gfx_col = 0;
       } else {
         target_gfx_col = self.cursor.gfx_col - 1;
       }
-    } else if ((target_gfx_col + self.cursor.gfx_col) > E.getTextWidth()) {
+    } else if ((target_gfx_col + self.cursor.gfx_col) > text_width) {
       // cursor is farther than horizontal edge
-      if (E.getTextWidth() > self.cursor.gfx_col) {
-        target_gfx_col = E.getTextWidth() - self.cursor.gfx_col + 1;
+      if (text_width > self.cursor.gfx_col) {
+        target_gfx_col = text_width - self.cursor.gfx_col + 1;
       } else {
-        target_gfx_col = self.cursor.gfx_col - E.getTextWidth() + 1;
+        target_gfx_col = self.cursor.gfx_col - text_width + 1;
       }
     }
     
@@ -618,9 +708,11 @@ pub const TextHandler = struct {
           self.scroll.gfx_col = 0;
         }
         var iter = self.iterate(count_cols_from);
-        while (iter.nextCharUntil(offset_end)) |char| {
-          const ccol = encoding.countCharCols(std.unicode.utf8Decode(char) catch unreachable);
-          self.scroll.col += @intCast(char.len);
+        while (iter.nextCodepointSliceUntil(offset_end)) |bytes| {
+          const ccol = encoding.countCharCols(
+            std.unicode.utf8Decode(bytes) catch unreachable
+          );
+          self.scroll.col += @intCast(bytes.len);
           self.scroll.gfx_col += ccol;
           if (self.scroll.gfx_col >= target_gfx_col) {
             break;
@@ -658,55 +750,67 @@ pub const TextHandler = struct {
     
     try self.undo_mgr.doAppend(insidx, @intCast(char.len));
     
-    if (insidx > self.head_end and insidx <= self.head_end + self.gap.len) {
+    if (insidx > self.head_end and insidx <= self.head_end + self.gap.items.len) {
       // insertion within gap
-      if ((self.gap.len + char.len) >= self.gap.buffer.len) {
+      if ((self.gap.items.len + char.len) >= self.gap.capacity) {
         // overflow if inserted
-        try self.flushGapBuffer(E);
+        try self.flushGapBuffer();
         self.head_end = insidx;
         self.tail_start = insidx;
-        self.gap.appendSlice(char) catch unreachable;
+        self.gap.appendSliceAssumeCapacity(char);
       } else {
         const gap_relidx = insidx - self.head_end;
-        if (gap_relidx == self.gap.len) {
-          self.gap.appendSlice(char) catch unreachable;
+        if (gap_relidx == self.gap.items.len) {
+          self.gap.appendSliceAssumeCapacity(char);
         } else {
-          self.gap.insertSlice(gap_relidx, char) catch unreachable;
+          // TODO: there is no insertSliceAssumeCapacity?
+          self.gap.replaceRangeAssumeCapacity(gap_relidx, 0, char);
         }
       }
     } else {
       // insertion outside of gap
-      try self.flushGapBuffer(E);
+      try self.flushGapBuffer();
       self.head_end = insidx;
       self.tail_start = insidx;
-      self.gap.appendSlice(char) catch unreachable;
+      self.gap.appendSliceAssumeCapacity(char);
     }
+    
+    E.needs_redraw = true;
+    
     if (char[0] == '\n') {
       self.lineinfo.increaseOffsets(self.cursor.row + 1, 1);
-      try self.lineinfo.insert(self.cursor.row + 1, insidx + 1, false);
+      const line_inserted =
+        try self.lineinfo.insert(self.cursor.row + 1, insidx + 1, false);
       if (line_is_multibyte) {
         try self.recheckIsMultibyte(self.cursor.row);
         try self.recheckIsMultibyte(self.cursor.row + 1);
       }
-      self.calcLineDigits(E);
-      
-      self.cursor.row += 1;
-      self.cursor.col = 0;
-      self.cursor.gfx_col = 0;
-      if ((self.scroll.row + E.getTextHeight()) <= self.cursor.row) {
-        self.scroll.row += 1;
+      if (line_inserted) {
+        try self.wrapLine(E, self.cursor.row+1);
+        self.goDownHead(E);
       }
-      self.scroll.col = 0;
-      self.scroll.gfx_col = 0;
-      E.needs_redraw = true;
+      self.calcLineDigits(E);
     } else {
       if (char.len > 1) {
-        try self.lineinfo.setMultibyte(self.cursor.row, true);
+        self.lineinfo.setMultibyte(self.cursor.row, true);
       }
       self.lineinfo.increaseOffsets(self.cursor.row + 1, @intCast(char.len));
-      E.needs_redraw = true;
-      if (advance_right_after_ins) {
-        self.goRight(E);
+      if (true) {
+        try self.wrapLine(E, self.cursor.row);
+        if (
+          self.cursor.col == self.getRowLen(self.cursor.row) and
+          (self.cursor.row+1) < self.lineinfo.getLen() and
+          self.lineinfo.isContLine(self.cursor.row+1)
+        ) {
+          self.goDownHead(E);
+        }
+        if (advance_right_after_ins) {
+          self.goRight(E);
+        }
+      } else {
+        if (advance_right_after_ins) {
+          self.goRight(E);
+        }
       }
     }
   }
@@ -722,7 +826,7 @@ pub const TextHandler = struct {
     self: *TextHandler, E: *Editor, char: []const u8
   ) !void {
     const insidx: u32 = self.calcOffsetFromCursor();
-    const bytes_starting = self.getBytesStartingAt(insidx) orelse {
+    const bytes_starting = self.bytesStartingAt(insidx) orelse {
       return self.insertChar(E, char, true);
     };
     if (std.mem.startsWith(u8, bytes_starting, char)) {
@@ -746,109 +850,11 @@ pub const TextHandler = struct {
     return self.insertSliceAtPosWithHints(E, insidx, indent.slice(), true, false);
   }
   
-  pub fn indentMarked(self: *TextHandler, E: *Editor) !void {
-    if (self.markers == null) {
-      return;
-    }
-    
-    var markers = &self.markers.?;
-    if (markers.start_cur.col != 0) {
-      markers.start_cur.col = 0;
-      markers.start_cur.gfx_col = 0;
-      markers.start = self.lineinfo.getOffset(markers.start_cur.row);
-    }
-    
-    if (markers.start == markers.end) {
-      markers.end = self.getRowOffsetEnd(markers.start_cur.row);
-    }
-    
-    var indented: str.String = .{};
-    defer indented.deinit(E.allocr());
-    for (0..@intCast(E.conf.tab_size)) |_| {
-      try indented.append(E.allocr(), ' ');
-    }
-    
-    var iter = self.iterate(self.lineinfo.getOffset(markers.start_cur.row));
-    while (iter.nextCharUntil(markers.end)) |char| {
-      try indented.appendSlice(E.allocr(), char);
-      if (char[0] == '\n') {
-        for (0..@intCast(E.conf.tab_size)) |_| {
-          try indented.append(E.allocr(), ' ');
-        }
-      }
-    }
-    
-    try self.replaceMarked(E, indented.items);
-  }
-  
-  fn startsWithIndent(E: *Editor, slice: []const u8) bool {
-    if (slice.len < E.conf.tab_size) {
-      return false;
-    }
-    for (0..@intCast(E.conf.tab_size)) |i| {
-      if (slice[i] != ' ') {
-        return false;
-      }
-    }
-    return true;
-  }
-  
-  pub fn dedentMarked(self: *TextHandler, E: *Editor) !void {
-    if (self.markers == null) {
-      return;
-    }
-  
-    var markers = &self.markers.?;
-    
-    if (markers.start_cur.col != 0) {
-      markers.start_cur.col = 0;
-      markers.start_cur.gfx_col = 0;
-      markers.start = self.lineinfo.getOffset(markers.start_cur.row);
-    }
-    
-    if (markers.start == markers.end) {
-      markers.end = self.getRowOffsetEnd(markers.start_cur.row);
-    }
-    
-    var dedented: str.String = .{};
-    defer dedented.deinit(E.allocr());
-    
-    var iter = self.iterate(self.lineinfo.getOffset(markers.start_cur.row));
-    while (iter.nextCharUntil(markers.end)) |char| {
-      try dedented.appendSlice(E.allocr(), char);
-    }
-    
-    var dest: usize = 0;
-    var src: usize = 0;
-    var newlen: usize = dedented.items.len;
-    
-    if (TextHandler.startsWithIndent(E, dedented.items)) {
-      src += @intCast(E.conf.tab_size);
-      newlen -= @intCast(E.conf.tab_size);
-    }
-    
-    while (src < dedented.items.len) {
-      if (dedented.items[src] == '\n' and TextHandler.startsWithIndent(E, dedented.items[(src+1)..])) {
-        dedented.items[dest] = '\n';
-        dest += 1;
-        src += @intCast(E.conf.tab_size + 1);
-        newlen -= @intCast(E.conf.tab_size);
-      } else {
-        dedented.items[dest] = dedented.items[src];
-        dest += 1;
-        src += 1;
-      }
-    }
-    dedented.shrinkRetainingCapacity(newlen);
-    
-    try self.replaceMarked(E, dedented.items);
-  }
-  
   pub fn insertNewline(self: *TextHandler, E: *Editor) !void {
     var indent: std.BoundedArray(u8, 32) = .{};
     
     var iter = self.iterate(self.lineinfo.getOffset(self.cursor.row));
-    while (iter.nextCharUntil(self.calcOffsetFromCursor())) |char| {
+    while (iter.nextCodepointSliceUntil(self.calcOffsetFromCursor())) |char| {
       if (std.mem.eql(u8, char, " ")) {
         indent.appendSlice(char) catch break;
       } else {
@@ -872,38 +878,38 @@ pub const TextHandler = struct {
     first_row_after_insidx: u32,
     is_slice_always_inline: bool,
   ) !u32 {
-    const allocr: std.mem.Allocator = E.allocr();
-    
     if (first_row_after_insidx < self.lineinfo.getLen()) {
       self.lineinfo.increaseOffsets(first_row_after_insidx, @intCast(slice.len));
     }
     
-    var newlines: std.ArrayListUnmanaged(u32) = .{};
-    defer newlines.deinit(allocr);
+    var newlines_allocr = std.heap.stackFallback(16, E.allocr());
+    var newlines = std.ArrayList(u32).init(newlines_allocr.get());
+    defer newlines.deinit();
     
     if (!is_slice_always_inline) {
       var absidx: u32 = insidx;
       for (slice) |byte| {
         if (byte == '\n') {
-          try newlines.append(allocr, absidx + 1);
+          try newlines.append(absidx + 1);
         }
         absidx += 1;
       }
     }
     
-    if (insidx > self.head_end and insidx <= self.head_end + self.gap.len) {
+    if (insidx > self.head_end and insidx <= self.head_end + self.gap.items.len) {
       // insertion within gap
-      if ((slice.len + self.gap.len) < self.gap.buffer.len) {
+      if ((self.gap.items.len + slice.len) < self.gap.capacity) {
         const gap_relidx = insidx - self.head_end;
-        self.gap.insertSlice(gap_relidx, slice) catch unreachable;
+        // TODO: there is no insertSliceAssumeCapacity?
+        self.gap.replaceRangeAssumeCapacity(gap_relidx, 0, slice);
       } else {
         // overflow if inserted
-        try self.flushGapBuffer(E);
-        try self.buffer.insertSlice(allocr, insidx, slice);
+        try self.flushGapBuffer();
+        try self.buffer.insertSlice(insidx, slice);
       }
     } else {
-      try self.flushGapBuffer(E);
-      try self.buffer.insertSlice(allocr, insidx, slice);
+      try self.flushGapBuffer();
+      try self.buffer.insertSlice(insidx, slice);
     }
     
     if (newlines.items.len > 0) {
@@ -914,7 +920,20 @@ pub const TextHandler = struct {
     for ((first_row_after_insidx - 1)..(first_row_after_insidx + newlines.items.len)) |i| {
       try self.recheckIsMultibyte(@intCast(i));
     }
-    return @intCast(newlines.items.len);
+    if (true) {
+      try self.wrapTextFrom(
+        E,
+        @intCast(first_row_after_insidx - 1),
+        @intCast(first_row_after_insidx + newlines.items.len)
+      );
+      // TODO: faster way of doing this that doesnt involve searching
+      return self.lineinfo.findMaxLineBeforeOffset(
+        @intCast(insidx+slice.len),
+        @intCast(first_row_after_insidx - 1 + newlines.items.len),
+      );
+    } else {
+      return @intCast(first_row_after_insidx - 1 + newlines.items.len);
+    }
   }
   
   pub fn insertSlice(self: *TextHandler, E: *Editor, slice: []const u8) !void {
@@ -938,9 +957,8 @@ pub const TextHandler = struct {
     else
       self.lineinfo.findMinLineAfterOffset(insidx, 0);
     
-    const num_newlines = try self.shiftAndInsertNewLines(E, slice, insidx, first_row_after_insidx, is_slice_always_inline);
-    
-    const row_at_end_of_slice: u32 = @intCast(first_row_after_insidx - 1 + num_newlines);
+    const row_at_end_of_slice: u32 =
+      try self.shiftAndInsertNewLines(E, slice, insidx, first_row_after_insidx, is_slice_always_inline);
     self.cursor.row = row_at_end_of_slice;
     
     const offset_start: u32 = self.lineinfo.getOffset(self.cursor.row);
@@ -951,12 +969,10 @@ pub const TextHandler = struct {
       self.cursor.gfx_col = self.cursor.col;
     } else {
       self.cursor.gfx_col = 0;
-      var i: u32 = offset_start;
-      while (i < insidx_end) {
-        const seqlen = encoding.sequenceLen(self.buffer.items[i]).?;
-        const char = try std.unicode.utf8Decode(self.buffer.items[i..(i+seqlen)]);
+      var iter = self.iterate(offset_start);
+      while (iter.nextCodepointSliceUntil(insidx_end)) |bytes| {
+        const char = std.unicode.utf8Decode(bytes) catch unreachable;
         self.cursor.gfx_col += encoding.countCharCols(char);
-        i += @intCast(seqlen);
       }
     }
     
@@ -971,6 +987,8 @@ pub const TextHandler = struct {
   }
   
   // deletion
+  
+  /// delete_next_char is true when pressing Delete, false when backspacing
   pub fn deleteChar(self: *TextHandler, E: *Editor, delete_next_char: bool) !void {
     var delidx: u32 = self.calcOffsetFromCursor();
     
@@ -982,38 +1000,40 @@ pub const TextHandler = struct {
     
     self.buffer_changed = true;
     var deleted_char = [_]u8{0} ** 4;
-    var seqlen: u32 = 0;
+    var seqlen: u32 = undefined;
     
     // Delete the character and record the deleted char
     
     if (delete_next_char) {
-      const bytes_starting = self.getBytesStartingAt(delidx).?;
-      seqlen = @intCast(encoding.sequenceLen(bytes_starting[0]).?);
+      const bytes_starting = self.bytesStartingAt(delidx).?;
+      seqlen = @intCast(encoding.sequenceLen(bytes_starting[0]) catch unreachable);
       @memcpy(deleted_char[0..seqlen], bytes_starting[0..seqlen]);
     } else {
-      delidx -= 1;
-      while (true) {
-        const byte = self.getByte(delidx).?;
-        if (encoding.isContByte(byte)) {
-          seqlen += 1;
-          delidx -= 1;
-          // shift to right
-          std.mem.copyBackwards(u8, deleted_char[1..], deleted_char[0..3]);
-          deleted_char[0] = byte;
-        } else {
-          seqlen += 1;
-          std.mem.copyBackwards(u8, deleted_char[1..], deleted_char[0..3]);
-          deleted_char[0] = byte;
-          break;
-        }
-      }
+      var iter = self.iterate(delidx);
+      const bytes = iter.prevCodepointSlice().?;
+      seqlen = @intCast(bytes.len);
+      delidx -= @intCast(bytes.len);
+      @memcpy(deleted_char[0..seqlen], bytes);
     }
     
     // Move the cursor to the previous char, if we are backspacing
     
     const cur_at_deleted_char = self.cursor;
+    const delete_first_col_in_cont = blk: {
+      if (self.lineinfo.isContLine(cur_at_deleted_char.row) and cur_at_deleted_char.gfx_col == 1) {
+        const rowlen = self.getRowLen(cur_at_deleted_char.row);
+        if (self.lineinfo.checkIsMultibyte(cur_at_deleted_char.row)) {
+          const bytes = self.bytesStartingAt(self.lineinfo.getOffset(cur_at_deleted_char.row)).?;
+          const seqlen1 = encoding.sequenceLen(bytes[0]) catch unreachable;
+          break :blk (rowlen == seqlen1);
+        } else {
+          break :blk (rowlen == 1);
+        }
+      }
+      break :blk false;
+    };
     if (!delete_next_char) {
-      if (self.cursor.col == 0) {
+      if (self.cursor.gfx_col == 0 or delete_first_col_in_cont) {
         self.cursor.row -= 1;
         try self.goTail(E);
       } else {
@@ -1023,7 +1043,7 @@ pub const TextHandler = struct {
     
     // Perform deletion
     
-    const logical_tail_start = self.head_end + self.gap.len;
+    const logical_tail_start = self.head_end + self.gap.items.len;
 
     if (delidx < self.head_end) {
       if (delidx == (self.head_end - seqlen)) {
@@ -1043,21 +1063,12 @@ pub const TextHandler = struct {
         self.tail_start += seqlen;
       } else {
         // deletion after gap
-        const newlen = self.buffer.items.len - seqlen;
-        const dest: []u8 = self.buffer.items[real_tailidx..newlen];
-        const src: []const u8 = self.buffer.items[(real_tailidx+seqlen)..];
-        std.mem.copyForwards(u8, dest, src);
-        self.buffer.shrinkRetainingCapacity(newlen);
+        self.buffer.replaceRangeAssumeCapacity(real_tailidx, seqlen, &[_]u8{});
       }
     } else {
       // deletion within gap
-      const gap: []u8 = self.gap.slice();
-      const newlen = gap.len - seqlen;
       const gap_relidx = delidx - self.head_end;
-      const dest: []u8 = gap[gap_relidx..newlen];
-      const src: []const u8 = gap[(gap_relidx+seqlen)..];
-      std.mem.copyForwards(u8, dest, src);
-      try self.gap.resize(newlen);
+      self.gap.replaceRangeAssumeCapacity(gap_relidx, seqlen, &[_]u8{});
     }
     
     try self.undo_mgr.doDelete(delidx, deleted_char[0..seqlen]);
@@ -1074,30 +1085,39 @@ pub const TextHandler = struct {
         // do nothing if deleting character of last line
       } else if (cur_at_deleted_char.col == self.getRowLen(cur_at_deleted_char.row)) {
         // deleting next line
-        std.debug.assert(deleted_char[0] == '\n');
-        const deletedrowidx = cur_at_deleted_char.row + 1;
-        if (deletedrowidx == self.lineinfo.getLen()) {
-          // do nothing if deleting last line
-        } else {
-          self.lineinfo.decreaseOffsets(deletedrowidx, 1);
-          self.lineinfo.remove(deletedrowidx);
-          try self.recheckIsMultibyteAfterDelete(cur_at_deleted_char.row, deleted_char_is_mb);
-        }
+        self.lineinfo.decreaseOffsets(cur_at_deleted_char.row+1, 1);
+        self.lineinfo.remove(cur_at_deleted_char.row+1);
+        try self.recheckIsMultibyteAfterDelete(cur_at_deleted_char.row, deleted_char_is_mb);
+        try self.wrapLine(E, cur_at_deleted_char.row);
         self.calcLineDigits(E);
       } else {
         self.lineinfo.decreaseOffsets(cur_at_deleted_char.row + 1, seqlen);
         try self.recheckIsMultibyteAfterDelete(cur_at_deleted_char.row, deleted_char_is_mb);
+        try self.wrapLine(E, cur_at_deleted_char.row);
       }
     } else {
-      if (cur_at_deleted_char.col == 0) {
+      if (self.lineinfo.isContLine(cur_at_deleted_char.row)) {
+        if (delete_first_col_in_cont) {
+          self.lineinfo.decreaseOffsets(cur_at_deleted_char.row+1, seqlen);
+          self.lineinfo.remove(cur_at_deleted_char.row);
+          try self.recheckIsMultibyteAfterDelete(cur_at_deleted_char.row - 1, deleted_char_is_mb);
+        } else {
+          self.lineinfo.decreaseOffsets(cur_at_deleted_char.row+1, seqlen);
+          try self.recheckIsMultibyteAfterDelete(cur_at_deleted_char.row, deleted_char_is_mb);
+          try self.wrapLine(E, cur_at_deleted_char.row);
+        }
+      } else if (cur_at_deleted_char.col == 0) {
         std.debug.assert(deleted_char[0] == '\n');
-        self.lineinfo.decreaseOffsets(cur_at_deleted_char.row, 1);
+        self.lineinfo.decreaseOffsets(cur_at_deleted_char.row+1, 1);
         self.lineinfo.remove(cur_at_deleted_char.row);
-        try self.recheckIsMultibyteAfterDelete(cur_at_deleted_char.row - 1, deleted_char_is_mb);
+        // newlines may fuse an ascii line and a unicode line together,
+        // so the generic function should be used
+        try self.recheckIsMultibyte(cur_at_deleted_char.row - 1);
         self.calcLineDigits(E);
       } else {
         self.lineinfo.decreaseOffsets(cur_at_deleted_char.row + 1, seqlen);
         try self.recheckIsMultibyteAfterDelete(cur_at_deleted_char.row, deleted_char_is_mb);
+        try self.wrapLine(E, cur_at_deleted_char.row);
       }
     }
 
@@ -1114,7 +1134,7 @@ pub const TextHandler = struct {
   ) !?[]const u8 {
     self.buffer_changed = true;
     
-    const logical_tail_start = self.head_end + self.gap.len;
+    const logical_tail_start = self.head_end + self.gap.items.len;
     
     var retval: ?[]const u8 = null;
     
@@ -1125,31 +1145,25 @@ pub const TextHandler = struct {
       
       if (record_undoable_action) {
         try self.undo_mgr.doDelete(
-          delete_start, self.gap.slice()[gap_delete_start..gap_delete_end]
+          delete_start, self.gap.items[gap_delete_start..gap_delete_end]
         );
       }
       
       retval = if (copy_orig_slice_to_undo_heap)
-        try self.undo_mgr.copySlice(self.gap.slice()[gap_delete_start..gap_delete_end])
+        try self.undo_mgr.copySlice(self.gap.items[gap_delete_start..gap_delete_end])
       else
         null;
       
       const n_deleted = gap_delete_end - gap_delete_start;
       
       // Remove chars from gap
-      const new_len = self.gap.len - n_deleted;
-      std.mem.copyForwards(
-        u8,
-        self.gap.slice()[gap_delete_start..new_len],
-        self.gap.slice()[gap_delete_end..]
-      );
-      try self.gap.resize(new_len);
+      self.gap.replaceRangeAssumeCapacity(gap_delete_start, n_deleted, &[_]u8{});
     } else {
       // deletion outside, or between gap buffer
       
       // assume that the gap buffer is flushed to make it easier
       // for us to delete the region
-      try self.flushGapBuffer(E);
+      try self.flushGapBuffer();
       
       if (record_undoable_action) {
         try self.undo_mgr.doDelete(
@@ -1179,7 +1193,6 @@ pub const TextHandler = struct {
       }
     }
     
-    const old_no_lines = self.lineinfo.getLen();
     const removed_line_start = self.lineinfo.removeLinesInRange(delete_start, delete_end);
     
     try self.recheckIsMultibyte(removed_line_start);
@@ -1187,23 +1200,31 @@ pub const TextHandler = struct {
       try self.recheckIsMultibyte(removed_line_start + 1);
     }
     
-    if (old_no_lines != self.lineinfo.getLen()) {
-      self.calcLineDigits(E);
-    }
-    
-    self.cursor.row = removed_line_start;
-    const row_start = self.lineinfo.getOffset(self.cursor.row);
-    self.cursor.col = delete_start - row_start;
-    
-    if (!self.lineinfo.checkIsMultibyte(self.cursor.row)) {
-      self.cursor.gfx_col = self.cursor.col;
+    try self.wrapTextFrom(E, removed_line_start, removed_line_start+1);
+    if (
+      self.lineinfo.isContLine(removed_line_start) and
+      self.getRowLen(removed_line_start) == 0
+    ) {
+      self.lineinfo.remove(removed_line_start);
+      self.cursor.row = removed_line_start - 1;
+      try self.goTail(E);
     } else {
-      self.cursor.gfx_col = 0;
-      var iter = self.iterate(row_start);
-      while (iter.nextCharUntil(delete_start)) |char| {
-        self.cursor.gfx_col += encoding.countCharCols(try std.unicode.utf8Decode(char));
+      self.cursor.row = removed_line_start;
+      const row_start = self.lineinfo.getOffset(self.cursor.row);
+      self.cursor.col = delete_start - row_start;
+      
+      if (!self.lineinfo.checkIsMultibyte(self.cursor.row)) {
+        self.cursor.gfx_col = self.cursor.col;
+      } else {
+        self.cursor.gfx_col = 0;
+        var iter = self.iterate(row_start);
+        while (iter.nextCodepointSliceUntil(delete_start)) |char| {
+          self.cursor.gfx_col += encoding.countCharCols(try std.unicode.utf8Decode(char));
+        }
       }
     }
+    
+    self.calcLineDigits(E);
     
     self.syncColumnScroll(E);
     self.syncRowScroll(E);
@@ -1281,7 +1302,7 @@ pub const TextHandler = struct {
       );
     }
   
-    try self.flushGapBuffer(E);
+    try self.flushGapBuffer();
     
     // TODO: replace within gap buffer
     
@@ -1296,7 +1317,6 @@ pub const TextHandler = struct {
     const old_buffer_len = replace_end - replace_start;
     
     try self.buffer.replaceRange(
-      E.allocr(),
       replace_start,
       old_buffer_len,
       new_buffer,
@@ -1331,7 +1351,7 @@ pub const TextHandler = struct {
     self.cursor.col = 0;
     self.cursor.gfx_col = 0;
     var iter = self.iterate(self.lineinfo.getOffset(self.cursor.row));
-    while (iter.nextCharUntil(new_replace_end)) |char| {
+    while (iter.nextCodepointSliceUntil(new_replace_end)) |char| {
       self.cursor.col += @intCast(char.len);
       self.cursor.gfx_col += encoding.countCharCols(try std.unicode.utf8Decode(char));
     }
@@ -1382,9 +1402,9 @@ pub const TextHandler = struct {
           }
         },
         .regex => |*regex| {
-          const match = regex.checkMatch(
-            allocr, haystack, .{}
-          ) catch return null;
+          const match = regex.checkMatch(allocr, haystack, &.{}) catch {
+            return null;
+          };
           if (match.pos > 0) {
             return match.pos;
           } else {
@@ -1402,11 +1422,11 @@ pub const TextHandler = struct {
     replacement: []const u8
   ) !usize {
     var markers = &self.markers.?;
-    var replaced: str.String = .{};
-    defer replaced.deinit(E.allocr());
+    var replaced = str.String.init(E.allocr());
+    defer replaced.deinit();
     
     // TODO: replace all within gap buffer
-    try self.flushGapBuffer(E);
+    try self.flushGapBuffer();
     
     const src_text = self.buffer.items[markers.start..markers.end];
     
@@ -1414,11 +1434,11 @@ pub const TextHandler = struct {
     var replacements: usize = 0;
     while (slide < src_text.len) {
       if (needle.checkMatch(E.allocr(), src_text[slide..])) |len| {
-        try replaced.appendSlice(E.allocr(), replacement);
+        try replaced.appendSlice(replacement);
         slide += len;
         replacements += 1;
       } else {
-        try replaced.append(E.allocr(), src_text[slide]);
+        try replaced.append(src_text[slide]);
         slide += 1;
       }
     }
@@ -1428,6 +1448,106 @@ pub const TextHandler = struct {
     markers.end = new_end;
     
     return replacements;
+  }
+  
+  // Indentation
+  
+  pub fn indentMarked(self: *TextHandler, E: *Editor) !void {
+    if (self.markers == null) {
+      return;
+    }
+    
+    var markers = &self.markers.?;
+    if (markers.start_cur.col != 0) {
+      markers.start_cur.col = 0;
+      markers.start_cur.gfx_col = 0;
+      markers.start = self.lineinfo.getOffset(markers.start_cur.row);
+    }
+    
+    if (markers.start == markers.end) {
+      markers.end = self.getRowOffsetEnd(markers.start_cur.row);
+    }
+    
+    var indented = str.String.init(E.allocr());
+    defer indented.deinit();
+    for (0..@intCast(E.conf.tab_size)) |_| {
+      try indented.append(' ');
+    }
+    
+    var iter = self.iterate(self.lineinfo.getOffset(markers.start_cur.row));
+    while (iter.nextCodepointSliceUntil(markers.end)) |char| {
+      try indented.appendSlice(char);
+      if (char[0] == '\n') {
+        for (0..@intCast(E.conf.tab_size)) |_| {
+          try indented.append(' ');
+        }
+      }
+    }
+    
+    try self.replaceMarked(E, indented.items);
+  }
+  
+  fn startsWithIndent(E: *Editor, slice: []const u8) bool {
+    if (slice.len < E.conf.tab_size) {
+      return false;
+    }
+    for (0..@intCast(E.conf.tab_size)) |i| {
+      if (slice[i] != ' ') {
+        return false;
+      }
+    }
+    return true;
+  }
+  
+  pub fn dedentMarked(self: *TextHandler, E: *Editor) !void {
+    if (self.markers == null) {
+      return;
+    }
+    
+    var markers = &self.markers.?;
+    
+    if (markers.start_cur.col != 0) {
+      markers.start_cur.col = 0;
+      markers.start_cur.gfx_col = 0;
+      markers.start = self.lineinfo.getOffset(markers.start_cur.row);
+    }
+    
+    if (markers.start == markers.end) {
+      markers.end = self.getRowOffsetEnd(markers.start_cur.row);
+    }
+    
+    var dedented = str.String.init(E.allocr());
+    defer dedented.deinit();
+    
+    var iter = self.iterate(self.lineinfo.getOffset(markers.start_cur.row));
+    while (iter.nextCodepointSliceUntil(markers.end)) |char| {
+      try dedented.appendSlice(char);
+    }
+    
+    var dest: usize = 0;
+    var src: usize = 0;
+    var newlen: usize = dedented.items.len;
+    
+    if (TextHandler.startsWithIndent(E, dedented.items)) {
+      src += @intCast(E.conf.tab_size);
+      newlen -= @intCast(E.conf.tab_size);
+    }
+    
+    while (src < dedented.items.len) {
+      if (dedented.items[src] == '\n' and TextHandler.startsWithIndent(E, dedented.items[(src+1)..])) {
+        dedented.items[dest] = '\n';
+        dest += 1;
+        src += @intCast(E.conf.tab_size + 1);
+        newlen -= @intCast(E.conf.tab_size);
+      } else {
+        dedented.items[dest] = dedented.items[src];
+        dest += 1;
+        src += 1;
+      }
+    }
+    dedented.shrinkRetainingCapacity(newlen);
+    
+    try self.replaceMarked(E, dedented.items);
   }
   
   // markers
@@ -1504,7 +1624,7 @@ pub const TextHandler = struct {
     }
     const markers = self.markers.?;
     
-    try self.flushGapBuffer(E);
+    try self.flushGapBuffer();
     
     const n_copied = markers.end - markers.start;
     if (n_copied > 0) {
@@ -1516,8 +1636,10 @@ pub const TextHandler = struct {
           return;
         } else |_| {}
       }
-      try self.clipboard.resize(E.allocr(), n_copied);
-      @memcpy(self.clipboard.items, self.buffer.items[markers.start..markers.end]);
+      self.clipboard.shrinkRetainingCapacity(0);
+      try self.clipboard.appendSlice(
+        self.buffer.items[markers.start..markers.end]
+      );
     }
   }
   
@@ -1535,17 +1657,48 @@ pub const TextHandler = struct {
   }
   
   pub fn duplicateLine(self: *TextHandler, E: *Editor) !void {
-    var line: str.String = .{};
-    defer line.deinit(E.allocr());
-    try line.append(E.allocr(), '\n');
+    var line = str.String.init(E.allocr());
+    defer line.deinit();
+    try line.append('\n');
     const offset_start: u32 = self.lineinfo.getOffset(self.cursor.row);
     const offset_end: u32 = self.getRowOffsetEnd(self.cursor.row);
     var iter = self.iterate(offset_start);
-    while (iter.nextCharUntil(offset_end)) |char| {
-      try line.appendSlice(E.allocr(), char);
+    while (iter.nextCodepointSliceUntil(offset_end)) |bytes| {
+      try line.appendSlice(bytes);
     }
     try self.goTail(E);
     try self.insertSlice(E, line.items);
+  }
+  
+  // line wrapping
+  
+  pub fn wrapText(self: *TextHandler, E: *Editor) !void {
+    var line: u32 = 0;
+    while (line < self.lineinfo.getLen()) {
+      const result = try self.lineinfo.updateLineWrap(self, E, line);
+      line = result.next_line;
+    }
+  }
+  
+  /// Returns the final line after the wrapped text
+  pub fn wrapTextFrom(
+    self: *TextHandler, E: *Editor,
+    from_line: u32, to_line: u32,
+  ) !void {
+    var line = from_line;
+    var to = to_line;
+    // std.debug.print("from {}->{}\n", .{from_line,to_line});
+    while (line < to) {
+      // std.debug.print("line {}\n", .{line});
+      const result = try self.lineinfo.updateLineWrap(self, E, line);
+      to = @intCast(to + result.len_change);
+      line = @intCast(result.next_line);
+    }
+    //self.lineinfo.debugPrint();
+  }
+  
+  fn wrapLine(self: *TextHandler, E: *Editor, line: u32) !void {
+    _ = try self.lineinfo.updateLineWrap(self, E, line);
   }
 
 };

@@ -24,7 +24,7 @@ pub fn onInputted(self: *editor.Editor) !void {
     cmd_data.replacePromptOverlay(self, PROMPT_LINE_STARTS_AT_ONE);
     return;
   }
-  text_handler.gotoLine(self, line - 1) catch {
+  text_handler.gotoLineNo(self, line) catch {
     cmd_data.replacePromptOverlay(self, PROMPT_OUT_OF_BOUNDS);
     return;
   };
@@ -34,14 +34,11 @@ pub fn onInputted(self: *editor.Editor) !void {
 pub fn onKey(self: *editor.Editor, keysym: *const kbd.Keysym) !bool {
   if (keysym.getPrint()) |key| {
     if (key == 'g') {
-      try self.text_handler.gotoLine(self, 0);
+      self.text_handler.gotoFirstLine(self);
       self.setState(.text);
       return true;
     } else if (key == 'G') {
-      try self.text_handler.gotoLine(
-        self,
-        @intCast(self.text_handler.lineinfo.getLen() - 1)
-      );
+      self.text_handler.gotoLastLine(self);
       self.setState(.text);
       return true;
     }

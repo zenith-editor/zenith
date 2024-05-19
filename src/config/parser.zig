@@ -12,7 +12,7 @@ const Error = @import("../ds/error.zig").Error;
 pub const Value = union(enum) {
   uninitialized: void,
   i32: i32,
-  string: str.String,
+  string: str.StringUnmanaged,
   bool: bool,  
   
   fn deinit(self: *Value, allocr: std.mem.Allocator) void {
@@ -412,7 +412,7 @@ pub const Parser = struct {
   }
 
   fn parseStrInner(self: *Parser, allocr: std.mem.Allocator, start_pos: usize) !ValueResult {
-    var string: str.String = .{};
+    var string: str.StringUnmanaged = .{};
     errdefer string.deinit(allocr);
     while (self.getch()) |char| {
       switch (char) {

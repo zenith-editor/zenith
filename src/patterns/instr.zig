@@ -16,6 +16,12 @@ pub const Instr = union(enum) {
     b: usize,
   };
   
+  pub const RangeOpt = struct {
+    from: u32,
+    to: u32,
+    inverse: bool,
+  };
+  
   /// Abort. Functions as a filler instruction for codegen.
   abort: void,
   /// Finish matching
@@ -26,6 +32,8 @@ pub const Instr = union(enum) {
   char: u32,
   /// Tries to consume any char, except for specified one
   char_inverse: u32,
+  /// Tries to consume a char (not) in range (inline optimized ver.)
+  range_opt: RangeOpt,
   /// Tries to consume a char in range
   range: []Range,
   /// Tries to consume a char not in range

@@ -1,4 +1,5 @@
 ZIG?=zig
+ZIGFLAGS?=
 
 # zig does not automatically clean up the cache, so we should use
 # one in the temp dir
@@ -7,7 +8,7 @@ ZIG_CACHE_TMP=/tmp/zig-cache-zenith
 
 .PHONY: build
 build: $(ZIG_CACHE)
-	$(ZIG) build
+	$(ZIG) build $(ZIGFLAGS)
 
 .PHONY: $(ZIG_CACHE)
 $(ZIG_CACHE):

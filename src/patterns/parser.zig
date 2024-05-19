@@ -242,15 +242,43 @@ fn parseGroup(
             });
             ranges.deinit(allocr);
             ranges = undefined;
+          } else if (ranges.items.len == 1) {
+            try expr.instrs.append(allocr, .{
+              .range_opt = .{
+                .from = ranges.items[0].from,
+                .to = ranges.items[0].to,
+                .inverse = true,
+              },
+            });
+            ranges.deinit(allocr);
+            ranges = undefined;
           } else {
             try expr.instrs.append(allocr, .{
               .range_inverse = try ranges.toOwnedSlice(allocr),
             });
           }
         } else {
-          try expr.instrs.append(allocr, .{
-            .range = try ranges.toOwnedSlice(allocr),
-          });
+          if (ranges.items.len == 1 and ranges.items[0].from == ranges.items[0].to) {
+            try expr.instrs.append(allocr, .{
+              .char = ranges.items[0].from,
+            });
+            ranges.deinit(allocr);
+            ranges = undefined;
+          } else if (ranges.items.len == 1) {
+            try expr.instrs.append(allocr, .{
+              .range_opt = .{
+                .from = ranges.items[0].from,
+                .to = ranges.items[0].to,
+                .inverse = false,
+              },
+            });
+            ranges.deinit(allocr);
+            ranges = undefined;
+          } else {
+            try expr.instrs.append(allocr, .{
+              .range = try ranges.toOwnedSlice(allocr),
+            });
+          }
         }
         continue :outer;
       },
