@@ -20,11 +20,11 @@ pub fn main() !void {
     },
   };
   
+  const bench_names = [_][]const u8{
+    "string",
+  };
+  
   try benchmark(struct {
-    pub const arg_names = [_][]const u8{
-      "string",
-    };
-    
     pub fn run(bench: Benchmark) ?Expr.FindResult {
       var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
       defer arena.deinit();
@@ -34,5 +34,8 @@ pub fn main() !void {
         catch @panic("checkMatch")
       );
     }
-  }, benches);
+  }, .{
+    .args = benches,
+    .arg_names = bench_names,
+  });
 }

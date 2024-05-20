@@ -9,15 +9,15 @@ const time = std.time;
 
 const Decl = std.builtin.Type.Declaration;
 
-pub fn benchmark(comptime B: type, args_: anytype) !void {
+pub fn benchmark(comptime B: type, args_struct: anytype) !void {
     const filter = blk: {
         var argv = std.process.args();
         _ = argv.skip();
         break :blk argv.next();
     };
 
-    const args = if (@hasDecl(B, "args")) B.args else args_;
-    const arg_names = if (@hasDecl(B, "arg_names")) B.arg_names else [_]u8{};
+    const args = if (@hasField(@TypeOf(args_struct), "args")) args_struct.args else [_]void{{}};
+    const arg_names = if (@hasField(@TypeOf(args_struct), "arg_names")) args_struct.arg_names else [_]u8{};
     const min_iterations = if (@hasDecl(B, "min_iterations")) B.min_iterations else 10000;
     const max_iterations = if (@hasDecl(B, "max_iterations")) B.max_iterations else 100000;
     const max_time = 500 * time.ns_per_ms;
@@ -214,30 +214,6 @@ fn alignedPrint(writer: anytype, dir: enum { left, right }, width: u64, comptime
 
 test "benchmark" {
     try benchmark(struct {
-        // The functions will be benchmarked with the following inputs.
-        // If not present, then it is assumed that the functions
-        // take no input.
-        pub const args = [_][]const u8{
-            &([_]u8{ 1, 10, 100 } ** 16),
-            &([_]u8{ 1, 10, 100 } ** 32),
-            &([_]u8{ 1, 10, 100 } ** 64),
-            &([_]u8{ 1, 10, 100 } ** 128),
-            &([_]u8{ 1, 10, 100 } ** 256),
-            &([_]u8{ 1, 10, 100 } ** 512),
-        };
-
-        // You can specify `arg_names` to give the inputs more meaningful
-        // names. If the index of the input exceeds the available string
-        // names, the index is used as a backup.
-        pub const arg_names = [_][]const u8{
-            "block=16",
-            "block=32",
-            "block=64",
-            "block=128",
-            "block=256",
-            "block=512",
-        };
-
         // How many iterations to run each benchmark.
         // If not present then a default will be used.
         pub const min_iterations = 1000;
@@ -261,25 +237,35 @@ test "benchmark" {
 
             return res;
         }
-    },
-        [_]void{{}} // args
-    );
+    }, .{
+        // The functions will be benchmarked with the following inputs.
+        // If not present, then it is assumed that the functions
+        // take no input.
+        .args = &[_][]const u8{
+            &([_]u8{ 1, 10, 100 } ** 16),
+            &([_]u8{ 1, 10, 100 } ** 32),
+            &([_]u8{ 1, 10, 100 } ** 64),
+            &([_]u8{ 1, 10, 100 } ** 128),
+            &([_]u8{ 1, 10, 100 } ** 256),
+            &([_]u8{ 1, 10, 100 } ** 512),
+        },
+
+        // You can specify `arg_names` to give the inputs more meaningful
+        // names. If the index of the input exceeds the available string
+        // names, the index is used as a backup.
+        .arg_names = &[_][]const u8{
+            "block=16",
+            "block=32",
+            "block=64",
+            "block=128",
+            "block=256",
+            "block=512",
+        },
+    });
 }
 
 test "benchmark generics" {
     try benchmark(struct {
-        pub const args = [_]type{
-            @Vector(4, f16),  @Vector(4, f32),  @Vector(4, f64),
-            @Vector(8, f16),  @Vector(8, f32),  @Vector(8, f64),
-            @Vector(16, f16), @Vector(16, f32), @Vector(16, f64),
-        };
-
-        pub const arg_names = [_][]const u8{
-            "vec4f16",  "vec4f32",  "vec4f64",
-            "vec8f16",  "vec8f32",  "vec8f64",
-            "vec16f16", "vec16f32", "vec16f64",
-        };
-
         pub fn sum_vectors(comptime T: type) T {
             const info = @typeInfo(T).Vector;
             const one: T = @splat(@as(info.child, 1));
@@ -291,7 +277,17 @@ test "benchmark generics" {
             }
             return res;
         }
-    },
-        [_]void{{}} // args
-    );
+    }, .{
+        .args = &[_]type{
+            @Vector(4, f16),  @Vector(4, f32),  @Vector(4, f64),
+            @Vector(8, f16),  @Vector(8, f32),  @Vector(8, f64),
+            @Vector(16, f16), @Vector(16, f32), @Vector(16, f64),
+        },
+
+        .arg_names = &[_][]const u8{
+            "vec4f16",  "vec4f32",  "vec4f64",
+            "vec8f16",  "vec8f32",  "vec8f64",
+            "vec16f16", "vec16f32", "vec16f64",
+        },
+    });
 }

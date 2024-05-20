@@ -23,7 +23,7 @@ $(ZIG_CACHE):
 	fi
 
 .PHONY: release
-release:
+release: $(ZIG_CACHE)
 	$(ZIG) build -Doptimize=ReleaseSafe
 
 .PHONY: test
