@@ -9,8 +9,14 @@ const time = std.time;
 
 const Decl = std.builtin.Type.Declaration;
 
-pub fn benchmark(comptime B: type) !void {
-    const args = if (@hasDecl(B, "args")) B.args else [_]void{{}};
+pub fn benchmark(comptime B: type, args_: anytype) !void {
+    const filter = blk: {
+        var argv = std.process.args();
+        _ = argv.skip();
+        break :blk argv.next();
+    };
+
+    const args = if (@hasDecl(B, "args")) B.args else args_;
     const arg_names = if (@hasDecl(B, "arg_names")) B.arg_names else [_]u8{};
     const min_iterations = if (@hasDecl(B, "min_iterations")) B.min_iterations else 10000;
     const max_iterations = if (@hasDecl(B, "max_iterations")) B.max_iterations else 100000;
@@ -82,48 +88,61 @@ pub fn benchmark(comptime B: type) !void {
     var timer = try time.Timer.start();
     inline for (functions) |def| {
         inline for (args, 0..) |arg, index| {
+            var skipped = false;
+            if (filter) |filter_txt| {
+                if (index < arg_names.len) {
+                    if (!std.mem.startsWith(u8, arg_names[index], filter_txt)) {
+                        skipped = true;
+                    }
+                } else {
+                    skipped = true;
+                }
+            }
+
             var runtimes: [max_iterations]u64 = undefined;
             var min: u64 = math.maxInt(u64);
             var max: u64 = 0;
             var runtime_sum: u128 = 0;
 
-            var i: usize = 0;
-            while (i < min_iterations or
-                (i < max_iterations and runtime_sum < max_time)) : (i += 1)
-            {
-                timer.reset();
+            if (!skipped) {
+                var i: usize = 0;
+                while (i < min_iterations or
+                    (i < max_iterations and runtime_sum < max_time)) : (i += 1)
+                {
+                    timer.reset();
 
-                const res = switch (@TypeOf(arg)) {
-                    void => @field(B, def.name)(),
-                    else => @field(B, def.name)(arg),
-                };
-                runtimes[i] = timer.read();
-                runtime_sum += runtimes[i];
-                if (runtimes[i] < min) min = runtimes[i];
-                if (runtimes[i] > max) max = runtimes[i];
-                switch (@TypeOf(res)) {
-                    void => {},
-                    else => std.mem.doNotOptimizeAway(&res),
+                    const res = switch (@TypeOf(arg)) {
+                        void => @field(B, def.name)(),
+                        else => @field(B, def.name)(arg),
+                    };
+                    runtimes[i] = timer.read();
+                    runtime_sum += runtimes[i];
+                    if (runtimes[i] < min) min = runtimes[i];
+                    if (runtimes[i] > max) max = runtimes[i];
+                    switch (@TypeOf(res)) {
+                        void => {},
+                        else => std.mem.doNotOptimizeAway(&res),
+                    }
                 }
-            }
 
-            const runtime_mean: u64 = @intCast(runtime_sum / i);
+                const runtime_mean: u64 = @intCast(runtime_sum / i);
 
-            var d_sq_sum: u128 = 0;
-            for (runtimes[0..i]) |runtime| {
-                const d = @as(i64, @intCast(@as(i128, @intCast(runtime)) - runtime_mean));
-                d_sq_sum += @as(u64, @intCast(d * d));
-            }
-            const variance = d_sq_sum / i;
+                var d_sq_sum: u128 = 0;
+                for (runtimes[0..i]) |runtime| {
+                    const d = @as(i64, @intCast(@as(i128, @intCast(runtime)) - runtime_mean));
+                    d_sq_sum += @as(u64, @intCast(d * d));
+                }
+                const variance = d_sq_sum / i;
 
-            if (index < arg_names.len) {
-                const arg_name = formatter("{s}", arg_names[index]);
-                _ = try printBenchmark(stderr, min_width, def.name, arg_name, i, min, max, variance, runtime_mean);
-            } else {
-                _ = try printBenchmark(stderr, min_width, def.name, index, i, min, max, variance, runtime_mean);
+                if (index < arg_names.len) {
+                    const arg_name = formatter("{s}", arg_names[index]);
+                    _ = try printBenchmark(stderr, min_width, def.name, arg_name, i, min, max, variance, runtime_mean);
+                } else {
+                    _ = try printBenchmark(stderr, min_width, def.name, index, i, min, max, variance, runtime_mean);
+                }
+                try stderr.writeAll("\n");
+                try stderr.context.flush();
             }
-            try stderr.writeAll("\n");
-            try stderr.context.flush();
         }
     }
 }
@@ -242,7 +261,9 @@ test "benchmark" {
 
             return res;
         }
-    });
+    },
+        [_]void{{}} // args
+    );
 }
 
 test "benchmark generics" {
@@ -270,5 +291,7 @@ test "benchmark generics" {
             }
             return res;
         }
-    });
+    },
+        [_]void{{}} // args
+    );
 }

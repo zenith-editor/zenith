@@ -96,4 +96,51 @@ pub fn build(b: *std.Build) !void {
     test_step.dependOn(run_tests_step);
   }
   
+  // benchmark
+  
+  const bench_dep = b.addModule("bench", .{
+    .root_source_file = .{ .path = "ext/zig-bench/bench.zig" },
+    .target = target,
+    .optimize = optimize,
+  });
+  
+  const bench_step = b.step("benchmark", "Run benchmarks");
+  
+  inline for ([_]struct {
+    const Module = struct {
+      name: []const u8,
+      module: *std.Build.Module,
+    };
+    
+    name: []const u8,
+    path: []const u8,
+    module: ?Module = null,
+  }{
+    .{ .name = "patterns",
+       .path = "src/benchmarks/patterns.zig",
+       .module = .{ .name = "patterns", .module = patterns_module }, },
+  }) |bench_target| {
+    const build_benchs = b.addExecutable(.{
+      .name = try std.fmt.allocPrint(b.allocator, "bench_{s}", .{bench_target.name}),
+      .root_source_file = .{ .path = bench_target.path, },
+      .target = target,
+      .optimize = optimize,
+    });
+    build_benchs.root_module.addImport("bench", bench_dep);
+    if (bench_target.module) |module| {
+      build_benchs.root_module.addImport(module.name, module.module);
+    }
+    
+    const run_benchs = b.addRunArtifact(build_benchs);
+    const install_benchs = b.addInstallArtifact(build_benchs, .{});
+    
+    const run_benchs_step = b.step(
+      try std.fmt.allocPrint(b.allocator, "bench-{s}", .{bench_target.name}),
+      try std.fmt.allocPrint(b.allocator, "Run {s} benchmarks", .{bench_target.name}),
+    );
+    run_benchs_step.dependOn(&run_benchs.step);
+    run_benchs_step.dependOn(&install_benchs.step);
+    
+    bench_step.dependOn(run_benchs_step);
+  }
 }
