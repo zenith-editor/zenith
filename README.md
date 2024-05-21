@@ -6,8 +6,7 @@ A very minimal console text editor written in Zig.
 
 ## Requirements
 
- * A terminal emulator that supports ANSI escape sequences (currently tested with
- xterm on Linux)
+ * A terminal emulator that supports ANSI escape sequences (currently tested with xterm on Linux)
 
 ## Build
 
@@ -29,8 +28,7 @@ zig build -Doptimize=ReleaseSafe
 
 ### Text mode
 
-By default, zenith starts in text mode, which supports the following shortcuts
-(`^x` means ctrl + x):
+By default, zenith starts in text mode, which supports the following shortcuts (`^x` means ctrl + x):
 
 ```
 ^q: quit
@@ -49,8 +47,7 @@ Home/End can be used to go to the start/end of a line.
 
 ### Block mode
 
-Within block mode (accessible with `^b`), you can mark a block of text by moving
-your cursor and pressing Enter. Block mode supports the shortcuts:
+Within block mode (accessible with `^b`), you can mark a block of text by moving your cursor and pressing Enter. Block mode supports the shortcuts:
 
 ```
 enter: set end marker position
