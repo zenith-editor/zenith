@@ -48,6 +48,7 @@ tab_size: i32 = 2,
 use_tabs: bool = false,
 use_native_clipboard: bool = true,
 show_line_numbers: bool = true,
+wrap_text: bool = true,
 
 // methods
 
@@ -168,6 +169,8 @@ fn parseInner(self: *Reader,
             self.use_native_clipboard = b;
           } else if (try kv.get(bool, "show-line-numbers")) |b| {
             self.show_line_numbers = b;
+          } else if (try kv.get(bool, "wrap-text")) |b| {
+            self.wrap_text = b;
           } else {
             return error.UnknownKey;
           }

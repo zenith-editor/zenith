@@ -828,8 +828,9 @@ pub const Editor = struct {
     var ts = std.time.microTimestamp();
     while (true) {
       if (sig.resized) {
-        try self.updateWinSize();
         sig.resized = false;
+        try self.updateWinSize();
+        try self.text_handler.onResize(self);
       }
       self.handleInputPolling() catch |err| {
         if (err == error.Quit) {

@@ -127,7 +127,16 @@ pub const TextHandler = struct {
     };
   }
   
+  // events
+  
+  pub fn onResize(self: *TextHandler, E: *Editor) !void {
+    if (E.conf.wrap_text) {
+      try self.wrapText(E);
+    }
+  }
+  
   // io
+  
   pub fn open(self: *TextHandler, E: *Editor, file: std.fs.File, flush_buffer: bool) !void {
     const stat = try file.stat();
     const size = stat.size;
@@ -213,8 +222,10 @@ pub const TextHandler = struct {
     
     self.calcLineDigits(E);
     
-    // wrap text must be done after calcLineDigits
-    try self.wrapText(E);
+    if (E.conf.wrap_text) {
+      // wrap text must be done after calcLineDigits
+      try self.wrapText(E);
+    }
   }
   
   // general manip
@@ -786,17 +797,17 @@ pub const TextHandler = struct {
         try self.recheckIsMultibyte(self.cursor.row);
         try self.recheckIsMultibyte(self.cursor.row + 1);
       }
-      if (line_inserted) {
+      if (line_inserted and E.conf.wrap_text) {
         try self.wrapLine(E, self.cursor.row+1);
-        self.goDownHead(E);
       }
+      self.goDownHead(E);
       self.calcLineDigits(E);
     } else {
       if (char.len > 1) {
         self.lineinfo.setMultibyte(self.cursor.row, true);
       }
       self.lineinfo.increaseOffsets(self.cursor.row + 1, @intCast(char.len));
-      if (true) {
+      if (E.conf.wrap_text) {
         try self.wrapLine(E, self.cursor.row);
         if (
           self.cursor.col == self.getRowLen(self.cursor.row) and
@@ -921,16 +932,11 @@ pub const TextHandler = struct {
     for ((first_row_after_insidx - 1)..(first_row_after_insidx + newlines.items.len)) |i| {
       try self.recheckIsMultibyte(@intCast(i));
     }
-    if (true) {
-      try self.wrapTextFrom(
+    if (E.conf.wrap_text) {
+      return self.wrapTextFrom(
         E,
         @intCast(first_row_after_insidx - 1),
         @intCast(first_row_after_insidx + newlines.items.len)
-      );
-      // TODO: faster way of doing this that doesnt involve searching
-      return self.lineinfo.findMaxLineBeforeOffset(
-        @intCast(insidx+slice.len),
-        @intCast(first_row_after_insidx - 1 + newlines.items.len),
       );
     } else {
       return @intCast(first_row_after_insidx - 1 + newlines.items.len);
@@ -1089,12 +1095,16 @@ pub const TextHandler = struct {
         self.lineinfo.decreaseOffsets(cur_at_deleted_char.row+1, 1);
         self.lineinfo.remove(cur_at_deleted_char.row+1);
         try self.recheckIsMultibyteAfterDelete(cur_at_deleted_char.row, deleted_char_is_mb);
-        try self.wrapLine(E, cur_at_deleted_char.row);
+        if (E.conf.wrap_text) {
+          try self.wrapLine(E, cur_at_deleted_char.row);
+        }
         self.calcLineDigits(E);
       } else {
         self.lineinfo.decreaseOffsets(cur_at_deleted_char.row + 1, seqlen);
         try self.recheckIsMultibyteAfterDelete(cur_at_deleted_char.row, deleted_char_is_mb);
-        try self.wrapLine(E, cur_at_deleted_char.row);
+        if (E.conf.wrap_text) {
+          try self.wrapLine(E, cur_at_deleted_char.row);
+        }
       }
     } else {
       if (self.lineinfo.isContLine(cur_at_deleted_char.row)) {
@@ -1105,7 +1115,9 @@ pub const TextHandler = struct {
         } else {
           self.lineinfo.decreaseOffsets(cur_at_deleted_char.row+1, seqlen);
           try self.recheckIsMultibyteAfterDelete(cur_at_deleted_char.row, deleted_char_is_mb);
-          try self.wrapLine(E, cur_at_deleted_char.row);
+          if (E.conf.wrap_text) {
+            try self.wrapLine(E, cur_at_deleted_char.row);
+          }
         }
       } else if (cur_at_deleted_char.col == 0) {
         std.debug.assert(deleted_char[0] == '\n');
@@ -1118,7 +1130,9 @@ pub const TextHandler = struct {
       } else {
         self.lineinfo.decreaseOffsets(cur_at_deleted_char.row + 1, seqlen);
         try self.recheckIsMultibyteAfterDelete(cur_at_deleted_char.row, deleted_char_is_mb);
-        try self.wrapLine(E, cur_at_deleted_char.row);
+        if (E.conf.wrap_text) {
+          try self.wrapLine(E, cur_at_deleted_char.row);
+        }
       }
     }
 
@@ -1201,7 +1215,10 @@ pub const TextHandler = struct {
       try self.recheckIsMultibyte(removed_line_start + 1);
     }
     
-    try self.wrapTextFrom(E, removed_line_start, removed_line_start+1);
+    if (E.conf.wrap_text) {
+      _ = try self.wrapTextFrom(E, removed_line_start, removed_line_start+1);
+    }
+    
     if (
       self.lineinfo.isContLine(removed_line_start) and
       self.getRowLen(removed_line_start) == 0
@@ -1685,17 +1702,15 @@ pub const TextHandler = struct {
   pub fn wrapTextFrom(
     self: *TextHandler, E: *Editor,
     from_line: u32, to_line: u32,
-  ) !void {
+  ) !u32 {
     var line = from_line;
     var to = to_line;
-    // std.debug.print("from {}->{}\n", .{from_line,to_line});
     while (line < to) {
-      // std.debug.print("line {}\n", .{line});
       const result = try self.lineinfo.updateLineWrap(self, E, line);
       to = @intCast(to + result.len_change);
       line = @intCast(result.next_line);
     }
-    //self.lineinfo.debugPrint();
+    return line;
   }
   
   fn wrapLine(self: *TextHandler, E: *Editor, line: u32) !void {
