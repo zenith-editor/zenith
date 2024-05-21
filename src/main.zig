@@ -25,7 +25,7 @@ pub fn main() !void {
   {
     // arguments
     var args = std.process.args();
-    const program_name = args.next() orelse unreachable;
+    const program_name = args.next() orelse @panic("args.next returned null");
     while (args.next()) |arg| {
       if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
         return showHelp(program_name);

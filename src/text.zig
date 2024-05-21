@@ -1603,7 +1603,7 @@ pub const TextHandler = struct {
         };
       }
     } else {
-      unreachable;
+      @panic("markEnd called without markers");
     }
     E.needs_redraw = true;
   }
