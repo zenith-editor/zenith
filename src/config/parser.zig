@@ -11,7 +11,7 @@ const Error = @import("../ds/error.zig").Error;
 
 pub const Value = union(enum) {
   uninitialized: void,
-  i32: i32,
+  i64: i64,
   string: str.StringUnmanaged,
   bool: bool,  
   array: []Value,
@@ -34,10 +34,10 @@ pub const Value = union(enum) {
   
   pub fn get(self: *const Value, comptime T: type) AccessError!?T {
     switch(T) {
-      inline i32 => {
+      inline i64 => {
         switch(self.*) {
-          .i32 => |v| { return v; },
-          else => {return error.ExpectedI32Value;},
+          .i64 => |v| { return v; },
+          else => {return error.ExpectedI64Value;},
         }
       },
       inline bool => {
@@ -66,7 +66,7 @@ pub const Value = union(enum) {
 };
 
 pub const AccessError = error {
-  ExpectedI32Value,
+  ExpectedI64Value,
   ExpectedBoolValue,
   ExpectedStringValue,
   ExpectedArrayValue,
@@ -413,10 +413,10 @@ pub const Parser = struct {
     }
   }
   
-  fn parseInteger(self: *Parser, init_digit: ?i32, is_neg: bool, start_pos: usize) ValueResult {
-    var num: i32 = 0;
+  fn parseInteger(self: *Parser, init_digit: ?i64, is_neg: bool, start_pos: usize) ValueResult {
+    var num: i64 = 0;
     if (init_digit == 0) {
-      return .{ .ok = .{ .i32 = 0, }, };
+      return .{ .ok = .{ .i64 = 0, }, };
     }
     else if (init_digit == null) {
       if (self.peek()) |char| {
@@ -427,7 +427,7 @@ pub const Parser = struct {
           },
           '0' => {
             self.pos += 1;
-            return .{ .ok = .{ .i32 = 0, }, };
+            return .{ .ok = .{ .i64 = 0, }, };
           },
           else => {
             return .{
@@ -462,11 +462,11 @@ pub const Parser = struct {
           self.pos += 1;
         },
         else => {
-          return .{ .ok = .{ .i32 = num, }, };
+          return .{ .ok = .{ .i64 = num, }, };
         },
       }
     }
-    return .{ .ok = .{ .i32 = num, }, };
+    return .{ .ok = .{ .i64 = num, }, };
   }
 
   fn parseStrInner(self: *Parser, allocr: std.mem.Allocator, start_pos: usize) !ValueResult {

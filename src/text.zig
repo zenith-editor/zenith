@@ -824,7 +824,13 @@ pub const TextHandler = struct {
     const line_is_multibyte = self.lineinfo.checkIsMultibyte(self.cursor.row);
     const insidx: u32 = self.calcOffsetFromCursor();
     
-    try self.undo_mgr.doAppend(insidx, @intCast(char.len));
+    self.undo_mgr.doAppend(insidx, @intCast(char.len)) catch |err| {
+      if (err == error.OutOfMemoryUndo) {
+        try self.handleUndoOOM(E);
+      } else {
+        return err;
+      }
+    };
     
     if (insidx > self.head_end and insidx <= self.head_end + self.gap.items.len) {
       // insertion within gap
@@ -926,7 +932,13 @@ pub const TextHandler = struct {
       }
     }
     const insidx: u32 = self.calcOffsetFromCursor();
-    try self.undo_mgr.doAppend(insidx, @intCast(indent.len));
+    self.undo_mgr.doAppend(insidx, @intCast(indent.len)) catch |err| {
+      if (err == error.OutOfMemoryUndo) {
+        try self.handleUndoOOM(E);
+      } else {
+        return err;
+      }
+    };
     return self.insertSliceAtPosWithHints(E, insidx, indent.slice(), true, false);
   }
   
@@ -946,7 +958,13 @@ pub const TextHandler = struct {
     
     if (indent.len > 0) {
       const insidx: u32 = self.calcOffsetFromCursor();
-      try self.undo_mgr.doAppend(insidx, @intCast(indent.len));
+      self.undo_mgr.doAppend(insidx, @intCast(indent.len)) catch |err| {
+        if (err == error.OutOfMemoryUndo) {
+          try self.handleUndoOOM(E);
+        } else {
+          return err;
+        }
+      };
       try self.insertSliceAtPosWithHints(E, insidx, indent.constSlice(), false, false);
     }
   }
@@ -1013,7 +1031,13 @@ pub const TextHandler = struct {
   
   pub fn insertSlice(self: *TextHandler, E: *Editor, slice: []const u8) !void {
     const insidx: u32 = self.calcOffsetFromCursor();
-    try self.undo_mgr.doAppend(insidx, @intCast(slice.len));
+    self.undo_mgr.doAppend(insidx, @intCast(slice.len)) catch |err| {
+      if (err == error.OutOfMemoryUndo) {
+        try self.handleUndoOOM(E);
+      } else {
+        return err;
+      }
+    };
     return self.insertSliceAtPosWithHints(E, insidx, slice, true, false);
   }
   
@@ -1155,7 +1179,13 @@ pub const TextHandler = struct {
       self.gap.replaceRangeAssumeCapacity(gap_relidx, seqlen, &[_]u8{});
     }
     
-    try self.undo_mgr.doDelete(delidx, deleted_char[0..seqlen]);
+    self.undo_mgr.doDelete(delidx, deleted_char[0..seqlen]) catch |err| {
+      if (err == error.OutOfMemoryUndo) {
+        try self.handleUndoOOM(E);
+      } else {
+        return err;
+      }
+    };
     
     // Highlighting
     
@@ -1241,9 +1271,16 @@ pub const TextHandler = struct {
       const gap_delete_end = delete_end - self.head_end;
       
       if (record_undoable_action) {
-        try self.undo_mgr.doDelete(
+        self.undo_mgr.doDelete(
           delete_start, self.gap.items[gap_delete_start..gap_delete_end]
-        );
+        ) catch |err| {
+          if (err == error.OutOfMemoryUndo) {
+            try self.handleUndoOOM(E);
+            return null;
+          } else {
+            return err;
+          }
+        };
       }
       
       retval = if (copy_orig_slice_to_undo_heap)
@@ -1263,9 +1300,16 @@ pub const TextHandler = struct {
       try self.flushGapBuffer();
       
       if (record_undoable_action) {
-        try self.undo_mgr.doDelete(
+        self.undo_mgr.doDelete(
           delete_start, self.buffer.items[delete_start..delete_end]
-        );
+        ) catch |err| {
+          if (err == error.OutOfMemoryUndo) {
+            try self.handleUndoOOM(E);
+            return null;
+          } else {
+            return err;
+          }
+        };
       }
       
       retval = if (copy_orig_slice_to_undo_heap)
@@ -1397,7 +1441,13 @@ pub const TextHandler = struct {
     
     if (replace_start == replace_end) {
       if (record_undoable_action) {
-        try self.undo_mgr.doAppend(replace_start, @intCast(new_buffer.len));
+        self.undo_mgr.doAppend(replace_start, @intCast(new_buffer.len)) catch |err| {
+          if (err == error.OutOfMemoryUndo) {
+            try self.handleUndoOOM(E);
+          } else {
+            return err;
+          }
+        };
       }
       return self.insertSliceAtPos(
         E,
@@ -1411,11 +1461,17 @@ pub const TextHandler = struct {
     // TODO: replace within gap buffer
     
     if (record_undoable_action) {
-      try self.undo_mgr.doReplace(
+      self.undo_mgr.doReplace(
         replace_start,
         self.buffer.items[replace_start..replace_end],
         new_buffer,
-      );
+      ) catch |err| {
+        if (err == error.OutOfMemoryUndo) {
+          try self.handleUndoOOM(E);
+        } else {
+          return err;
+        }
+      };
     }
     
     const old_buffer_len = replace_end - replace_start;
@@ -1824,6 +1880,13 @@ pub const TextHandler = struct {
     return self.highlight.run(
       self, E.allocr(), changed_region_start, shift, is_insert, line_start
     );
+  }
+  
+  // Undo
+  
+  pub fn handleUndoOOM(self: *TextHandler, E: *Editor) !void {
+    _ = self;
+    E.setHideableMsgConst("Unable to allocate undo action");
   }
   
 };

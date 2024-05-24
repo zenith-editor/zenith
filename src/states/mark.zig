@@ -60,7 +60,7 @@ pub fn handleInput(
   }
   
   else if (this_shortcuts.key("help", keysym)) {
-    self.help_msg = &this_shortcuts_help;
+    self.copyHideableMsg(&this_shortcuts_help);
     self.needs_redraw = true;
   }
   

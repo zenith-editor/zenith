@@ -76,6 +76,14 @@ pub const UndoManager = struct {
     return self.gpa.allocator();
   }
   
+  pub fn setMemoryLimit(self: *UndoManager, bytes: usize) void {
+    self.gpa.setRequestedMemoryLimit(bytes);
+  }
+  
+  pub fn canAllocateMemory(self: *UndoManager, bytes: usize) bool {
+    return (self.gpa.total_requested_bytes + bytes) < self.gpa.requested_memory_limit;
+  }
+  
   pub fn clear(self: *UndoManager) void {
     self.clearRedoStack();
     while (self.undo_stack.popFirst()) |action_ptr| {
@@ -93,13 +101,16 @@ pub const UndoManager = struct {
     std.debug.assert(self.redo_stack.first == null);
     var gpa = &self.gpa;
     const allocator = gpa.allocator();
-    while ((gpa.total_requested_bytes + @sizeOf(ActionStack.Node)) > gpa.requested_memory_limit) {
-      const opt_action_ptr = self.undo_stack.popFirst();
-      if (opt_action_ptr) |action_ptr| {
+    while (!self.canAllocateMemory(@sizeOf(ActionStack.Node))) {
+      if (self.undo_stack.popFirst()) |action_ptr| {
         self.destroyActionNode(action_ptr);
+      } else {
+        break;
       }
     }
-    const action_node: *ActionStack.Node = try allocator.create(ActionStack.Node);
+    const action_node: *ActionStack.Node = allocator.create(ActionStack.Node) catch {
+      return error.OutOfMemoryUndo;
+    };
     action_node.* = ActionStack.Node { .data = action.*, };
     self.undo_stack.append(action_node);
   } 
@@ -201,6 +212,9 @@ pub const UndoManager = struct {
       switch (act.data) {
         .append => |*append| {
           if (append.orig_buffer == null) {
+            if (self.canAllocateMemory(append.len)) {
+              return error.OutOfMemoryUndo;
+            }
             append.orig_buffer = try E.text_handler.deleteRegionAtPos(
               E,
               append.pos,

@@ -12,6 +12,13 @@ pub const MaybeOwnedSlice = union(enum) {
   owned: []u8,
   static: []const u8,
   
+  pub fn isOwned(self: *const MaybeOwnedSlice) bool {
+    return switch(self.*) {
+      .owned => true,
+      .static => false,
+    };
+  }
+  
   pub fn slice(self: *const MaybeOwnedSlice) []const u8 {
     switch(self.*) {
       .owned => |owned| { return owned; },

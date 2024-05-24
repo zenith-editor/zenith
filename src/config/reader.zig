@@ -107,6 +107,7 @@ use_tabs: bool = false,
 use_native_clipboard: bool = true,
 show_line_numbers: bool = true,
 wrap_text: bool = true,
+undo_memory_limit: usize = 4 * 1024 * 1024,
 highlights: std.ArrayListUnmanaged(Highlight) = .{},
 highlights_ext_to_idx: std.StringHashMapUnmanaged(u32) = .{},
 
@@ -256,13 +257,13 @@ fn parseInner(
     .kv => |*kv| {
       switch (state.config_section) {
         .global => {
-          if (try kv.get(i32, "tab-size")) |int| {
+          if (try kv.get(i64, "tab-size")) |int| {
             if (int > conf.MAX_TAB_SIZE) {
               self.tab_size = conf.MAX_TAB_SIZE;
             } else if (int < 0) {
               self.tab_size = 2;
             } else {
-              self.tab_size = int;
+              self.tab_size = @intCast(int);
             }
           } else if (try kv.get(bool, "use-tabs")) |b| {
             self.use_tabs = b;
@@ -272,6 +273,8 @@ fn parseInner(
             self.show_line_numbers = b;
           } else if (try kv.get(bool, "wrap-text")) |b| {
             self.wrap_text = b;
+          } else if (try kv.get(i64, "undo-memory-limit")) |int| {
+            self.undo_memory_limit = @intCast(int);
           } else {
             return error.UnknownKey;
           }
@@ -425,7 +428,7 @@ fn parseHighlight(self: *Reader, state: *ParserState, hl_parse: *HighlightToPars
             writer.color = editor.Editor.ColorCode.idFromStr(s) orelse {
               return error.ExpectedColorCode;
             };
-          } else if (kv.val.get(i32) catch null) |int| {
+          } else if (kv.val.get(i64) catch null) |int| {
             writer.color = @intCast(int);
           } else {
             return error.ExpectedColorCode;

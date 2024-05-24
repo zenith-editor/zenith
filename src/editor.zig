@@ -154,7 +154,16 @@ pub const Commands = struct {
   pub const Find = @import("./cmd/find.zig");
   pub const Replace = @import("./cmd/replace.zig");
 };
+
+pub const HideableMessage = struct {
+  text: str.MaybeOwnedSlice,
+  rows: u32,
   
+  pub fn deinit(self: *HideableMessage, allocator: std.mem.Allocator) void {
+    self.text.deinit(allocator);
+  }
+};
+
 pub const Editor = struct {
   const STATUS_BAR_HEIGHT = 2;
   const INPUT_BUFFER_SIZE = 64;
@@ -185,7 +194,7 @@ pub const Editor = struct {
   
   conf: config.Reader,
   
-  help_msg: ?*const shortcuts.HelpText = null,
+  unprotected_hideable_msg: ?HideableMessage = null,
   
   unprotected_state: State,
   
@@ -198,7 +207,7 @@ pub const Editor = struct {
     const stdin: std.fs.File = std.io.getStdIn();
     const stdout: std.fs.File = std.io.getStdOut();
     var alloc_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
-    const text_handler: text.TextHandler = try text.TextHandler.create();
+    var text_handler: text.TextHandler = try text.TextHandler.create();
     var conf: config.Reader = .{};
     switch (config.Reader.open(alloc_gpa.allocator())) {
       .ok => |conf_ok| {
@@ -216,6 +225,7 @@ pub const Editor = struct {
         }
       },
     }
+    text_handler.undo_mgr.setMemoryLimit(conf.undo_memory_limit);
     var editor = Editor {
       .in = stdin,
       .inr = stdin.reader(),
@@ -270,6 +280,33 @@ pub const Editor = struct {
   pub fn unsetCmdData(self: *Editor) void {
     self.unprotected_cmd_data.?.deinit(self);
     self.unprotected_cmd_data = null;
+  }
+  
+  // hideable message
+  
+  pub fn setHideableMsgConst(self: *Editor, static: []const u8) void {
+    if (self.unprotected_hideable_msg) |*msg| {
+      msg.deinit(self.allocr());
+    }
+    self.unprotected_hideable_msg = .{
+      .text = .{ .static = static, },
+      .rows = 1,
+    };
+  }
+  
+  pub fn copyHideableMsg(self: *Editor, other: *const HideableMessage) void {
+    if (self.unprotected_hideable_msg) |*msg| {
+      msg.deinit(self.allocr());
+    }
+    std.debug.assert(!other.text.isOwned());
+    self.unprotected_hideable_msg = other.*;
+  }
+  
+  pub fn unsetHideableMsg(self: *Editor) void {
+    if (self.unprotected_hideable_msg != null) {
+      self.unprotected_hideable_msg.?.deinit(self.allocr());
+      self.unprotected_hideable_msg = null;
+    }
   }
   
   // raw mode
@@ -603,8 +640,8 @@ pub const Editor = struct {
   
   fn handleInput(self: *Editor, is_clipboard: bool) !void {
     if (self.readKey()) |keysym| {
-      if (self.help_msg != null) {
-        self.help_msg = null;
+      if (self.unprotected_hideable_msg != null) {
+        self.unsetHideableMsg();
         self.needs_redraw = true;
       }
       switch (keysym.key) {
@@ -913,14 +950,14 @@ pub const Editor = struct {
   }
   
   fn showUpperLayers(self: *Editor) !void {
-    if (self.help_msg) |help_msg| {
+    if (self.unprotected_hideable_msg) |msg| {
       var row: u32 = 0;
-      if (self.getTextHeight() >= help_msg.rows) {
-        row = self.getTextHeight() - help_msg.rows;
+      if (self.getTextHeight() >= msg.rows) {
+        row = self.getTextHeight() - msg.rows;
       }
       try self.moveCursor(row, 0);
       try self.outw.writeAll(ESC_CLEAR_LINE);
-      for (help_msg.text) |char| {
+      for (msg.text.slice()) |char| {
         if (char == '\n') {
           row += 1;
           try self.moveCursor(row, 0);

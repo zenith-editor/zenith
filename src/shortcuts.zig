@@ -1,10 +1,6 @@
 const std = @import("std");
 const kbd = @import("./kbd.zig");
-
-pub const HelpText = struct {
-  text: []const u8,
-  rows: u32,
-};
+const HideableMessage = @import("./editor.zig").HideableMessage;
 
 pub const Section = struct {
   name: []const u8,
@@ -28,7 +24,7 @@ pub const Section = struct {
     return tail[0].genHelp() ++ tailstr;
   }
   
-  fn genHelp(comptime self: *const Section) HelpText {
+  fn genHelp(comptime self: *const Section) HideableMessage {
     comptime {
       const text = self.name ++ "\n" ++ Section.genHelpTail(self.list);
       var rows: u32 = 1;
@@ -38,7 +34,7 @@ pub const Section = struct {
         }
       }
       return .{
-        .text = text,
+        .text = .{ .static = text, },
         .rows = rows,
       };
     }
@@ -110,7 +106,7 @@ pub const CMD_FIND = Section {
     .{ .key='h', .ctrl=true, .id="help", .desc="help" },
     .{ .key='b', .ctrl=true, .id="block", .desc="send to block mode (cmd)" },
     .{ .key='r', .ctrl=true, .id="rep", .desc="replace with..." },
-    .{ .key='h', .ctrl=true, .id="allrep", .desc="replace all with..." },
+    .{ .key='s', .ctrl=true, .id="allrep", .desc="replace all with..." },
     .{ .key='g', .ctrl=true, .id="resub", .desc="replace all with... (regex)" },
     .{ .key='e', .ctrl=true, .id="refind", .desc="find (regex)" },
     .{ .key='w', .ctrl=true, .id="refindb", .desc="find backwards (regex)" },
