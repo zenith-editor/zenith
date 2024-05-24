@@ -341,7 +341,7 @@ pub const Parser = struct {
           .ok = .{
             .kv = .{
               .key = key,
-              .val = val.unwrap(),
+              .val = val.ok,
             },
           },
         };

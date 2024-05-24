@@ -5,7 +5,7 @@
 //
 const std = @import("std");
 const builtin = @import("builtin");
-const build_config = @import("config");
+const build_config = @import("build_config");
 
 const config = @import("./config.zig");
 const kbd = @import("./kbd.zig");
@@ -111,12 +111,12 @@ pub const CommandData = struct {
   
   fn deinit(self: *CommandData, E: *Editor) void {
     if (self.promptoverlay) |*promptoverlay| {
-      promptoverlay.deinit(E.allocr());
+      promptoverlay.deinit(E.allocr);
     }
     if (self.args) |*args| {
-      args.deinit(E.allocr());
+      args.deinit(E.allocr);
     }
-    self.cmdinp.deinit(E.allocr());
+    self.cmdinp.deinit(E.allocr);
   }
   
   pub fn replace(self: *CommandData, E: *Editor, new_cmd_data: *const CommandData) void {
@@ -126,24 +126,24 @@ pub const CommandData = struct {
   
   pub fn replaceArgs(self: *CommandData, E: *Editor, new_args: *const Args) void {
     if (self.args != null) {
-      self.args.?.deinit(E.allocr());
+      self.args.?.deinit(E.allocr);
     }
     self.args = new_args.*;
   }
   
   pub fn replacePromptOverlay(self: *CommandData, E: *Editor, static: []const u8) void {
     if (self.promptoverlay != null) {
-      self.promptoverlay.?.deinit(E.allocr());
+      self.promptoverlay.?.deinit(E.allocr);
     }
     self.promptoverlay = .{ .static = static, };
   }
   
   pub fn replacePromptOverlayFmt(self: *CommandData, E: *Editor, comptime fmt: []const u8, args: anytype) !void {
     if (self.promptoverlay != null) {
-      self.promptoverlay.?.deinit(E.allocr());
+      self.promptoverlay.?.deinit(E.allocr);
     }
     self.promptoverlay = .{
-      .owned = try std.fmt.allocPrint(E.allocr(), fmt, args),
+      .owned = try std.fmt.allocPrint(E.allocr, fmt, args),
     };
   }
 };
@@ -183,7 +183,7 @@ pub const Editor = struct {
   
   state_handler: *const StateHandler,
   
-  alloc_gpa: std.heap.GeneralPurposeAllocator(.{}),
+  allocr: std.mem.Allocator,
   
   w_width: u32 = 0,
   w_height: u32 = 0,
@@ -203,47 +203,61 @@ pub const Editor = struct {
   // terminal extensions
   has_bracketed_paste: bool = false,
   
-  pub fn create() !Editor {
+  pub fn create(allocr: std.mem.Allocator) !Editor {
     const stdin: std.fs.File = std.io.getStdIn();
     const stdout: std.fs.File = std.io.getStdOut();
-    var alloc_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
-    var text_handler: text.TextHandler = try text.TextHandler.create();
-    var conf: config.Reader = .{};
-    switch (config.Reader.open(alloc_gpa.allocator())) {
-      .ok => |conf_ok| {
-        conf = conf_ok;
-      },
-      .err => |err| {
-        switch (err.type) {
-          error.FileNotFound => {},
-          else => {
-            const writer = stdout.writer();
-            try writer.print("Unable to read config file: {}\n", .{err});
-            try writer.print("Press Enter to continue...\n",.{});
-            _ = stdin.reader().readByte() catch {};
-          },
-        }
-      },
-    }
-    text_handler.undo_mgr.setMemoryLimit(conf.undo_memory_limit);
     var editor = Editor {
       .in = stdin,
       .inr = stdin.reader(),
       .out = stdout,
       .outw = stdout.writer(),
       .state_handler = &StateHandler.Text,
-      .alloc_gpa = alloc_gpa,
-      .text_handler = text_handler,
-      .conf = conf,
+      .allocr = allocr,
+      .text_handler = try text.TextHandler.create(),
+      .conf = .{},
       .unprotected_state = State.INIT,
       .unprotected_cmd_data = null,
     };
+    try editor.loadConfig();
     try editor.updateWinSize();
     return editor;
   }
   
-  pub fn allocr(self: *Editor) std.mem.Allocator {
-    return self.alloc_gpa.allocator();
+  fn loadConfig(self: *Editor) !void {
+    var result = config.Reader.open(self.allocr);
+    
+    switch (result) {
+      .ok => |conf_ok| {
+        self.conf = conf_ok;
+      },
+      .err => |*err| {
+        defer err.deinit(self.allocr);
+        if (err.type == error.FileNotFound and err.location == .not_loaded) {
+          // ignored
+        } else {
+          const writer = self.outw;
+          switch (err.location) {
+            .not_loaded => {
+              try writer.print("Unable to read config file: {}\n", .{err.type});
+            },
+            .main => {
+              try writer.print(
+                "Unable to read config file <{s}:+{}>: {}\n",
+                .{ self.conf.config_filepath orelse "???", err.pos orelse 0, err.type });
+            },
+            .highlight => |path| {
+              try writer.print(
+                "Unable to read config file <{s}:+{}>: {}\n",
+                .{ path, err.pos.?, err.type });
+            },
+          }
+          try writer.print("Press Enter to continue...\n",.{});
+          _ = self.inr.readByte() catch {};
+        }
+      },
+    }
+    
+    self.text_handler.undo_mgr.setMemoryLimit(self.conf.undo_memory_limit);
   }
   
   pub fn getState(self: *const Editor) State {
@@ -286,7 +300,7 @@ pub const Editor = struct {
   
   pub fn setHideableMsgConst(self: *Editor, static: []const u8) void {
     if (self.unprotected_hideable_msg) |*msg| {
-      msg.deinit(self.allocr());
+      msg.deinit(self.allocr);
     }
     self.unprotected_hideable_msg = .{
       .text = .{ .static = static, },
@@ -296,7 +310,7 @@ pub const Editor = struct {
   
   pub fn copyHideableMsg(self: *Editor, other: *const HideableMessage) void {
     if (self.unprotected_hideable_msg) |*msg| {
-      msg.deinit(self.allocr());
+      msg.deinit(self.allocr);
     }
     std.debug.assert(!other.text.isOwned());
     self.unprotected_hideable_msg = other.*;
@@ -304,7 +318,7 @@ pub const Editor = struct {
   
   pub fn unsetHideableMsg(self: *Editor) void {
     if (self.unprotected_hideable_msg != null) {
-      self.unprotected_hideable_msg.?.deinit(self.allocr());
+      self.unprotected_hideable_msg.?.deinit(self.allocr);
       self.unprotected_hideable_msg = null;
     }
   }
@@ -1033,7 +1047,7 @@ pub const Editor = struct {
     self.restoreTerminal() catch {};
   }
   
-  /// opened_file_str must be allocated by E.allocr()
+  /// opened_file_str must be allocated by E.allocr
   pub fn openAtStart(self: *Editor, opened_file_str: str.StringUnmanaged) !void {
     self.setState(.command);
     self.setCmdData(&.{

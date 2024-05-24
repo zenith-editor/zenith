@@ -37,10 +37,12 @@ pub fn main() !void {
     }
   }
   sig.registerSignals();
-  var E = try editor.Editor.create();
+  var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+  const allocr = gpa.allocator();
+  var E = try editor.Editor.create(allocr);
   if (opt_opened_file) |opened_file| {
     var opened_file_str: str.StringUnmanaged = .{};
-    try opened_file_str.appendSlice(E.allocr(), opened_file);
+    try opened_file_str.appendSlice(E.allocr, opened_file);
     try E.openAtStart(opened_file_str);
   }
   errdefer E.restoreTerminal() catch {};

@@ -12,7 +12,7 @@ test "parse empty section" {
   const allocr = gpa.allocator();
   var parser = Parser.init("[section]");
   {
-    var expr = parser.nextExpr(allocr).unwrap().?;
+    var expr = parser.nextExpr(allocr).ok.?;
     defer expr.deinit(allocr);
     try std.testing.expectEqualSlices(u8, "section", expr.section);
   }
@@ -23,7 +23,7 @@ test "parse empty table section" {
   const allocr = gpa.allocator();
   var parser = Parser.init("[[section]]");
   {
-    var expr = parser.nextExpr(allocr).unwrap().?;
+    var expr = parser.nextExpr(allocr).ok.?;
     defer expr.deinit(allocr);
     try std.testing.expectEqualSlices(u8, "section", expr.table_section);
   }
@@ -37,15 +37,15 @@ test "kv with int val" {
     \\key=1
   );
   {
-    var expr = parser.nextExpr(allocr).unwrap().?;
+    var expr = parser.nextExpr(allocr).ok.?;
     defer expr.deinit(allocr);
     try std.testing.expectEqualSlices(u8, "section", expr.section);
   }
   {
-    var expr = parser.nextExpr(allocr).unwrap().?;
+    var expr = parser.nextExpr(allocr).ok.?;
     defer expr.deinit(allocr);
     try std.testing.expectEqualSlices(u8, "key", expr.kv.key);
-    try std.testing.expectEqual(1, expr.kv.val.i32);
+    try std.testing.expectEqual(1, expr.kv.val.i64);
   }
 }
 
@@ -56,7 +56,7 @@ test "kv with string val" {
     \\key="val"
   );
   {
-    var expr = parser.nextExpr(allocr).unwrap().?;
+    var expr = parser.nextExpr(allocr).ok.?;
     defer expr.deinit(allocr);
     try std.testing.expectEqualSlices(u8, "key", expr.kv.key);
     try std.testing.expectEqualSlices(u8, "val", expr.kv.val.string.items);
@@ -71,13 +71,13 @@ test "kv with bool val" {
     \\faux=false
   );
   {
-    var expr = parser.nextExpr(allocr).unwrap().?;
+    var expr = parser.nextExpr(allocr).ok.?;
     defer expr.deinit(allocr);
     try std.testing.expectEqualSlices(u8, "truth", expr.kv.key);
     try std.testing.expectEqual(true, expr.kv.val.bool);
   }
   {
-    var expr = parser.nextExpr(allocr).unwrap().?;
+    var expr = parser.nextExpr(allocr).ok.?;
     defer expr.deinit(allocr);
     try std.testing.expectEqualSlices(u8, "faux", expr.kv.key);
     try std.testing.expectEqual(false, expr.kv.val.bool);
@@ -96,13 +96,13 @@ test "kv with comments" {
     \\faux=false #comment4
   );
   {
-    var expr = parser.nextExpr(allocr).unwrap().?;
+    var expr = parser.nextExpr(allocr).ok.?;
     defer expr.deinit(allocr);
     try std.testing.expectEqualSlices(u8, "truth", expr.kv.key);
     try std.testing.expectEqual(true, expr.kv.val.bool);
   }
   {
-    var expr = parser.nextExpr(allocr).unwrap().?;
+    var expr = parser.nextExpr(allocr).ok.?;
     defer expr.deinit(allocr);
     try std.testing.expectEqualSlices(u8, "faux", expr.kv.key);
     try std.testing.expectEqual(false, expr.kv.val.bool);
@@ -116,7 +116,7 @@ test "kv with esc seq in string val" {
     \\key="\"val\""
   );
   {
-    var expr = parser.nextExpr(allocr).unwrap().?;
+    var expr = parser.nextExpr(allocr).ok.?;
     defer expr.deinit(allocr);
     try std.testing.expectEqualSlices(u8, "key", expr.kv.key);
     try std.testing.expectEqualSlices(u8, "\"val\"", expr.kv.val.string.items);
@@ -130,7 +130,7 @@ test "kv with single-line multiline string" {
     \\key=\\a
   );
   {
-    var expr = parser.nextExpr(allocr).unwrap().?;
+    var expr = parser.nextExpr(allocr).ok.?;
     defer expr.deinit(allocr);
     try std.testing.expectEqualSlices(u8, "key", expr.kv.key);
     try std.testing.expectEqualSlices(u8, "a", expr.kv.val.string.items);
@@ -145,7 +145,7 @@ test "kv with multiline string" {
     \\\\b
   );
   {
-    var expr = parser.nextExpr(allocr).unwrap().?;
+    var expr = parser.nextExpr(allocr).ok.?;
     defer expr.deinit(allocr);
     try std.testing.expectEqualSlices(u8, "key", expr.kv.key);
     try std.testing.expectEqualSlices(u8, "a\nb", expr.kv.val.string.items);

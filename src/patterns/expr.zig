@@ -21,6 +21,8 @@ const Expr = @This();
 
 const std = @import("std");
 const builtin = @import("builtin");
+const build_config = @import("build_config");
+
 const Instr = @import("./instr.zig").Instr;
 const Parser = @import("./parser.zig");
 
@@ -266,9 +268,11 @@ const VM = struct {
   
   fn nextInstr(self: *VM, thread: *const Thread)
     error { InvalidUtf8, OutOfMemory }!void {
-    // std.debug.print("{s}\n", .{self.haystack[thread.str_idx..]});
-    // std.debug.print(">>> {} {}\n", .{thread.pc,self.instrs[thread.pc]});
-    // std.debug.print("{any}\n", .{self.thread_stack.items});
+    if (comptime build_config.dbg_patterns_vm) {
+      std.debug.print("{s}\n", .{self.haystack[thread.str_idx..]});
+      std.debug.print(">>> {} {}\n", .{thread.pc,self.instrs[thread.pc]});
+      std.debug.print("{any}\n", .{self.thread_stack.items});
+    }
     switch (self.instrs[thread.pc]) {
       .abort => {
         @panic("abort opcode reached");
@@ -438,7 +442,9 @@ const VM = struct {
           .fully_matched = self.fully_matched,
         };
       }
-      // _ = std.io.getStdIn().reader().readByte() catch {};
+      if (comptime build_config.dbg_patterns_vm) {
+        _ = std.io.getStdIn().reader().readByte() catch {};
+      }
     }
   }
   

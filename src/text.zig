@@ -102,7 +102,7 @@ pub const TextHandler = struct {
   
   file: ?std.fs.File = null,
   
-  /// Allocated by E.allocr()
+  /// Allocated by E.allocr
   file_path: str.StringUnmanaged = .{},
   
   /// Buffer of characters. Logical text buffer is then:
@@ -173,9 +173,9 @@ pub const TextHandler = struct {
       if (self.file != null) {
         self.file.?.close();
       }
-      self.file_path.clearAndFree(E.allocr());
-      try self.file_path.appendSlice(E.allocr(), args.file_path);
-      try self.highlight.loadTokenTypesForFile(self, E.allocr(), &E.conf);
+      self.file_path.clearAndFree(E.allocr);
+      try self.file_path.appendSlice(E.allocr, args.file_path);
+      try self.highlight.loadTokenTypesForFile(self, E.allocr, &E.conf);
       return;
     }
     
@@ -199,16 +199,16 @@ pub const TextHandler = struct {
     }
     self.file = file;
     
-    self.file_path.clearAndFree(E.allocr());
-    try self.file_path.appendSlice(E.allocr(), args.file_path);
+    self.file_path.clearAndFree(E.allocr);
+    try self.file_path.appendSlice(E.allocr, args.file_path);
     
     if (flush_buffer) {
-      self.clearBuffersForFile(E.allocr());
+      self.clearBuffersForFile(E.allocr);
       self.readLines(E, new_buffer) catch |err| {
-        self.clearBuffersForFile(E.allocr());
+        self.clearBuffersForFile(E.allocr);
         return err;
       };
-      try self.highlight.loadTokenTypesForFile(self, E.allocr(), &E.conf);
+      try self.highlight.loadTokenTypesForFile(self, E.allocr, &E.conf);
       try self.highlightText(E);
     }
   }
@@ -859,7 +859,14 @@ pub const TextHandler = struct {
     
     // Highlighting
     
-    try self.rehighlight(E, insidx, @intCast(char.len), true, self.cursor.row);
+    try self.rehighlight(
+      E,
+      insidx, // changed_region_start_in
+      @intCast(insidx + char.len), // changed_region_end
+      @intCast(char.len), // shift
+      true, // is_insert
+      self.cursor.row // line_start
+    );
     
     // Move cursor
     
@@ -980,7 +987,7 @@ pub const TextHandler = struct {
       self.lineinfo.increaseOffsets(first_row_after_insidx, @intCast(slice.len));
     }
     
-    var newlines_allocr = std.heap.stackFallback(16, E.allocr());
+    var newlines_allocr = std.heap.stackFallback(16, E.allocr);
     var newlines = std.ArrayList(u32).init(newlines_allocr.get());
     defer newlines.deinit();
     
@@ -1064,7 +1071,14 @@ pub const TextHandler = struct {
 
     // Highlighting
       
-    try self.rehighlight(E, insidx, @intCast(slice.len), true, self.cursor.row);
+    try self.rehighlight(
+      E,
+      insidx, // changed_region_start_in
+      @intCast(insidx + slice.len), // changed_region_end
+      @intCast(slice.len), // shift
+      true, // is_insert
+      self.cursor.row // line_start
+    );
     
     // Move the cursor to end of entered slice
       
@@ -1189,7 +1203,14 @@ pub const TextHandler = struct {
     
     // Highlighting
     
-    try self.rehighlight(E, delidx, seqlen, false, cur_at_deleted_char.row);
+    try self.rehighlight(
+      E,
+      delidx, // changed_region_start_in
+      delidx, // changed_region_end
+      @intCast(seqlen), // shift
+      false, // is_insert
+      cur_at_deleted_char.row // line_start
+    );
     
     // Update line offset info
     
@@ -1340,8 +1361,15 @@ pub const TextHandler = struct {
     
     // Highlighting
     
-    try self.rehighlight(E, delete_start, delete_end - delete_start, false, removed_line_start);
-    
+    try self.rehighlight(
+      E,
+      delete_start, // changed_region_start_in
+      delete_start, // changed_region_end
+      delete_end - delete_start, // shift
+      false, // is_insert
+      removed_line_start // line_start
+    );
+
     try self.recheckIsMultibyte(removed_line_start);
     if ((removed_line_start + 1) < self.lineinfo.getLen()) {
       try self.recheckIsMultibyte(removed_line_start + 1);
@@ -1483,11 +1511,11 @@ pub const TextHandler = struct {
     );
     
     var newlines: std.ArrayListUnmanaged(u32) = .{};
-    defer newlines.deinit(E.allocr());
+    defer newlines.deinit(E.allocr);
     
     for (new_buffer,0..new_buffer.len) |item, idx| {
       if (item == '\n') {
-        try newlines.append(E.allocr(), @intCast(replace_start + idx + 1));
+        try newlines.append(E.allocr, @intCast(replace_start + idx + 1));
       }
     }
     
@@ -1498,10 +1526,24 @@ pub const TextHandler = struct {
     // Highlighting
     if (new_buffer.len < old_buffer_len) {
       // decrease
-      try self.rehighlight(E, replace_start, @intCast(old_buffer_len - new_buffer.len), false, replace_line_start);
+      try self.rehighlight(
+        E,
+        replace_start, // changed_region_start_in
+        replace_end, // changed_region_end
+        @intCast(old_buffer_len - new_buffer.len), // shift
+        false,
+        replace_line_start
+      );
     } else {
       // increase
-      try self.rehighlight(E, replace_start, @intCast(new_buffer.len - old_buffer_len), true, replace_line_start);
+      try self.rehighlight(
+        E,
+        replace_start, // changed_region_start_in
+        replace_end, // changed_region_end
+        @intCast(new_buffer.len - old_buffer_len), // shift
+        true,
+        replace_line_start
+      );
     }
     
     const row_at_end_of_slice: u32 = @intCast(replace_line_start + 1 + newlines.items.len);
@@ -1587,7 +1629,7 @@ pub const TextHandler = struct {
     replacement: []const u8
   ) !usize {
     var markers = &self.markers.?;
-    var replaced = str.String.init(E.allocr());
+    var replaced = str.String.init(E.allocr);
     defer replaced.deinit();
     
     // TODO: replace all within gap buffer
@@ -1633,7 +1675,7 @@ pub const TextHandler = struct {
       markers.end = self.getRowOffsetEnd(markers.start_cur.row);
     }
     
-    var indented = str.String.init(E.allocr());
+    var indented = str.String.init(E.allocr);
     defer indented.deinit();
     for (0..@intCast(E.conf.tab_size)) |_| {
       try indented.append(' ');
@@ -1681,7 +1723,7 @@ pub const TextHandler = struct {
       markers.end = self.getRowOffsetEnd(markers.start_cur.row);
     }
     
-    var dedented = str.String.init(E.allocr());
+    var dedented = str.String.init(E.allocr);
     defer dedented.deinit();
     
     var iter = self.iterate(self.lineinfo.getOffset(markers.start_cur.row));
@@ -1795,7 +1837,7 @@ pub const TextHandler = struct {
     if (n_copied > 0) {
       if (E.conf.use_native_clipboard) {
         if (clipboard.write(
-          E.allocr(),
+          E.allocr,
           self.buffer.items[markers.start..markers.end]
         )) |_| {
           return;
@@ -1810,8 +1852,8 @@ pub const TextHandler = struct {
   
   pub fn paste(self: *TextHandler, E: *Editor) !void {
     if (E.conf.use_native_clipboard) {
-      if (try clipboard.read(E.allocr())) |native_clip| {
-        defer E.allocr().free(native_clip);
+      if (try clipboard.read(E.allocr)) |native_clip| {
+        defer E.allocr.free(native_clip);
         try self.insertSlice(E, native_clip);
         return;
       }
@@ -1822,7 +1864,7 @@ pub const TextHandler = struct {
   }
   
   pub fn duplicateLine(self: *TextHandler, E: *Editor) !void {
-    var line = str.String.init(E.allocr());
+    var line = str.String.init(E.allocr);
     defer line.deinit();
     try line.append('\n');
     const offset_start: u32 = self.lineinfo.getOffset(self.cursor.row);
@@ -1867,18 +1909,25 @@ pub const TextHandler = struct {
   // Highlighting
   
   pub fn highlightText(self: *TextHandler, E: *Editor) !void {
-    return self.highlight.runFromStart(self, E.allocr());
+    return self.highlight.runFromStart(self, E.allocr);
   }
   
   pub fn rehighlight(
     self: *TextHandler, E: *Editor,
     changed_region_start: u32,
+    changed_region_end: u32,
     shift: u32,
     is_insert: bool,
     line_start: u32,
   ) !void {
     return self.highlight.run(
-      self, E.allocr(), changed_region_start, shift, is_insert, line_start
+      self,
+      E.allocr,
+      changed_region_start,
+      changed_region_end,
+      shift,
+      is_insert,
+      line_start
     );
   }
   

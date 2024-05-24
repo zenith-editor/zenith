@@ -17,6 +17,8 @@ pub fn build(b: *std.Build) !void {
        .desc = "Print byte read from stdin", },
     .{ .name = "dbg_show_cont_line_no",
        .desc = "Show line numbers even for cont-lines", },
+    .{ .name = "dbg_patterns_vm",
+       .desc = "Enable debugger for regex VM", },
   }) |dbg_opt| {
     const build_opt = b.option(bool, dbg_opt.name, dbg_opt.desc) orelse false;
     options.addOption(bool, dbg_opt.name, build_opt);
@@ -34,7 +36,7 @@ pub fn build(b: *std.Build) !void {
     .optimize = optimize,
   });
   
-  exe.root_module.addOptions("config", options);
+  exe.root_module.addOptions("build_config", options);
 
   b.installArtifact(exe);
   
@@ -45,12 +47,14 @@ pub fn build(b: *std.Build) !void {
     .target = target,
     .optimize = optimize,
   });
+  patterns_module.addOptions("build_config", options);
   
   const config_module = b.addModule("config", .{
     .root_source_file = .{ .path = "src/config.zig" },
     .target = target,
     .optimize = optimize,
   });
+  config_module.addOptions("build_config", options);
   
   // tests
   

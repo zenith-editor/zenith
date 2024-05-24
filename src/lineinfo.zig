@@ -44,12 +44,12 @@ const LineData = packed struct {
 pub const LineInfoList = struct {
   const MAX_LINES = std.math.maxInt(u32);
   
-  gpa: std.heap.GeneralPurposeAllocator(.{}) = .{},
+  arena: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(std.heap.page_allocator),
   
   line_data: std.ArrayListUnmanaged(LineData) = .{},
 
   fn allocr(self: *LineInfoList) std.mem.Allocator {
-    return self.gpa.allocator();
+    return self.arena.allocator();
   }
   
   pub fn create() !LineInfoList {
@@ -330,7 +330,7 @@ pub const LineInfoList = struct {
     const start_line_is_mb =
       self.line_data.items[start_line_idx].flags.is_multibyte;
       
-    var new_cont_lines = std.ArrayList(u32).init(E.allocr());
+    var new_cont_lines = std.ArrayList(u32).init(E.allocr);
     defer new_cont_lines.deinit();
     
     if (start_line_is_mb) {

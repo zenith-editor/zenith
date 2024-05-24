@@ -227,6 +227,7 @@ pub fn run(
   text_handler: *const text.TextHandler,
   allocr: std.mem.Allocator,
   changed_region_start_in: u32,
+  changed_region_end: u32,
   shift: u32,
   is_insert: bool,
   line_start: u32,
@@ -236,13 +237,6 @@ pub fn run(
   var changed_region_start = changed_region_start_in;
   if (self.highlight_from_start_of_line) {
     changed_region_start = text_handler.lineinfo.getOffset(line_start);
-  }
-  
-  var changed_region_end: u32 = undefined;
-  if (is_insert) {
-    changed_region_end = changed_region_start_in + shift;
-  } else {
-    changed_region_end = changed_region_start_in;
   }
   
   const opt_tok_idx_at_pos = self.findLastNearestToken(changed_region_start, 0);

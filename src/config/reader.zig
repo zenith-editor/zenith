@@ -19,25 +19,39 @@ const Rc = @import("../ds/rc.zig").Rc;
 
 const Reader = @This();
 
-pub const ConfigErrorType =
-  parser.ParseErrorType
-  || parser.AccessError
-  || OpenDirError
-  || error {
-    OutOfMemory,
-    ExpectedRegexFlag,
-    ExpectedColorCode,
-    InvalidSection,
-    InvalidKey,
-    DuplicateKey,
-    UnknownKey,
-    HighlightLoadError,
-    HighlightParseError,
+pub const ConfigError = struct {
+  pub const Type =
+    parser.ParseErrorType
+    || parser.AccessError
+    || OpenDirError
+    || error {
+      OutOfMemory,
+      ExpectedRegexFlag,
+      ExpectedColorCode,
+      InvalidSection,
+      InvalidKey,
+      DuplicateKey,
+      UnknownKey,
+      HighlightLoadError,
+      HighlightParseError,
+    };
+  
+  pub const Location = union(enum) {
+    not_loaded,
+    main,
+    highlight: []u8,
   };
 
-pub const ConfigError = struct {
-  type: ConfigErrorType,
+  type: Type,
   pos: ?usize = null,
+  location: Location = .not_loaded,
+  
+  pub fn deinit(self: *ConfigError, allocr: std.mem.Allocator) void {
+    switch (self.location) {
+      .highlight => |v| { allocr.free(v); },
+      else => {},
+    }
+  }
 };
 
 const ParseResult = Error(void, ConfigError);
@@ -180,7 +194,7 @@ const OpenWithoutParsingResult = struct {
   source: []u8,
 };
 
-fn openWithoutParsing(allocr: std.mem.Allocator) ConfigErrorType!OpenWithoutParsingResult {
+fn openWithoutParsing(allocr: std.mem.Allocator) ConfigError.Type!OpenWithoutParsingResult {
   var config_dir: std.fs.Dir = try Reader.getConfigDir();
   errdefer config_dir.close();
   
@@ -306,7 +320,7 @@ fn parseInner(
     },
     .table_section => |table_section| {
       if (std.mem.startsWith(u8, table_section, "highlight.")) {
-        const highlight = table_section[("highlight".len)..];
+        const highlight = table_section[("highlight.".len)..];
         if (highlight.len == 0) {
           return error.InvalidSection;
         }
@@ -510,18 +524,26 @@ fn parse(self: *Reader, allocr: std.mem.Allocator, source: []const u8) ParseResu
     var expr = switch (P.nextExpr(allocr)) {
       .ok => |val| val,
       .err => |err| {
-        return .{ .err = .{ .type = err.type, .pos = err.pos, } };
+        return .{ .err = .{ .type = err.type, .pos = err.pos, .location = .main, } };
       },
     } orelse break;
-    errdefer expr.deinit(allocr);
+    defer expr.deinit(allocr);
     self.parseInner(&state, &expr) catch |err| {
-      return .{ .err = .{ .type = err, .pos = expr_start, } };
+      return .{ .err = .{ .type = err, .pos = expr_start, .location = .main, } };
     };
   }
   
   for (state.highlights.items) |*highlight| {
     self.parseHighlight(&state, highlight) catch |err| {
-      return .{ .err = .{ .type = err, .pos = 0, } };
+      const path = highlight.path.?;
+      highlight.path = null;
+      return .{
+        .err = .{
+          .type = err,
+          .pos = 0,
+          .location = .{ .highlight = path, },
+        },
+      };
     };
   }
   

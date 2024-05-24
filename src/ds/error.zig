@@ -11,15 +11,6 @@ pub fn Error(comptime T: type, comptime E: type) type {
     ok: T,
     err: E,
     
-    pub fn unwrap(self: Self) T {
-      switch (self) {
-        .ok => |v| {
-          return v;
-        },
-        else => @panic("unwrap"),
-      }
-    }
-    
     pub fn isErr(self: *const Self) bool {
       return switch(self.*) {
         .err => true,

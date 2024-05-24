@@ -24,11 +24,11 @@ $(ZIG_CACHE):
 
 .PHONY: release
 release: $(ZIG_CACHE)
-	$(ZIG) build -Doptimize=ReleaseSafe
+	$(ZIG) build -Doptimize=ReleaseSafe $(ZIGFLAGS)
 
 .PHONY: test
 test: $(ZIG_CACHE)
-	$(ZIG) build test
+	$(ZIG) build test $(ZIGFLAGS)
 
 .PHONY: clean
 clean:
