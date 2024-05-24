@@ -139,10 +139,22 @@ pub fn handleInput(
     });
   }
   else if (this_shortcuts.key("undo", keysym)) {
-    try self.text_handler.undo_mgr.undo(self);
+    self.text_handler.undo_mgr.undo(self) catch |err| {
+      if (err == error.OutOfMemoryUndo) {
+        try self.text_handler.handleUndoOOM(self);
+      } else {
+        return err;
+      }
+    };
   }
   else if (this_shortcuts.key("redo", keysym)) {
-    try self.text_handler.undo_mgr.redo(self);
+    self.text_handler.undo_mgr.redo(self) catch |err| {
+      if (err == error.OutOfMemoryUndo) {
+        try self.text_handler.handleUndoOOM(self);
+      } else {
+        return err;
+      }
+    };
   }
   else if (keysym.raw == kbd.Keysym.BACKSPACE) {
     try self.text_handler.deleteChar(self, false);

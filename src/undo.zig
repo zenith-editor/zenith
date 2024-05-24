@@ -212,7 +212,7 @@ pub const UndoManager = struct {
       switch (act.data) {
         .append => |*append| {
           if (append.orig_buffer == null) {
-            if (self.canAllocateMemory(append.len)) {
+            if (!self.canAllocateMemory(append.len)) {
               return error.OutOfMemoryUndo;
             }
             append.orig_buffer = try E.text_handler.deleteRegionAtPos(
