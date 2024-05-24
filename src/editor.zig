@@ -521,6 +521,15 @@ pub const Editor = struct {
         self.is_bold == other.is_bold
       );
     }
+    
+    pub fn idFromStr(s: []const u8) ?u32 {
+      for (COLOR_STR, 0..COLOR_STR.len) |color_cmp, i| {
+        if (std.mem.eql(u8, color_cmp, s)) {
+          return @intCast(i);
+        }
+      }
+      return null;
+    }
   };
   
   pub fn writeAll(self: *Editor, bytes: []const u8) !void {

@@ -49,7 +49,6 @@ pub const Iterator = struct {
   idx: usize = 0,
   
   pub fn nextCodepoint(self: *Iterator, seqlen: u32) ?Token {
-//     std.debug.print("{},idx={}\n", .{self.pos, self.idx});
     if (self.idx == self.highlight.tokens.items.len) {
       // after last token
       return null;
@@ -191,7 +190,6 @@ pub fn runFromStart(
   
   var pos: u32 = 0;
   outer: while (try src_view.codepointSliceAt(pos)) |bytes| {
-//     std.debug.print("{}\n", .{pos});
     for (self.token_types.items, 0..self.token_types.items.len) |*tt, typeid| {
       if (tt.pattern == null) {
         continue;
@@ -220,8 +218,6 @@ pub fn runFromStart(
       anchor_start_offset = pos;
     }
   }
-  
-//   std.debug.print("{any}\n", .{self.tokens.items});
 }
 
 /// Retokenize text buffer, assumes that only one continuous region
@@ -246,11 +242,7 @@ pub fn run(
   if (is_insert) {
     changed_region_end = changed_region_start_in + shift;
   } else {
-    if (changed_region_start_in > shift) {
-      changed_region_end = changed_region_start_in - shift;
-    } else {
-      changed_region_end = 0;
-    }
+    changed_region_end = changed_region_start_in;
   }
   
   const opt_tok_idx_at_pos = self.findLastNearestToken(changed_region_start, 0);
@@ -260,17 +252,25 @@ pub fn run(
   }
   
   const tok_idx_at_pos = opt_tok_idx_at_pos.?;
-//   std.debug.print("{} {} {}\n", .{changed_region_start, changed_region_end, tok_idx_at_pos});
-  
-  
+
   if (is_insert) {
     for(self.tokens.items[(tok_idx_at_pos+1)..]) |*token| {
       token.pos_start += shift;
       token.pos_end += shift;
     }
   } else {
+    const delete_end = changed_region_start_in + shift;
+    const tok_idx_at_delete_end = self.findLastNearestToken(delete_end, tok_idx_at_pos).?;
+    if (tok_idx_at_delete_end > (tok_idx_at_pos  + 1)) {
+      try self.tokens.replaceRange(
+        allocr,
+        tok_idx_at_pos + 1,
+        tok_idx_at_delete_end - (tok_idx_at_pos  + 1),
+        &[_]Token{}
+      );
+    }
     for(self.tokens.items[(tok_idx_at_pos+1)..]) |*token| {
-      if (token.pos_start >= shift) {
+      if (token.pos_start >= delete_end) {
         token.pos_start -= shift;
         token.pos_end -= shift;
       }
@@ -279,8 +279,12 @@ pub fn run(
   
   var pos: u32 = self.tokens.items[tok_idx_at_pos].pos_start;
   var existing_idx: usize = tok_idx_at_pos;
-  var anchor_start_offset: u32 = text_handler.lineinfo.getOffset(
-    text_handler.lineinfo.findMaxLineBeforeOffset(pos, 0)
+  var anchor_start_offset: u32 = (
+    if (self.highlight_from_start_of_line)
+      text_handler.lineinfo.getOffset(
+        text_handler.lineinfo.findMaxLineBeforeOffset(pos, 0)
+      )
+    else 0
   );
   var new_token_region = std.ArrayList(Token).init(allocr);
   defer new_token_region.deinit();
@@ -344,7 +348,6 @@ pub fn run(
       new_token_region.items
     );
   } else {
-    // std.debug.print("not shared {any} {any}\n",.{self.tokens.items, new_token_region.items});
     try self.tokens.replaceRange(
       allocr,
       tok_idx_at_pos,
@@ -352,8 +355,6 @@ pub fn run(
       new_token_region.items
     );
   }
-  
-//   std.debug.print("NEW:{any}\n",.{self.tokens.items});
 }
 
 /// Finds the last token with pos_start <= pos
