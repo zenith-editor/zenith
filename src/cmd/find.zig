@@ -46,9 +46,7 @@ fn findForwards(self: *editor.Editor, cmd_data: *editor.CommandData) !void {
   var opt_end: ?usize = null;
   if (cmd_data.args != null and cmd_data.args.?.find.regex != null) {
     const regex = cmd_data.args.?.find.regex.?;
-    const opt_find_result = regex.find(
-      self.allocr(), text_handler.buffer.items[offset..]
-    ) catch |err| {
+    const opt_find_result = regex.find(text_handler.buffer.items[offset..]) catch |err| {
       try cmd_data.replacePromptOverlayFmt(self, PROMPT_ERR_REGEX, .{err});
       return;
     };
@@ -106,9 +104,7 @@ fn findBackwards(self: *editor.Editor, cmd_data: *editor.CommandData) !void {
   var opt_end: ?usize = null;
   if (cmd_data.args != null and cmd_data.args.?.find.regex != null) {
     const regex = cmd_data.args.?.find.regex.?;
-    const opt_find_result = regex.findBackwards(
-      self.allocr(), text_handler.buffer.items[0..offset]
-    ) catch |err| {
+    const opt_find_result = regex.findBackwards(text_handler.buffer.items[0..offset]) catch |err| {
       try cmd_data.replacePromptOverlayFmt(self, PROMPT_ERR_REGEX, .{err});
       return;
     };

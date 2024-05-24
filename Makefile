@@ -1,7 +1,7 @@
 ZIG?=zig
 ZIGFLAGS?=
 
-# zig does not automatically clean up the cache, so we should use
+# zig does not automatically clean up the cache, so we should make
 # one in the temp dir
 ZIG_CACHE=zig-cache
 ZIG_CACHE_TMP=/tmp/zig-cache-zenith
@@ -27,7 +27,7 @@ release: $(ZIG_CACHE)
 	$(ZIG) build -Doptimize=ReleaseSafe
 
 .PHONY: test
-test:
+test: $(ZIG_CACHE)
 	$(ZIG) build test
 
 .PHONY: clean

@@ -8,22 +8,20 @@ const Cmd = @This();
 const std = @import("std");
 const builtin = @import("builtin");
 
+const text = @import("../text.zig");
 const editor = @import("../editor.zig");
 
-pub fn onInputtedGeneric(self: *editor.Editor) !?std.fs.File {
+fn onInputtedGeneric(self: *editor.Editor) !?text.TextHandler.OpenFileArgs {
   self.needs_update_cursor = true;
   const cwd = std.fs.cwd();
   var cmd_data: *editor.CommandData = self.getCmdData();
-  const path: []const u8 = cmd_data.cmdinp.items;
+  const file_path: []const u8 = cmd_data.cmdinp.items;
   var opened_file: ?std.fs.File = null;
-  cwd.access(path, .{}) catch |err| switch(err) {
+  cwd.access(file_path, .{}) catch |err| switch(err) {
     error.FileNotFound => {
-      opened_file = cwd.createFile(path, .{
-        .read = true,
-        .truncate = false
-      }) catch |create_err| {
-        try cmd_data.replacePromptOverlayFmt(self, PROMPT_ERR_NEW_FILE, .{create_err});
-        return null;
+      return .{
+        .file = opened_file,
+        .file_path = file_path,
       };
     },
     else => {
@@ -32,7 +30,7 @@ pub fn onInputtedGeneric(self: *editor.Editor) !?std.fs.File {
     },
   };
   if (opened_file == null) {
-    opened_file = cwd.openFile(path, .{
+    opened_file = cwd.openFile(file_path, .{
       .mode = .read_write,
       .lock = .shared,
     }) catch |err| {
@@ -40,7 +38,10 @@ pub fn onInputtedGeneric(self: *editor.Editor) !?std.fs.File {
       return null;
     };
   }
-  return opened_file;
+  return .{
+    .file = opened_file,
+    .file_path = file_path,
+  };
 }
 
 pub fn onInputted(self: *editor.Editor) !void {
@@ -56,6 +57,7 @@ pub fn onInputted(self: *editor.Editor) !void {
 
 pub fn setupUnableToSavePrompt(self: *editor.Editor, err: anyerror) !void {
   try self.getCmdData().replacePromptOverlayFmt(self, PROMPT_ERR_SAVE_FILE, .{err});
+  // TODO: offer user another location to save
 }
 
 pub fn onInputtedTryToSave(self: *editor.Editor) !void {

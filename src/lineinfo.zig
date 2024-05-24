@@ -5,6 +5,7 @@
 //
 const std = @import("std");
 
+const utils = @import("./utils.zig");
 const text = @import("./text.zig");
 const encoding = @import("./encoding.zig");
 const Editor = @import("./editor.zig").Editor;
@@ -81,7 +82,7 @@ pub const LineInfoList = struct {
   }
   
   pub fn append(self: *LineInfoList, offset: u32) !void {
-    if (self.line_data.items.len + 1 == MAX_LINES) {
+    if (self.line_data.items.len + 1 >= MAX_LINES) {
       return error.OutOfMemory;
     }
     
@@ -110,7 +111,7 @@ pub const LineInfoList = struct {
   
   /// Returns true if a new line has actually been added
   pub fn insert(self: *LineInfoList, idx: u32, offset: u32, is_multibyte: bool) !bool {
-    if (self.line_data.items.len + 1 == MAX_LINES) {
+    if (self.line_data.items.len + 1 >= MAX_LINES) {
       return error.OutOfMemory;
     }
     
@@ -163,7 +164,7 @@ pub const LineInfoList = struct {
     idx: u32,
     offsets: []const u32,
   ) !void {
-    if (self.line_data.items.len + offsets.len == MAX_LINES) {
+    if (self.line_data.items.len + offsets.len >= MAX_LINES) {
       return error.OutOfMemory;
     }
     
@@ -189,51 +190,21 @@ pub const LineInfoList = struct {
   // Offsets
   
   pub fn findMaxLineBeforeOffset(self: *const LineInfoList, offset: u32, from_line: u32) u32 {
-    const idx = blk: {
-      var left: u32 = from_line;
-      var right: u32 = @intCast(self.line_data.items.len);
-      
-      while (left < right) {
-        const mid = left + (right - left) / 2;
-        if (self.line_data.items[mid].offset < offset) {
-          left = mid + 1;
-        } else {
-          right = mid;
-        }
-      }
-      
-      break :blk left;
-    };
-    
-    if (idx == self.getLen()) {
-      return self.getLen() - 1;
-    }
-    
-    if (self.line_data.items[idx].offset > offset) {
-      return idx - 1;
-    }
-    
-    return idx;
+    return @intCast(
+      utils.findLastNearestElement(
+        LineData, "offset",
+        self.line_data.items, offset, @intCast(from_line)
+      ).?
+    );
   }
   
   pub fn findMinLineAfterOffset(self: *const LineInfoList, offset: u32, from_line: u32) u32 {
-    const idx = blk: {
-      var left: u32 = from_line;
-      var right: u32 = @intCast(self.line_data.items.len);
-      
-      while (left < right) {
-        const mid = left + (right - left) / 2;
-        if (!(offset < self.line_data.items[mid].offset)) {
-          left = mid + 1;
-        } else {
-          right = mid;
-        }
-      }
-      
-      break :blk left;
-    };
-    
-    return idx;
+    return @intCast(
+      utils.findNextNearestElement(
+        LineData, "offset",
+        self.line_data.items, offset, @intCast(from_line)
+      )
+    );
   }
   
   pub fn findLineWithLineNo(self: *const LineInfoList, line_no: u32) ?u32 {
@@ -390,7 +361,6 @@ pub const LineInfoList = struct {
     }
     const next_line_idx_new: u32 =
       @intCast(start_line_idx + 1 + new_cont_lines.items.len);
-    
     // Reserve/delete space for new cont-lines
     
     if (next_line_idx_new < next_line_idx) {

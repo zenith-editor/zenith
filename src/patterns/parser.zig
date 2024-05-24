@@ -379,13 +379,13 @@ fn parseGroup(
         escaped = true;
       },
       '.' => {
-        if (self.flags.multiline) {
-          try expr.instrs.append(allocr, .{ .any = {}, });
-        } else {
-          try expr.instrs.append(
-            allocr,
-            .{ .char_inverse = std.ascii.control_code.lf, });
-        }
+        try expr.instrs.append(allocr, .{ .any = {}, });
+      },
+      '^' => {
+        try expr.instrs.append(allocr, .{ .anchor_start = {}, });
+      },
+      '$' => {
+        try expr.instrs.append(allocr, .{ .anchor_end = {}, });
       },
       else => {
         try expr.instrs.append(allocr, .{ .char = char, });
@@ -402,6 +402,7 @@ pub fn parse(
   var expr: Expr = .{
     .instrs = .{},
     .num_groups = 0,
+    .flags = self.flags,
   };
   
   var parse_stack: std.ArrayListUnmanaged(GroupOrRoot) = .{};

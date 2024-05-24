@@ -18,7 +18,18 @@ test "parse empty section" {
   }
 }
 
-test "parse section with int val" {
+test "parse empty table section" {
+  var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+  const allocr = gpa.allocator();
+  var parser = Parser.init("[[section]]");
+  {
+    var expr = parser.nextExpr(allocr).unwrap().?;
+    defer expr.deinit(allocr);
+    try std.testing.expectEqualSlices(u8, "section", expr.table_section);
+  }
+}
+
+test "kv with int val" {
   var gpa = std.heap.GeneralPurposeAllocator(.{}){};
   const allocr = gpa.allocator();
   var parser = Parser.init(
@@ -38,7 +49,7 @@ test "parse section with int val" {
   }
 }
 
-test "parse section with string val" {
+test "kv with string val" {
   var gpa = std.heap.GeneralPurposeAllocator(.{}){};
   const allocr = gpa.allocator();
   var parser = Parser.init(
@@ -52,7 +63,7 @@ test "parse section with string val" {
   }
 }
 
-test "parse section with bool val" {
+test "kv with bool val" {
   var gpa = std.heap.GeneralPurposeAllocator(.{}){};
   const allocr = gpa.allocator();
   var parser = Parser.init(
@@ -73,7 +84,7 @@ test "parse section with bool val" {
   }
 }
 
-test "parse section with comments" {
+test "kv with comments" {
   var gpa = std.heap.GeneralPurposeAllocator(.{}){};
   const allocr = gpa.allocator();
   var parser = Parser.init(
@@ -98,7 +109,7 @@ test "parse section with comments" {
   }
 }
 
-test "parse section with esc seq in string val" {
+test "kv with esc seq in string val" {
   var gpa = std.heap.GeneralPurposeAllocator(.{}){};
   const allocr = gpa.allocator();
   var parser = Parser.init(
@@ -109,5 +120,34 @@ test "parse section with esc seq in string val" {
     defer expr.deinit(allocr);
     try std.testing.expectEqualSlices(u8, "key", expr.kv.key);
     try std.testing.expectEqualSlices(u8, "\"val\"", expr.kv.val.string.items);
+  }
+}
+
+test "kv with single-line multiline string" {
+  var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+  const allocr = gpa.allocator();
+  var parser = Parser.init(
+    \\key=\\a
+  );
+  {
+    var expr = parser.nextExpr(allocr).unwrap().?;
+    defer expr.deinit(allocr);
+    try std.testing.expectEqualSlices(u8, "key", expr.kv.key);
+    try std.testing.expectEqualSlices(u8, "a", expr.kv.val.string.items);
+  }
+}
+
+test "kv with multiline string" {
+  var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+  const allocr = gpa.allocator();
+  var parser = Parser.init(
+    \\key=\\a
+    \\\\b
+  );
+  {
+    var expr = parser.nextExpr(allocr).unwrap().?;
+    defer expr.deinit(allocr);
+    try std.testing.expectEqualSlices(u8, "key", expr.kv.key);
+    try std.testing.expectEqualSlices(u8, "a\nb", expr.kv.val.string.items);
   }
 }

@@ -10,7 +10,7 @@ const text = @import("../text.zig");
 const editor = @import("../editor.zig");
 const encoding = @import("../encoding.zig");
 
-const CMD_PROMPT = editor.Editor.ESC_COLOR_GRAY ++ " >" ++ editor.Editor.ESC_COLOR_DEFAULT;
+const CMD_PROMPT = editor.Editor.ESC_FG_EMPHASIZE ++ " >" ++ editor.Editor.ESC_COLOR_DEFAULT;
 const CMD_PROMPT_COLS = 2;
 
 pub fn onUnset(self: *editor.Editor, next_state: editor.State) void {

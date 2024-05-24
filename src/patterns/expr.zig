@@ -51,6 +51,7 @@ pub const CreateResult = union(enum) {
 };
 
 instrs: std.ArrayListUnmanaged(Instr),
+flags: Flags,
 num_groups: usize,
 
 pub fn debugPrint(self: *const Expr) void {
@@ -67,7 +68,20 @@ pub fn deinit(self: *Expr, allocr: std.mem.Allocator) void {
 }
 
 pub const Flags = struct {
-  multiline: bool = false,
+  is_multiline: bool = false,
+  
+  pub fn fromShortCode(str: []const u8) error{ InvalidString }!Flags {
+    var flags: Flags = .{};
+    for (str) |byte| {
+      switch (byte) {
+        'm' => { flags.is_multiline = true; },
+        else => {
+          return error.InvalidString;
+        }
+      }
+    }
+    return flags;
+  }
 };
 
 pub fn create(
@@ -136,114 +150,119 @@ pub const SrcView = struct {
   }
 };
 
-const VM = struct {
-  const Thread = struct {
+const Thread = struct {
+  str_idx: usize,
+  pc: usize,
+  str_idx_delta: u32 = 0,
+  str_idx_repeats: u32 = 0,
+};
+
+const ThreadStack = struct {
+  const HEAP_THRESHOLD = 16;
+  
+  const Internal = union(enum) {
+    stackalloc: std.BoundedArray(Thread, HEAP_THRESHOLD),
+    heapalloc: std.ArrayListUnmanaged(Thread),
+  };
+  
+  internal: Internal = .{
+    .stackalloc = .{},
+  },
+  
+  fn deinit(self: *ThreadStack, allocr: std.mem.Allocator) void {
+    switch (self.internal) {
+      .heapalloc => |*heapalloc| { heapalloc.deinit(allocr); },
+      else => {},
+    }
+  }
+  
+  fn append(
+    self: *ThreadStack,
+    allocr: std.mem.Allocator,
     str_idx: usize,
     pc: usize,
-    str_idx_delta: u32 = 0,
-    str_idx_repeats: u32 = 0,
-  };
-  
-  const ThreadStack = struct {
-    const HEAP_THRESHOLD = 16;
-    
-    const Internal = union(enum) {
-      stackalloc: std.BoundedArray(Thread, HEAP_THRESHOLD),
-      heapalloc: std.ArrayListUnmanaged(Thread),
+  ) error{ OutOfMemory }!void {
+    const thread: Thread = .{
+      .str_idx = str_idx,
+      .pc = pc,
     };
-    
-    internal: Internal = .{
-      .stackalloc = .{},
-    },
-    
-    fn deinit(self: *ThreadStack, allocr: std.mem.Allocator) void {
-      switch (self.internal) {
-        .heapalloc => |*heapalloc| { heapalloc.deinit(allocr); },
-        else => {},
-      }
+    var opt_new_heapalloc: ?std.ArrayListUnmanaged(Thread) = null;
+    switch (self.internal) {
+      .stackalloc => |*stackalloc| {
+        if (stackalloc.append(thread)) {
+          return;
+        } else |_| {
+          var heapalloc = try std.ArrayListUnmanaged(Thread)
+            .initCapacity(allocr, HEAP_THRESHOLD+1);
+          try heapalloc.appendSlice(allocr, stackalloc.constSlice());
+          opt_new_heapalloc = heapalloc;
+        }
+      },
+      else => {},
     }
-    
-    fn append(
-      self: *ThreadStack,
-      allocr: std.mem.Allocator,
-      str_idx: usize,
-      pc: usize,
-    ) error{ OutOfMemory }!void {
-      const thread: Thread = .{
-        .str_idx = str_idx,
-        .pc = pc,
-      };
-      var opt_new_heapalloc: ?std.ArrayListUnmanaged(Thread) = null;
-      switch (self.internal) {
-        .stackalloc => |*stackalloc| {
-          if (stackalloc.append(thread)) {
-            return;
-          } else |_| {
-            var heapalloc = try std.ArrayListUnmanaged(Thread)
-              .initCapacity(allocr, HEAP_THRESHOLD+1);
-            try heapalloc.appendSlice(allocr, stackalloc.constSlice());
-            opt_new_heapalloc = heapalloc;
-          }
-        },
-        else => {},
-      }
-      if (opt_new_heapalloc) |new_heapalloc| {
-        self.internal = .{ .heapalloc = new_heapalloc, };
-      }
-      try self.internal.heapalloc.append(allocr, thread);
+    if (opt_new_heapalloc) |new_heapalloc| {
+      self.internal = .{ .heapalloc = new_heapalloc, };
     }
-    
-    fn len(self: *ThreadStack) usize {
-      switch (self.internal) {
-        .stackalloc => |*stackalloc| { return stackalloc.len; },
-        .heapalloc => |*heapalloc| { return heapalloc.items.len; },
-      }
-    }
-    
-    fn top(self: *ThreadStack) ?*Thread {
-      switch (self.internal) {
-        .stackalloc => |*stackalloc| {
-          if (stackalloc.len > 0) {
-            return &stackalloc.buffer[stackalloc.len - 1];
-          }
-        },
-        .heapalloc => |*heapalloc| {
-          if (heapalloc.items.len > 0) {
-            return &heapalloc.items[heapalloc.items.len - 1];
-          }
-        },
-      }
-      return null;
-    }
-    
-    fn pop(self: *ThreadStack) Thread {
-      switch (self.internal) {
-        .stackalloc => |*stackalloc| {
-          return stackalloc.pop();
-        },
-        .heapalloc => |*heapalloc| {
-          return heapalloc.pop();
-        },
-      }
-    }
-  };
+    try self.internal.heapalloc.append(allocr, thread);
+  }
   
+  fn len(self: *ThreadStack) usize {
+    switch (self.internal) {
+      .stackalloc => |*stackalloc| { return stackalloc.len; },
+      .heapalloc => |*heapalloc| { return heapalloc.items.len; },
+    }
+  }
+  
+  fn top(self: *ThreadStack) ?*Thread {
+    switch (self.internal) {
+      .stackalloc => |*stackalloc| {
+        if (stackalloc.len > 0) {
+          return &stackalloc.buffer[stackalloc.len - 1];
+        }
+      },
+      .heapalloc => |*heapalloc| {
+        if (heapalloc.items.len > 0) {
+          return &heapalloc.items[heapalloc.items.len - 1];
+        }
+      },
+    }
+    return null;
+  }
+  
+  fn pop(self: *ThreadStack) Thread {
+    switch (self.internal) {
+      .stackalloc => |*stackalloc| {
+        return stackalloc.pop();
+      },
+      .heapalloc => |*heapalloc| {
+        return heapalloc.pop();
+      },
+    }
+  }
+};
+  
+const VM = struct {
   view: SrcView,
   instrs: []const Instr,
+  flags: Flags,
   options: *const MatchOptions,
-  allocr: std.mem.Allocator,
+  arena: std.heap.ArenaAllocator,
   thread_stack: ThreadStack = .{},
   fully_matched: bool = false,
-  
-  fn deinit(self: *VM) void {
-    self.thread_stack.deinit(self.allocr);
-  }
   
   const NextInstrResult = enum {
     Stop,
     Continue,
     Matched,
   };
+  
+  fn deinit(self: *VM) void {
+    self.arena.deinit();
+  }
+  
+  fn allocr(self: *VM) std.mem.Allocator {
+    return self.arena.allocator();
+  }
   
   fn nextInstr(self: *VM, thread: *const Thread)
     error { InvalidUtf8, OutOfMemory }!void {
@@ -265,6 +284,9 @@ const VM = struct {
         const char: u32 = std.unicode.utf8Decode(bytes) catch {
           return error.InvalidUtf8;
         };
+        if (!self.flags.is_multiline and char == '\n') {
+          return;
+        }
         switch (self.instrs[thread.pc]) {
           .any => {},
           .char => |char1| {
@@ -334,6 +356,23 @@ const VM = struct {
         try self.addThread(thread.str_idx, thread.pc + 1);
         return;
       },
+      .anchor_start => {
+        if (thread.str_idx == self.options.anchor_start_offset) {
+          try self.addThread(thread.str_idx, thread.pc + 1);
+          return;
+        }
+      },
+      .anchor_end => {
+        const bytes = try self.view.codepointSliceAt(thread.str_idx);
+        if (bytes == null) {
+          try self.addThread(thread.str_idx, thread.pc + 1);
+          return;
+        }
+        if (self.flags.is_multiline and bytes.?[0] == '\n') {
+          try self.addThread(thread.str_idx, thread.pc + 1);
+          return;
+        }
+      },
     }
   }
   
@@ -355,7 +394,7 @@ const VM = struct {
         }
       }
     }
-    try self.thread_stack.append(self.allocr, str_idx, pc);
+    try self.thread_stack.append(self.allocr(), str_idx, pc);
   }
   
   fn popThread(self: *VM) !Thread {
@@ -386,9 +425,9 @@ const VM = struct {
         }
         return .{ .pos = str_idx, .fully_matched = false };
       }
-      try self.thread_stack.append(self.allocr, str_idx, 1);
+      try self.thread_stack.append(self.allocr(), str_idx, 1);
     } else {
-      try self.thread_stack.append(self.allocr, init_offset, 0);
+      try self.thread_stack.append(self.allocr(), init_offset, 0);
     }
     while (true) {
       const thread = try self.popThread();
@@ -401,6 +440,15 @@ const VM = struct {
       }
       // _ = std.io.getStdIn().reader().readByte() catch {};
     }
+  }
+  
+  fn execAndReset(self: *VM, init_offset: usize) !MatchResult {
+    defer {
+      _ = self.arena.reset(.retain_capacity);
+      self.thread_stack = .{};
+      self.fully_matched = false;
+    }
+    return self.exec(init_offset);
   }
 };
 
@@ -416,6 +464,8 @@ pub const MatchGroup = struct {
 
 pub const MatchOptions = struct {
   group_out: ?[]MatchGroup = null,
+  match_from: usize = 0,
+  anchor_start_offset: usize = 0,
 };
 
 pub const MatchError = error {
@@ -426,7 +476,6 @@ pub const MatchError = error {
 
 pub fn checkMatchGeneric(
   self: *const Expr,
-  allocr: std.mem.Allocator,
   view: *const SrcView,
   options: *const MatchOptions,
 ) MatchError!MatchResult {
@@ -438,14 +487,15 @@ pub fn checkMatchGeneric(
   var vm: VM = .{
     .view = view.*,
     .instrs = self.instrs.items,
+    .flags = self.flags,
     .options = options,
-    .allocr = allocr,
+    .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
   };
   defer vm.deinit();
-  return vm.exec(0) catch |err| { return err; };
+  return vm.exec(options.match_from);
 }
 
-const StringView = struct {
+pub const StringView = struct {
   haystack: []const u8,
   
   fn codepointSliceAt(ctx: *const anyopaque, pos: usize) error{ InvalidUtf8 }!?[]const u8 {
@@ -461,17 +511,24 @@ const StringView = struct {
     }
     return self.haystack[pos..pos+seqlen];
   }
+  
+  pub fn srcView(self: *StringView) SrcView {
+    return .{
+      .ptr = @ptrCast(self),
+      .vtable = &.{
+        .codepointSliceAt = StringView.codepointSliceAt,
+      },
+    };
+  }
 };
 
 pub fn checkMatch(
   self: *const Expr,
-  allocr: std.mem.Allocator,
   haystack: []const u8,
   options: *const MatchOptions,
 ) MatchError!MatchResult {
   var view: StringView = .{ .haystack = haystack, };
   return self.checkMatchGeneric(
-    allocr,
     &.{
       .ptr = @ptrCast(&view),
       .vtable = &.{
@@ -487,16 +544,26 @@ pub const FindResult = struct {
   end: usize,
 };
 
-pub fn find(self: *const Expr, allocr: std.mem.Allocator, haystack: []const u8) !?FindResult {
+pub fn find(self: *const Expr, haystack: []const u8) !?FindResult {
+  var view: StringView = .{ .haystack = haystack, };
+  var vm: VM = .{
+    .view = view.srcView(),
+    .instrs = self.instrs.items,
+    .flags = self.flags,
+    .options = &.{},
+    .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
+  };
+  defer vm.deinit();
+  
   if (self.instrs.items[0].getString()) |string| {
     var skip: usize = 0;
     while (std.mem.indexOf(u8, haystack[skip..], string)) |rel_skip| {
       skip += rel_skip;
-      const match = try self.checkMatch(allocr, haystack[skip..], &.{});
+      const match = try vm.execAndReset(skip);
       if (match.fully_matched) {
         return .{
           .start = skip,
-          .end = skip + match.pos,
+          .end = match.pos,
         };
       }
       skip += string.len;
@@ -505,27 +572,37 @@ pub fn find(self: *const Expr, allocr: std.mem.Allocator, haystack: []const u8) 
   }
   
   for (0..haystack.len-1) |skip| {
-    const match = try self.checkMatch(allocr, haystack[skip..], &.{});
+    const match = try vm.execAndReset(skip);
     if (match.fully_matched) {
       return .{
         .start = skip,
-        .end = skip + match.pos,
+        .end = match.pos,
       };
     }
   }
   return null;
 }
 
-pub fn findBackwards(self: *const Expr, allocr: std.mem.Allocator, haystack: []const u8) !?FindResult {
+pub fn findBackwards(self: *const Expr, haystack: []const u8) !?FindResult {
+  var view: StringView = .{ .haystack = haystack, };
+  var vm: VM = .{
+    .view = view.srcView(),
+    .instrs = self.instrs.items,
+    .flags = self.flags,
+    .options = &.{},
+    .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
+  };
+  defer vm.deinit();
+  
   if (self.instrs.items[0].getString()) |string| {
     var limit: usize = haystack.len;
     while (std.mem.lastIndexOf(u8, haystack[0..limit], string)) |rel_limit| {
       limit = rel_limit;
-      const match = try self.checkMatch(allocr, haystack[rel_limit..], &.{});
+      const match = try vm.execAndReset(limit);
       if (match.fully_matched) {
         return .{
           .start = rel_limit,
-          .end = rel_limit + match.pos,
+          .end = match.pos,
         };
       }
       limit -= 1;
@@ -533,17 +610,16 @@ pub fn findBackwards(self: *const Expr, allocr: std.mem.Allocator, haystack: []c
     return null;
   }
   
-  var skip_it: usize = haystack.len;
-  while (skip_it > 0) {
-    const skip = skip_it - 1;
-    const match = try self.checkMatch(allocr, haystack[skip..], &.{});
+  var skip: usize = haystack.len;
+  while (skip > 0) {
+    skip -= 1;
+    const match = try vm.execAndReset(skip);
     if (match.fully_matched) {
       return .{
         .start = skip,
-        .end = skip + match.pos,
+        .end = match.pos,
       };
     }
-    skip_it -= 1;
   }
   return null;
 }

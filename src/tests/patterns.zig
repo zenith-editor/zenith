@@ -12,8 +12,8 @@ test "simple one" {
   const allocr = gpa.allocator();
   var expr = try Expr.create(allocr, "asdf", &.{}).asErr();
   defer expr.deinit(allocr);
-  try std.testing.expectEqual(4, (try expr.checkMatch(allocr, "asdf", &.{})).pos);
-  try std.testing.expectEqual(2, (try expr.checkMatch(allocr, "as", &.{})).pos);
+  try std.testing.expectEqual(4, (try expr.checkMatch("asdf", &.{})).pos);
+  try std.testing.expectEqual(2, (try expr.checkMatch("as", &.{})).pos);
 }
 
 test "any" {
@@ -21,8 +21,8 @@ test "any" {
   const allocr = gpa.allocator();
   var expr = try Expr.create(allocr, "..", &.{}).asErr();
   defer expr.deinit(allocr);
-  try std.testing.expectEqual(1, (try expr.checkMatch(allocr, "a", &.{})).pos);
-  try std.testing.expectEqual(2, (try expr.checkMatch(allocr, "as", &.{})).pos);
+  try std.testing.expectEqual(1, (try expr.checkMatch("a", &.{})).pos);
+  try std.testing.expectEqual(2, (try expr.checkMatch("as", &.{})).pos);
 }
 
 test "simple more than one" {
@@ -30,11 +30,11 @@ test "simple more than one" {
   const allocr = gpa.allocator();
   var expr = try Expr.create(allocr, "a+", &.{}).asErr();
   defer expr.deinit(allocr);
-  try std.testing.expectEqual(1, (try expr.checkMatch(allocr, "a", &.{})).pos);
-  try std.testing.expectEqual(2, (try expr.checkMatch(allocr, "aa", &.{})).pos);
-  try std.testing.expectEqual(1, (try expr.checkMatch(allocr, "aba", &.{})).pos);
-  try std.testing.expectEqual(2, (try expr.checkMatch(allocr, "aad", &.{})).pos);
-  try std.testing.expectEqual(0, (try expr.checkMatch(allocr, "daa", &.{})).pos);
+  try std.testing.expectEqual(1, (try expr.checkMatch("a", &.{})).pos);
+  try std.testing.expectEqual(2, (try expr.checkMatch("aa", &.{})).pos);
+  try std.testing.expectEqual(1, (try expr.checkMatch("aba", &.{})).pos);
+  try std.testing.expectEqual(2, (try expr.checkMatch("aad", &.{})).pos);
+  try std.testing.expectEqual(0, (try expr.checkMatch("daa", &.{})).pos);
 }
 
 test "group more than one" {
@@ -42,9 +42,9 @@ test "group more than one" {
   const allocr = gpa.allocator();
   var expr = try Expr.create(allocr, "(ab)+", &.{}).asErr();
   defer expr.deinit(allocr);
-  try std.testing.expectEqual(2, (try expr.checkMatch(allocr, "ab", &.{})).pos);
-  try std.testing.expectEqual(4, (try expr.checkMatch(allocr, "abab", &.{})).pos);
-  try std.testing.expectEqual(0, (try expr.checkMatch(allocr, "dab", &.{})).pos);
+  try std.testing.expectEqual(2, (try expr.checkMatch("ab", &.{})).pos);
+  try std.testing.expectEqual(4, (try expr.checkMatch("abab", &.{})).pos);
+  try std.testing.expectEqual(0, (try expr.checkMatch("dab", &.{})).pos);
 }
 
 test "group nested more than one" {
@@ -52,10 +52,10 @@ test "group nested more than one" {
   const allocr = gpa.allocator();
   var expr = try Expr.create(allocr, "(ax+b)+", &.{}).asErr();
   defer expr.deinit(allocr);
-  try std.testing.expectEqual(3, (try expr.checkMatch(allocr, "axb", &.{})).pos);
-  try std.testing.expectEqual(6, (try expr.checkMatch(allocr, "axbaxb", &.{})).pos);
-  try std.testing.expectEqual(7, (try expr.checkMatch(allocr, "axxbaxb", &.{})).pos);
-  try std.testing.expectEqual(1, (try expr.checkMatch(allocr, "ab", &.{})).pos);
+  try std.testing.expectEqual(3, (try expr.checkMatch("axb", &.{})).pos);
+  try std.testing.expectEqual(6, (try expr.checkMatch("axbaxb", &.{})).pos);
+  try std.testing.expectEqual(7, (try expr.checkMatch("axxbaxb", &.{})).pos);
+  try std.testing.expectEqual(1, (try expr.checkMatch("ab", &.{})).pos);
 }
 
 test "simple zero or more" {
@@ -63,11 +63,11 @@ test "simple zero or more" {
   const allocr = gpa.allocator();
   var expr = try Expr.create(allocr, "a*b", &.{}).asErr();
   defer expr.deinit(allocr);
-  try std.testing.expectEqual(2, (try expr.checkMatch(allocr, "ab", &.{})).pos);
-  try std.testing.expectEqual(3, (try expr.checkMatch(allocr, "aab", &.{})).pos);
-  try std.testing.expectEqual(2, (try expr.checkMatch(allocr, "aba", &.{})).pos);
-  try std.testing.expectEqual(0, (try expr.checkMatch(allocr, "aad", &.{})).pos);
-  try std.testing.expectEqual(0, (try expr.checkMatch(allocr, "daa", &.{})).pos);
+  try std.testing.expectEqual(2, (try expr.checkMatch("ab", &.{})).pos);
+  try std.testing.expectEqual(3, (try expr.checkMatch("aab", &.{})).pos);
+  try std.testing.expectEqual(2, (try expr.checkMatch("aba", &.{})).pos);
+  try std.testing.expectEqual(0, (try expr.checkMatch("aad", &.{})).pos);
+  try std.testing.expectEqual(0, (try expr.checkMatch("daa", &.{})).pos);
 }
 
 test "simple greedy zero or more" {
@@ -75,10 +75,10 @@ test "simple greedy zero or more" {
   const allocr = gpa.allocator();
   var expr = try Expr.create(allocr, "x.*b", &.{}).asErr();
   defer expr.deinit(allocr);
-  try std.testing.expectEqual(2, (try expr.checkMatch(allocr, "xb", &.{})).pos);
-  try std.testing.expectEqual(3, (try expr.checkMatch(allocr, "xab", &.{})).pos);
-  try std.testing.expectEqual(4, (try expr.checkMatch(allocr, "xaab", &.{})).pos);
-  try std.testing.expectEqual(8, (try expr.checkMatch(allocr, "xaabxaab", &.{})).pos);
+  try std.testing.expectEqual(2, (try expr.checkMatch("xb", &.{})).pos);
+  try std.testing.expectEqual(3, (try expr.checkMatch("xab", &.{})).pos);
+  try std.testing.expectEqual(4, (try expr.checkMatch("xaab", &.{})).pos);
+  try std.testing.expectEqual(8, (try expr.checkMatch("xaabxaab", &.{})).pos);
 }
 
 test "group zero or more" {
@@ -86,10 +86,10 @@ test "group zero or more" {
   const allocr = gpa.allocator();
   var expr = try Expr.create(allocr, "(ab)*c", &.{}).asErr();
   defer expr.deinit(allocr);
-  try std.testing.expectEqual(1, (try expr.checkMatch(allocr, "c", &.{})).pos);
-  try std.testing.expectEqual(3, (try expr.checkMatch(allocr, "abc", &.{})).pos);
-  try std.testing.expectEqual(5, (try expr.checkMatch(allocr, "ababc", &.{})).pos);
-  try std.testing.expectEqual(0, (try expr.checkMatch(allocr, "xab", &.{})).pos);
+  try std.testing.expectEqual(1, (try expr.checkMatch("c", &.{})).pos);
+  try std.testing.expectEqual(3, (try expr.checkMatch("abc", &.{})).pos);
+  try std.testing.expectEqual(5, (try expr.checkMatch("ababc", &.{})).pos);
+  try std.testing.expectEqual(0, (try expr.checkMatch("xab", &.{})).pos);
 }
 
 test "group nested zero or more" {
@@ -97,12 +97,12 @@ test "group nested zero or more" {
   const allocr = gpa.allocator();
   var expr = try Expr.create(allocr, "(a(xy)*b)*c", &.{}).asErr();
   defer expr.deinit(allocr);
-  try std.testing.expectEqual(1, (try expr.checkMatch(allocr, "c", &.{})).pos);
-  try std.testing.expectEqual(3, (try expr.checkMatch(allocr, "abc", &.{})).pos);
-  try std.testing.expectEqual(5, (try expr.checkMatch(allocr, "ababc", &.{})).pos);
-  try std.testing.expectEqual(0, (try expr.checkMatch(allocr, "xab", &.{})).pos);
-  try std.testing.expectEqual(7, (try expr.checkMatch(allocr, "axybabc", &.{})).pos);
-  try std.testing.expectEqual(9, (try expr.checkMatch(allocr, "axybaxybc", &.{})).pos);
+  try std.testing.expectEqual(1, (try expr.checkMatch("c", &.{})).pos);
+  try std.testing.expectEqual(3, (try expr.checkMatch("abc", &.{})).pos);
+  try std.testing.expectEqual(5, (try expr.checkMatch("ababc", &.{})).pos);
+  try std.testing.expectEqual(0, (try expr.checkMatch("xab", &.{})).pos);
+  try std.testing.expectEqual(7, (try expr.checkMatch("axybabc", &.{})).pos);
+  try std.testing.expectEqual(9, (try expr.checkMatch("axybaxybc", &.{})).pos);
 }
 
 test "simple optional" {
@@ -110,10 +110,10 @@ test "simple optional" {
   const allocr = gpa.allocator();
   var expr = try Expr.create(allocr, "a?b", &.{}).asErr();
   defer expr.deinit(allocr);
-  try std.testing.expectEqual(2, (try expr.checkMatch(allocr, "ab", &.{})).pos);
-  try std.testing.expectEqual(2, (try expr.checkMatch(allocr, "aba", &.{})).pos);
-  try std.testing.expectEqual(0, (try expr.checkMatch(allocr, "db", &.{})).pos);
-  try std.testing.expectEqual(1, (try expr.checkMatch(allocr, "b", &.{})).pos);
+  try std.testing.expectEqual(2, (try expr.checkMatch("ab", &.{})).pos);
+  try std.testing.expectEqual(2, (try expr.checkMatch("aba", &.{})).pos);
+  try std.testing.expectEqual(0, (try expr.checkMatch("db", &.{})).pos);
+  try std.testing.expectEqual(1, (try expr.checkMatch("b", &.{})).pos);
 }
 
 test "group optional" {
@@ -121,9 +121,9 @@ test "group optional" {
   const allocr = gpa.allocator();
   var expr = try Expr.create(allocr, "(ab)?c", &.{}).asErr();
   defer expr.deinit(allocr);
-  try std.testing.expectEqual(3, (try expr.checkMatch(allocr, "abc", &.{})).pos);
-  try std.testing.expectEqual(1, (try expr.checkMatch(allocr, "c", &.{})).pos);
-  try std.testing.expectEqual(0, (try expr.checkMatch(allocr, "b", &.{})).pos);
+  try std.testing.expectEqual(3, (try expr.checkMatch("abc", &.{})).pos);
+  try std.testing.expectEqual(1, (try expr.checkMatch("c", &.{})).pos);
+  try std.testing.expectEqual(0, (try expr.checkMatch("b", &.{})).pos);
 }
 
 test "group nested optional" {
@@ -131,11 +131,11 @@ test "group nested optional" {
   const allocr = gpa.allocator();
   var expr = try Expr.create(allocr, "(a(xy)?b)?c", &.{}).asErr();
   defer expr.deinit(allocr);
-  try std.testing.expectEqual(3, (try expr.checkMatch(allocr, "abc", &.{})).pos);
-  try std.testing.expectEqual(5, (try expr.checkMatch(allocr, "axybc", &.{})).pos);
-  try std.testing.expectEqual(2, (try expr.checkMatch(allocr, "axbc", &.{})).pos);
-  try std.testing.expectEqual(1, (try expr.checkMatch(allocr, "c", &.{})).pos);
-  try std.testing.expectEqual(0, (try expr.checkMatch(allocr, "b", &.{})).pos);
+  try std.testing.expectEqual(3, (try expr.checkMatch("abc", &.{})).pos);
+  try std.testing.expectEqual(5, (try expr.checkMatch("axybc", &.{})).pos);
+  try std.testing.expectEqual(2, (try expr.checkMatch("axbc", &.{})).pos);
+  try std.testing.expectEqual(1, (try expr.checkMatch("c", &.{})).pos);
+  try std.testing.expectEqual(0, (try expr.checkMatch("b", &.{})).pos);
 }
 
 test "simple lazy zero or more" {
@@ -143,10 +143,10 @@ test "simple lazy zero or more" {
   const allocr = gpa.allocator();
   var expr = try Expr.create(allocr, "x.-b", &.{}).asErr();
   defer expr.deinit(allocr);
-  try std.testing.expectEqual(2, (try expr.checkMatch(allocr, "xb", &.{})).pos);
-  try std.testing.expectEqual(3, (try expr.checkMatch(allocr, "xab", &.{})).pos);
-  try std.testing.expectEqual(4, (try expr.checkMatch(allocr, "xaab", &.{})).pos);
-  try std.testing.expectEqual(4, (try expr.checkMatch(allocr, "xaabxaab", &.{})).pos);
+  try std.testing.expectEqual(2, (try expr.checkMatch("xb", &.{})).pos);
+  try std.testing.expectEqual(3, (try expr.checkMatch("xab", &.{})).pos);
+  try std.testing.expectEqual(4, (try expr.checkMatch("xaab", &.{})).pos);
+  try std.testing.expectEqual(4, (try expr.checkMatch("xaabxaab", &.{})).pos);
 }
 
 test "simple range" {
@@ -154,10 +154,10 @@ test "simple range" {
   const allocr = gpa.allocator();
   var expr = try Expr.create(allocr, "[a-z]+", &.{}).asErr();
   defer expr.deinit(allocr);
-  try std.testing.expectEqual(2, (try expr.checkMatch(allocr, "ab0", &.{})).pos);
-  try std.testing.expectEqual(3, (try expr.checkMatch(allocr, "aba0", &.{})).pos);
-  try std.testing.expectEqual(2, (try expr.checkMatch(allocr, "db0", &.{})).pos);
-  try std.testing.expectEqual(1, (try expr.checkMatch(allocr, "x0", &.{})).pos);
+  try std.testing.expectEqual(2, (try expr.checkMatch("ab0", &.{})).pos);
+  try std.testing.expectEqual(3, (try expr.checkMatch("aba0", &.{})).pos);
+  try std.testing.expectEqual(2, (try expr.checkMatch("db0", &.{})).pos);
+  try std.testing.expectEqual(1, (try expr.checkMatch("x0", &.{})).pos);
 }
 
 test "simple range inverse" {
@@ -165,8 +165,8 @@ test "simple range inverse" {
   const allocr = gpa.allocator();
   var expr = try Expr.create(allocr, "[^b]", &.{}).asErr();
   defer expr.deinit(allocr);
-  try std.testing.expectEqual(1, (try expr.checkMatch(allocr, "0", &.{})).pos);
-  try std.testing.expectEqual(0, (try expr.checkMatch(allocr, "b", &.{})).pos);
+  try std.testing.expectEqual(1, (try expr.checkMatch("0", &.{})).pos);
+  try std.testing.expectEqual(0, (try expr.checkMatch("b", &.{})).pos);
 }
 
 test "group" {
@@ -176,12 +176,12 @@ test "group" {
   defer expr.deinit(allocr);
   var groups = [1]Expr.MatchGroup{.{}} ** 2;
   const opts: Expr.MatchOptions = .{ .group_out = &groups, };
-  try std.testing.expectEqual(4, (try expr.checkMatch(allocr, "abAB0", &opts)).pos);
+  try std.testing.expectEqual(4, (try expr.checkMatch("abAB0", &opts)).pos);
   try std.testing.expectEqual(0, groups[0].start);
   try std.testing.expectEqual(2, groups[0].end);
   try std.testing.expectEqual(2, groups[1].start);
   try std.testing.expectEqual(4, groups[1].end);
-  try std.testing.expectEqual(2, (try expr.checkMatch(allocr, "AB0", &opts)).pos);
+  try std.testing.expectEqual(2, (try expr.checkMatch("AB0", &opts)).pos);
   try std.testing.expectEqual(0, groups[0].start);
   try std.testing.expectEqual(0, groups[0].end);
   try std.testing.expectEqual(0, groups[1].start);
@@ -193,10 +193,10 @@ test "simple alternate" {
   const allocr = gpa.allocator();
   var expr = try Expr.create(allocr, "[a-z]+|[A-Z]+", &.{}).asErr();
   defer expr.deinit(allocr);
-  try std.testing.expectEqual(2, (try expr.checkMatch(allocr, "ab", &.{})).pos);
-  try std.testing.expectEqual(2, (try expr.checkMatch(allocr, "AB", &.{})).pos);
-  try std.testing.expectEqual(1, (try expr.checkMatch(allocr, "aB", &.{})).pos);
-  try std.testing.expectEqual(0, (try expr.checkMatch(allocr, "00", &.{})).pos);
+  try std.testing.expectEqual(2, (try expr.checkMatch("ab", &.{})).pos);
+  try std.testing.expectEqual(2, (try expr.checkMatch("AB", &.{})).pos);
+  try std.testing.expectEqual(1, (try expr.checkMatch("aB", &.{})).pos);
+  try std.testing.expectEqual(0, (try expr.checkMatch("00", &.{})).pos);
 }
 
 test "group alternate" {
@@ -204,10 +204,28 @@ test "group alternate" {
   const allocr = gpa.allocator();
   var expr = try Expr.create(allocr, "(a|z)(b|c)", &.{}).asErr();
   defer expr.deinit(allocr);
-  try std.testing.expectEqual(2, (try expr.checkMatch(allocr, "ab", &.{})).pos);
-  try std.testing.expectEqual(1, (try expr.checkMatch(allocr, "az", &.{})).pos);
-  try std.testing.expectEqual(2, (try expr.checkMatch(allocr, "zc", &.{})).pos);
-  try std.testing.expectEqual(0, (try expr.checkMatch(allocr, "c", &.{})).pos);
+  try std.testing.expectEqual(2, (try expr.checkMatch("ab", &.{})).pos);
+  try std.testing.expectEqual(1, (try expr.checkMatch("az", &.{})).pos);
+  try std.testing.expectEqual(2, (try expr.checkMatch("zc", &.{})).pos);
+  try std.testing.expectEqual(0, (try expr.checkMatch("c", &.{})).pos);
+}
+
+test "anchor start" {
+  var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+  const allocr = gpa.allocator();
+  var expr = try Expr.create(allocr, "^asdf", &.{}).asErr();
+  defer expr.deinit(allocr);
+  try std.testing.expectEqual(4, (try expr.checkMatch("asdf", &.{})).pos);
+  try std.testing.expectEqual(1, (try expr.checkMatch("aasdf", &.{})).pos);
+}
+
+test "anchor end" {
+  var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+  const allocr = gpa.allocator();
+  var expr = try Expr.create(allocr, "asdf$", &.{}).asErr();
+  defer expr.deinit(allocr);
+  try std.testing.expectEqual(true, (try expr.checkMatch("asdf", &.{})).fully_matched);
+  try std.testing.expectEqual(false, (try expr.checkMatch("asdfx", &.{})).fully_matched);
 }
 
 test "integrate: string" {
@@ -219,13 +237,13 @@ test "integrate: string" {
     , &.{}
   ).asErr();
   defer expr.deinit(allocr);
-  try std.testing.expectEqual(3, (try expr.checkMatch(allocr, \\"a"
+  try std.testing.expectEqual(3, (try expr.checkMatch(\\"a"
                                                       , &.{})).pos);
-  try std.testing.expectEqual(4, (try expr.checkMatch(allocr, \\"\\"
+  try std.testing.expectEqual(4, (try expr.checkMatch(\\"\\"
                                                       , &.{})).pos);
-  try std.testing.expectEqual(4, (try expr.checkMatch(allocr, \\"ab"
+  try std.testing.expectEqual(4, (try expr.checkMatch(\\"ab"
                                                       , &.{})).pos);
-  try std.testing.expectEqual(6, (try expr.checkMatch(allocr, \\"\"\""
+  try std.testing.expectEqual(6, (try expr.checkMatch(\\"\"\""
                                                       , &.{})).pos);
 }
 
@@ -234,7 +252,7 @@ test "integrate: huge simple" {
   const allocr = gpa.allocator();
   var expr = try Expr.create(allocr, "a+", &.{}).asErr();
   defer expr.deinit(allocr);
-  try std.testing.expectEqual(1000, (try expr.checkMatch(allocr, 
+  try std.testing.expectEqual(1000, (try expr.checkMatch(
     &([_]u8{'a'}**1000), &.{}
   )).pos);
 }
@@ -244,7 +262,7 @@ test "integrate: huge group" {
   const allocr = gpa.allocator();
   var expr = try Expr.create(allocr, "(ab)+", &.{}).asErr();
   defer expr.deinit(allocr);
-  try std.testing.expectEqual(1000, (try expr.checkMatch(allocr, 
+  try std.testing.expectEqual(1000, (try expr.checkMatch(
     &([_]u8{'a','b'}**500), &.{}
   )).pos);
 }
@@ -255,12 +273,12 @@ test "find (1st pat el is string)" {
   var expr = try Expr.create(allocr, "asdf?b", &.{}).asErr();
   defer expr.deinit(allocr);
   {
-    const res = (try expr.find(allocr, "000asdfbasdfb")).?;
+    const res = (try expr.find("000asdfbasdfb")).?;
     try std.testing.expectEqual(3, res.start);
     try std.testing.expectEqual(8, res.end);
   }
   {
-    const res = (try expr.find(allocr, "000asdbasdfb")).?;
+    const res = (try expr.find("000asdbasdfb")).?;
     try std.testing.expectEqual(3, res.start);
     try std.testing.expectEqual(7, res.end);
   }
@@ -272,7 +290,7 @@ test "find (1st pat el is char, more than one)" {
   var expr = try Expr.create(allocr, "xab+", &.{}).asErr();
   defer expr.deinit(allocr);
   {
-    const res = (try expr.find(allocr, "xabb")).?;
+    const res = (try expr.find("xabb")).?;
     try std.testing.expectEqual(0, res.start);
     try std.testing.expectEqual(4, res.end);
   }
@@ -284,12 +302,12 @@ test "find (1st pat el is char)" {
   var expr = try Expr.create(allocr, "x+asdf?b", &.{}).asErr();
   defer expr.deinit(allocr);
   {
-    const res = (try expr.find(allocr, "000xxxasdfbasdfb")).?;
+    const res = (try expr.find("000xxxasdfbasdfb")).?;
     try std.testing.expectEqual(3, res.start);
     try std.testing.expectEqual(11, res.end);
   }
   {
-    const res = (try expr.find(allocr, "000xxxasdbasdfb")).?;
+    const res = (try expr.find("000xxxasdbasdfb")).?;
     try std.testing.expectEqual(3, res.start);
     try std.testing.expectEqual(10, res.end);
   }
@@ -301,7 +319,7 @@ test "find reverse (1st pat el is string)" {
   var expr = try Expr.create(allocr, "asdf?b", &.{}).asErr();
   defer expr.deinit(allocr);
   {
-    const res = (try expr.findBackwards(allocr, "000asdfbasdfb")).?;
+    const res = (try expr.findBackwards("000asdfbasdfb")).?;
     try std.testing.expectEqual(8, res.start);
     try std.testing.expectEqual(13, res.end);
   }
@@ -313,7 +331,7 @@ test "find reverse (1st pat el is char)" {
   var expr = try Expr.create(allocr, "x+asdf?b", &.{}).asErr();
   defer expr.deinit(allocr);
   {
-    const res = (try expr.findBackwards(allocr, "000xxxasdfbasdfbxxxasdfb")).?;
+    const res = (try expr.findBackwards("000xxxasdfbasdfbxxxasdfb")).?;
     try std.testing.expectEqual(18, res.start);
     try std.testing.expectEqual(24, res.end);
   }

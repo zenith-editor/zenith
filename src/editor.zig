@@ -14,6 +14,7 @@ const text = @import("./text.zig");
 const sig = @import("./sig.zig");
 const shortcuts = @import("./shortcuts.zig");
 const encoding = @import("./encoding.zig");
+const highlight = @import("./highlight.zig");
 
 const Expr = @import("./patterns.zig").Expr;
 
@@ -158,11 +159,6 @@ pub const Editor = struct {
   const STATUS_BAR_HEIGHT = 2;
   const INPUT_BUFFER_SIZE = 64;
   
-  const Private = struct {
-    state: State,
-    cmd_data: ?CommandData,
-  };
-  
   in: std.fs.File,
   inr: std.fs.File.Reader,
   in_buf: std.BoundedArray(u8, INPUT_BUFFER_SIZE) = .{},
@@ -185,11 +181,15 @@ pub const Editor = struct {
   
   text_handler: text.TextHandler,
   
+  highlight_last_iter_idx: usize = 0,
+  
   conf: config.Reader,
   
   help_msg: ?*const shortcuts.HelpText = null,
   
-  _priv: Private,
+  unprotected_state: State,
+  
+  unprotected_cmd_data: ?CommandData,
   
   // terminal extensions
   has_bracketed_paste: bool = false,
@@ -225,10 +225,8 @@ pub const Editor = struct {
       .alloc_gpa = alloc_gpa,
       .text_handler = text_handler,
       .conf = conf,
-      ._priv = .{
-        .state = State.INIT,
-        .cmd_data = null,
-      },
+      .unprotected_state = State.INIT,
+      .unprotected_cmd_data = null,
     };
     try editor.updateWinSize();
     return editor;
@@ -239,16 +237,16 @@ pub const Editor = struct {
   }
   
   pub fn getState(self: *const Editor) State {
-    return self._priv.state;
+    return self.unprotected_state;
   }
   
   pub fn setState(self: *Editor, state: State) void {
-    std.debug.assert(state != self._priv.state);
-    const old_state_handler = StateHandler.List[@intFromEnum(self._priv.state)];
+    std.debug.assert(state != self.unprotected_state);
+    const old_state_handler = StateHandler.List[@intFromEnum(self.unprotected_state)];
     if (old_state_handler.onUnset) |onUnset| {
       onUnset(self, state);
     }
-    self._priv.state = state;
+    self.unprotected_state = state;
     const state_handler = StateHandler.List[@intFromEnum(state)];
     self.state_handler = state_handler;
     if (state_handler.onSet) |onSet| {
@@ -261,17 +259,17 @@ pub const Editor = struct {
   // command data
   
   pub fn getCmdData(self: *Editor) *CommandData {
-    return &self._priv.cmd_data.?;
+    return &self.unprotected_cmd_data.?;
   }
   
   pub fn setCmdData(self: *Editor, cmd_data: *const CommandData) void {
-    std.debug.assert(self._priv.cmd_data == null);
-    self._priv.cmd_data = cmd_data.*;
+    std.debug.assert(self.unprotected_cmd_data == null);
+    self.unprotected_cmd_data = cmd_data.*;
   }
   
   pub fn unsetCmdData(self: *Editor) void {
-    self._priv.cmd_data.?.deinit(self);
-    self._priv.cmd_data = null;
+    self.unprotected_cmd_data.?.deinit(self);
+    self.unprotected_cmd_data = null;
   }
   
   // raw mode
@@ -434,11 +432,96 @@ pub const Editor = struct {
   pub const ESC_RESET_POS = "\x1b[H";
   pub const ESC_COLOR_INVERT = "\x1b[7m";
   pub const ESC_COLOR_DEFAULT = "\x1b[0m";
-  pub const ESC_COLOR_GRAY = "\x1b[38;5;8m";
   
-  pub const HTAB_CHAR = ESC_COLOR_GRAY ++ "\xc2\xbb " ++ ESC_COLOR_DEFAULT;
+  pub const ESC_FG_BOLD = "\x1b[1m";
+  pub const ESC_FG_EMPHASIZE = "\x1b[38;5;8m";
+  
+  pub const HTAB_CHAR = ESC_FG_EMPHASIZE ++ "\xc2\xbb " ++ ESC_COLOR_DEFAULT;
   pub const HTAB_COLS = 2;
-  pub const LINEWRAP_SYM = ESC_COLOR_GRAY ++ "\xe2\x8f\x8e" ++ ESC_COLOR_DEFAULT;
+  pub const LINEWRAP_SYM = ESC_FG_EMPHASIZE ++ "\xe2\x8f\x8e" ++ ESC_COLOR_DEFAULT;
+  pub const LINENO_COLOR = ESC_FG_EMPHASIZE;
+  
+  pub const COLOR_CODE_INVERT: ColorCode = .{
+    .bg = .invert,
+  };
+  
+  pub const ColorCode = struct {
+    pub const Bg = union(enum) {
+      transparent,
+      coded: u32,
+      invert,
+      
+      pub fn eql(self: *const Bg, other: *const Bg) bool {
+        switch (self.*) {
+          .transparent => {
+            switch(other.*) {
+              .transparent => return true,
+              else => return false,
+            }
+          },
+          .invert => {
+            switch(other.*) {
+              .invert => return true,
+              else => return false,
+            }
+          },
+          .coded => |coded| {
+            switch(other.*) {
+              .coded => |c1| return coded == c1,
+              else => return false,
+            }
+          },
+        }
+      }
+    };
+    
+    fg: ?u32 = null,
+    bg: Bg = .transparent,
+    is_bold: bool = false,
+    
+    pub const MAX_COLORS = 15;
+    
+    pub const COLOR_STR = [_][]const u8{
+      "black",
+      "dark-red",
+      "dark-green",
+      "dark-yellow",
+      "dark-blue",
+      "dark-purple",
+      "dark-cyan",
+      "gray",
+      "dark-gray",
+      "red",
+      "green",
+      "yellow",
+      "blue",
+      "purple",
+      "cyan",
+      "white",
+    };
+    
+    pub fn init(fg: ?u32, bg: ?u32, is_bold: bool) ColorCode {
+      return .{
+        .fg = (if (fg != null and fg.? <= MAX_COLORS) fg.? else null),
+        .bg = blk: {
+          if (bg) |coded| {
+            break :blk .{ .coded = coded };
+          } else {
+            break :blk .transparent;
+          }
+        },
+        .is_bold = is_bold,
+      };
+    }
+    
+    pub fn eql(self: *const ColorCode, other: *const ColorCode) bool {
+      return (
+        self.fg == other.fg and
+        self.bg.eql(&other.bg) and
+        self.is_bold == other.is_bold
+      );
+    }
+  };
   
   pub fn writeAll(self: *Editor, bytes: []const u8) !void {
     return self.outw.writeAll(bytes);
@@ -603,24 +686,48 @@ pub const Editor = struct {
     editor: *Editor,
     col: u32 = 0,
     text_width: u32,
-    color_code: ?[]const u8 = null,
+    color_code: ?ColorCode = null,
     
-    inline fn setColor(self: *ColumnPrinter, color_code: ?[]const u8) !void {
-      if (color_code == null) {
+    inline fn setColor(self: *ColumnPrinter, opt_color_code: ?*const ColorCode) !void {
+      if (opt_color_code == null) {
         if (self.color_code == null) {
           return;
         }
       } else if (self.color_code) |cur_color_code| {
-        if (cur_color_code.ptr == color_code.?.ptr) {
+        if (cur_color_code.eql(opt_color_code.?)) {
           return;
         }
       }
-      self.color_code = color_code;
+      if (opt_color_code) |color_code| {
+        self.color_code = color_code.*;
+      } else {
+        self.color_code = null;
+      }
       try self.writeColorCode();
     }
     
     fn writeColorCode(self: *ColumnPrinter) !void {
-      try self.editor.writeAll(self.color_code orelse ESC_COLOR_DEFAULT);
+      if (self.color_code) |color_code| {
+        try self.editor.writeAll(ESC_COLOR_DEFAULT);
+        switch (color_code.bg) {
+          .transparent => {},
+          .coded => |coded| {
+            try self.editor.writeFmt("\x1b[48;5;{d}m", .{coded});
+          },
+          .invert => {
+            try self.editor.writeAll(ESC_COLOR_INVERT);
+            return;
+          }
+        }
+        if (color_code.fg) |fg| {
+          try self.editor.writeFmt("\x1b[38;5;{d}m", .{fg});
+        }
+        if (color_code.is_bold) {
+          try self.editor.writeAll(ESC_FG_BOLD);
+        }
+      } else {
+        try self.editor.writeAll(ESC_COLOR_DEFAULT);
+      }
     }
     
     fn writeAll(self: *ColumnPrinter, bytes: []const u8) !bool {
@@ -665,6 +772,7 @@ pub const Editor = struct {
       
       const offset_col: u32 = if (row == cursor_row) text_handler.scroll.col else 0;
       var iter = text_handler.iterate(offset_start + offset_col);
+      var highlight_iter = text_handler.highlight.iterate(iter.pos, &self.highlight_last_iter_idx);
       
       try self.moveCursor(row, 0);
       
@@ -691,7 +799,7 @@ pub const Editor = struct {
           try self.outw.writeAll(lineno_slice);
           try self.outw.writeAll(ESC_COLOR_DEFAULT);
         } else {
-          try self.outw.writeAll(ESC_COLOR_GRAY);
+          try self.outw.writeAll(LINENO_COLOR);
           try self.outw.writeAll(lineno_slice);
           try self.outw.writeAll(ESC_COLOR_DEFAULT);
         }
@@ -707,17 +815,25 @@ pub const Editor = struct {
       
       if (text_handler.markers) |*markers| {
         if (iter.pos >= markers.start and iter.pos < markers.end) {
-          try printer.setColor(ESC_COLOR_INVERT);
+          try printer.setColor(&COLOR_CODE_INVERT);
         }
         
-        while (iter.nextCodepointSliceUntil(offset_end)) |bytes| {
-          if (!try printer.writeAll(bytes)) {
-            break;
+        while (iter.nextCodepointSliceUntilWithCurPos(offset_end)) |bytes_with_pos| {
+          const curr_highlight = highlight_iter.nextCodepoint(@intCast(bytes_with_pos.bytes.len));
+          if  (
+            bytes_with_pos.pos >= markers.end or
+            bytes_with_pos.pos < markers.start
+          ) {
+            if (curr_highlight != null) {
+              try printer.setColor(self.getHighlightColor(&curr_highlight.?));
+            } else {
+              try printer.setColor(null);
+            }
+          } else if (bytes_with_pos.pos >= markers.start) {
+            try printer.setColor(&COLOR_CODE_INVERT);
           }
-          if (iter.pos >= markers.end) {
-            try printer.setColor(null);
-          } else if (iter.pos >= markers.start) {
-            try printer.setColor(ESC_COLOR_INVERT);
+          if (!try printer.writeAll(bytes_with_pos.bytes)) {
+            break;
           }
         }
       }
@@ -728,16 +844,24 @@ pub const Editor = struct {
           @intCast(logical_gap_buf_start + self.text_handler.gap.items.len);
           
         if (iter.pos >= logical_gap_buf_start and iter.pos < logical_gap_buf_end) {
-          try printer.setColor(ESC_COLOR_INVERT);
+          try printer.setColor(&COLOR_CODE_INVERT);
         }
         
-        while (iter.nextCodepointSliceUntil(offset_end)) |bytes| {
-          if (iter.pos == logical_gap_buf_end) {
-            try printer.setColor(null);
-          } else if (iter.pos >= logical_gap_buf_start) {
-            try printer.setColor(ESC_COLOR_INVERT);
+        while (iter.nextCodepointSliceUntilWithCurPos(offset_end)) |bytes_with_pos| {
+          const curr_highlight = highlight_iter.next(bytes_with_pos.bytes.len);
+          if (
+            bytes_with_pos.pos >= logical_gap_buf_end or
+            bytes_with_pos.pos < logical_gap_buf_start
+          ) {
+            if (curr_highlight != null) {
+              try printer.setColor(self.getHighlightColor(&curr_highlight.?));
+            } else {
+              try printer.setColor(null);
+            }
+          } else if (bytes_with_pos.pos >= logical_gap_buf_start) {
+            try printer.setColor(&COLOR_CODE_INVERT);
           }
-          if (!try printer.writeAll(bytes)) {
+          if (!try printer.writeAll(bytes_with_pos.bytes)) {
             break;
           }
         }
@@ -745,6 +869,12 @@ pub const Editor = struct {
       
       else {
         while (iter.nextCodepointSliceUntil(offset_end)) |bytes| {
+          const curr_highlight = highlight_iter.nextCodepoint(@intCast(bytes.len));
+          if (curr_highlight != null) {
+            try printer.setColor(self.getHighlightColor(&curr_highlight.?));
+          } else {
+            try printer.setColor(null);
+          }
           if (!try printer.writeAll(bytes)) {
             break;
           }
@@ -766,6 +896,11 @@ pub const Editor = struct {
     try self.showUpperLayers();
     
     self.needs_update_cursor = true;
+  }
+  
+  fn getHighlightColor(self: *const Editor, token: *const highlight.Token) *const ColorCode {
+    const token_type = &self.text_handler.highlight.token_types.items[token.typeid];
+    return &token_type.color;
   }
   
   fn showUpperLayers(self: *Editor) !void {

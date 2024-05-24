@@ -48,6 +48,8 @@ pub const Instr = union(enum) {
   group_start: usize,
   /// Record end of the captured slice into specified group
   group_end: usize,
+  anchor_start: void,
+  anchor_end: void,
   
   pub fn deinit(self: *Instr, allocr: std.mem.Allocator) void {
     switch(self.*) {
