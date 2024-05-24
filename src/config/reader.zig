@@ -26,6 +26,7 @@ pub const ConfigErrorType =
   || error {
     OutOfMemory,
     ExpectedRegexFlag,
+    ExpectedColorCode,
     InvalidSection,
     InvalidKey,
     DuplicateKey,
@@ -419,8 +420,16 @@ fn parseHighlight(self: *Reader, state: *ParserState, hl_parse: *HighlightToPars
           try writer.setPattern(s);
         } else if (try kv.get([]const u8, "flags")) |s| {
           try writer.setFlags(s);
-        } else if (try kv.get(i32, "color")) |int| {
-          writer.color = @intCast(int);
+        } else if (std.mem.eql(u8, kv.key, "color")) {
+          if (kv.val.get([]const u8) catch null) |s| {
+            writer.color = editor.Editor.ColorCode.idFromStr(s) orelse {
+              return error.ExpectedColorCode;
+            };
+          } else if (kv.val.get(i32) catch null) |int| {
+            writer.color = @intCast(int);
+          } else {
+            return error.ExpectedColorCode;
+          }
         } else if (try kv.get(bool, "bold")) |b| {
           writer.is_bold = b;
         } else if (std.mem.startsWith(u8, kv.key, "promote:")) {
