@@ -118,7 +118,7 @@ pub fn renderStatus(self: *editor.Editor) !void {
   const status_slice = try std.fmt.bufPrint(
     &status,
     "{d}:{d}",
-    .{self.text_handler.cursor.row,self.text_handler.cursor.col}, 
+    .{self.text_handler.cursor.row+1,self.text_handler.cursor.gfx_col+1},
   );
   try self.moveCursor(
     self.getTextHeight() + 1,

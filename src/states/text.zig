@@ -74,7 +74,10 @@ pub fn handleInput(
     return error.Quit;
   }
   else if (this_shortcuts.key("save", keysym)) {
-    if (self.text_handler.file == null) {
+    if (
+      self.text_handler.file == null and
+      self.text_handler.file_path.items.len == 0
+    ) {
       self.setState(editor.State.command);
       self.setCmdData(&.{
         .prompt = editor.Commands.Open.PROMPT_SAVE,
@@ -207,12 +210,24 @@ pub fn renderStatus(self: *editor.Editor) !void {
   const text_handler: *const text.TextHandler = &self.text_handler;
   try self.writeAll(editor.Editor.ESC_CLEAR_LINE);
   if (text_handler.buffer_changed) {
-    try self.writeAll("[*]");
+    try self.writeAll("[*] ");
   } else {
-    try self.writeAll("[ ]");
+    try self.writeAll("[ ] ");
   }
-  try self.writeFmt(" {}:{}", .{
-    text_handler.lineinfo.getLineNo(text_handler.cursor.row),
-    text_handler.cursor.gfx_col+1
-  });
+  if (text_handler.file_path.items.len > 0) {
+    try self.writeAll(editor.Editor.ESC_FG_EMPHASIZE);
+    try self.writeAll(text_handler.file_path.items);
+    try self.writeAll(editor.Editor.ESC_COLOR_DEFAULT);
+  }
+  var status: [32]u8 = undefined;
+  const status_slice = try std.fmt.bufPrint(
+    &status,
+    "{d}:{d}",
+    .{self.text_handler.cursor.row+1,self.text_handler.cursor.gfx_col+1},
+  );
+  try self.moveCursor(
+    self.getTextHeight(),
+    @intCast(self.w_width - status_slice.len),
+  );
+  try self.writeAll(status_slice);
 }
