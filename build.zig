@@ -18,7 +18,9 @@ pub fn build(b: *std.Build) !void {
     .{ .name = "dbg_show_cont_line_no",
        .desc = "Show line numbers even for cont-lines", },
     .{ .name = "dbg_patterns_vm",
-       .desc = "Enable debugger for regex VM", },
+       .desc = "Enable debugging for regex VM", },
+    .{ .name = "dbg_highlighting",
+       .desc = "Enable debugging for syntax highlighting", },
   }) |dbg_opt| {
     const build_opt = b.option(bool, dbg_opt.name, dbg_opt.desc) orelse false;
     options.addOption(bool, dbg_opt.name, build_opt);

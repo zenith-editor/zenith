@@ -6,6 +6,7 @@
 const Highlight = @This();
 
 const std = @import("std");
+const build_config = @import("build_config");
 const testing = std.testing;
 
 const utils = @import("./utils.zig");
@@ -77,7 +78,6 @@ pub const Iterator = struct {
 
 tokens: std.ArrayListUnmanaged(Token) = .{},
 token_types: std.ArrayListUnmanaged(TokenType) = .{},
-highlight_from_start_of_line: bool = false,
 
 pub fn clear(self: *Highlight, allocr: std.mem.Allocator) void {
   self.tokens.shrinkAndFree(allocr, 0);
@@ -94,8 +94,6 @@ pub fn loadTokenTypesForFile(
   cfg: *const config.Reader, 
 ) !void {
   self.clear(allocr);
-  
-  self.highlight_from_start_of_line = false;
 
   const extension = std.fs.path.extension(text_handler.file_path.items);
   if (extension.len < 1) {
@@ -123,15 +121,6 @@ pub fn loadTokenTypesForFile(
           tt.pattern.?,
           &tt.flags,
         ).asErr();
-        
-        for (expr.instrs.items) |instr| {
-          switch (instr) {
-            .anchor_start => {
-              self.highlight_from_start_of_line = true;
-            },
-            else => {},
-          }
-        }
         
         break :blk expr;
       },
@@ -234,11 +223,7 @@ pub fn run(
 ) !void {
   var src_view = text_handler.srcView();
   
-  var changed_region_start = changed_region_start_in;
-  if (self.highlight_from_start_of_line) {
-    changed_region_start = text_handler.lineinfo.getOffset(line_start);
-  }
-  
+  const changed_region_start = text_handler.lineinfo.getOffset(line_start);
   const opt_tok_idx_at_pos = self.findLastNearestToken(changed_region_start, 0);
   
   if (opt_tok_idx_at_pos == null) {
@@ -273,13 +258,7 @@ pub fn run(
   
   var pos: u32 = self.tokens.items[tok_idx_at_pos].pos_start;
   var existing_idx: usize = tok_idx_at_pos;
-  var anchor_start_offset: u32 = (
-    if (self.highlight_from_start_of_line)
-      text_handler.lineinfo.getOffset(
-        text_handler.lineinfo.findMaxLineBeforeOffset(pos, 0)
-      )
-    else 0
-  );
+  var anchor_start_offset: u32 = text_handler.lineinfo.getOffset(line_start);
   var new_token_region = std.ArrayList(Token).init(allocr);
   defer new_token_region.deinit();
   var shared_suffix = false;
@@ -328,13 +307,19 @@ pub fn run(
     }
     // no token matched
     pos += @intCast(bytes.len);
-    if (self.highlight_from_start_of_line and bytes[0] == '\n') {
+    if (bytes[0] == '\n') {
       anchor_start_offset = pos;
     }
   }
   
   // replace region
+  if (comptime build_config.dbg_highlighting) {
+    std.debug.print("old highlight: {any}\n", .{self.tokens.items});
+  }
   if (shared_suffix) {
+    if (comptime build_config.dbg_highlighting) {
+      std.debug.print("new highlight: {any}\n", .{new_token_region.items});
+    }
     try self.tokens.replaceRange(
       allocr,
       tok_idx_at_pos,
