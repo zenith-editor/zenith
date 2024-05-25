@@ -95,7 +95,7 @@ pub const Keysym = struct {
     if (self.ctrl_key)
       return true;
     return switch(self.key) {
-      .normal => false,
+      .normal, .multibyte => false,
       else => true,
     };
   }
@@ -108,13 +108,16 @@ pub const Keysym = struct {
   }
   
   pub fn getPrint(self: *const Keysym) ?u8 {
-    if (!self.isSpecial() and std.ascii.isPrint(self.raw)) {
-      return switch(self.key) {
-        .normal => |c| c,
-        else => null,
-      };
-    } else {
-      return null;
+    switch(self.key) {
+      .normal => |c| {
+        if(self.ctrl_key or !std.ascii.isPrint(c)) {
+          return null;
+        }
+        return c;
+      },
+      else => {
+        return null;
+      },
     }
   }
   

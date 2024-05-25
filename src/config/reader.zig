@@ -121,7 +121,8 @@ use_tabs: bool = false,
 use_native_clipboard: bool = true,
 show_line_numbers: bool = true,
 wrap_text: bool = true,
-undo_memory_limit: usize = 4 * 1024 * 1024,
+undo_memory_limit: usize = 4 * 1024 * 1024, // bytes
+escape_time: i64 = 1000, // ms
 
 //terminal feature flags
 force_bracketed_paste: bool = true,
@@ -143,6 +144,7 @@ const REGULAR_CONFIG_FIELDS = [_]ConfigField {
   .{ .field="use_native_clipboard", .conf="use-native-clipboard" },
   .{ .field="show_line_numbers", .conf="show-line-numbers" },
   .{ .field="wrap_text", .conf="wrap-text" },
+  .{ .field="escape_time", .conf="escape-time" },
   .{ .field="force_bracketed_paste", .conf="force-bracketed-paste" },
   .{ .field="force_alt_screen_buf", .conf="force-alt-screen-buf" },
   .{ .field="force_alt_scroll_mode", .conf="force-alt-scroll-mode" },

@@ -178,7 +178,7 @@ pub const Editor = struct {
   
   in: std.fs.File,
   inr: std.fs.File.Reader,
-  in_buf: std.BoundedArray(u8, INPUT_BUFFER_SIZE) = .{},
+  /// Number of bytes read for this character
   in_read: usize = 0,
   
   out: std.fs.File,
@@ -374,21 +374,9 @@ pub const Editor = struct {
     return self.inr.readByte();
   }
   
-  fn readRawIntoBuffer(self: *Editor, size: usize) !void {
-    self.in_buf.resize(INPUT_BUFFER_SIZE) catch unreachable;
-    errdefer self.in_buf.resize(0) catch unreachable;
-    const n_read = try self.inr.read(self.in_buf.slice()[0..size]);
-    self.in_buf.resize(n_read) catch unreachable;
-  }
-  
   fn readByte(self: *Editor) !u8 {
-    var byte: u8 = undefined;
-    if (self.in_read < self.in_buf.len) {
-      byte = self.in_buf.buffer[self.in_read];
-      self.in_read += 1;
-    } else {
-      byte = try self.readRaw();
-    }
+    const byte: u8 = try self.readRaw();
+    self.in_read += 1;
     if (comptime build_config.dbg_print_read_byte) {
       if (std.ascii.isPrint(byte)) {
         std.debug.print("read: {} ({c})\n", .{byte, byte});
@@ -399,8 +387,27 @@ pub const Editor = struct {
     return byte;
   }
   
+  fn readEsc(self: *Editor) !u8 {
+    const start = std.time.milliTimestamp();
+    var now: i64 = start;
+    while ((now - start) < self.conf.escape_time) {
+      if (self.readRaw()) |byte| {
+        if (comptime build_config.dbg_print_read_byte) {
+          if (std.ascii.isPrint(byte)) {
+            std.debug.print("readEsc: {} ({c})\n", .{byte, byte});
+          } else {
+            std.debug.print("readEsc: {}\n", .{byte});
+          }
+        }
+        return byte;
+      } else |_| {}
+      std.time.sleep(std.time.ns_per_ms);
+      now = std.time.milliTimestamp();
+    }
+    return error.EndOfStream;
+  }
+  
   fn flushConsoleInput(self: *Editor) void {
-    self.in_buf.resize(0) catch unreachable;
     while (true) {
       _ = self.readRaw() catch break;
     }
@@ -414,7 +421,7 @@ pub const Editor = struct {
       if (self.buffered.popOrNull()) |byte| {
         return byte;
       }
-      return self.editor.readByte() catch 0;
+      return self.editor.readEsc() catch 0;
     }
     
     inline fn match(self: *EscapeMatcher, bytes: []const u8) bool {
@@ -438,10 +445,11 @@ pub const Editor = struct {
   };
   
   fn readKey(self: *Editor) ?kbd.Keysym {
+    self.in_read = 0;
     const raw = self.readByte() catch return null;
     if (raw == kbd.Keysym.ESC) {
-      if (self.readByte() catch null) |possibleEsc| {
-        if (possibleEsc == '[') {
+      if (self.readEsc()) |possible_esc| {
+        if (possible_esc == '[') {
           var matcher: EscapeMatcher = .{ .editor = self, };
           // 4 bytes
           if (matcher.match("200~")) { return kbd.Keysym.initSpecial(.paste_begin); }
@@ -455,7 +463,7 @@ pub const Editor = struct {
           else if (matcher.match("<0;")) {
             var input: std.BoundedArray(u8, 16) = .{};
             var is_release = false;
-            while (self.readByte() catch null) |cont| {
+            while (self.readEsc() catch null) |cont| {
               if (cont == 'M' or cont == 'm') {
                 is_release = cont == 'm';
                 break;
@@ -485,7 +493,7 @@ pub const Editor = struct {
             );
           }
           else if (matcher.match("<64;")) {
-            while (self.readByte() catch null) |cont| {
+            while (self.readEsc() catch null) |cont| {
               if (cont == 'M' or cont == 'm') {
                 break;
               }
@@ -511,11 +519,15 @@ pub const Editor = struct {
           else if (matcher.match("D")) { return kbd.Keysym.initSpecial(.left); }
           else if (matcher.match("F")) { return kbd.Keysym.initSpecial(.end); }
           else if (matcher.match("H")) { return kbd.Keysym.initSpecial(.home); }
+          else {
+            self.flushConsoleInput();
+            return null;
+          }
+        } else {
+          self.flushConsoleInput();
+          return null;
         }
-        // unknown escape sequence, empty the buffer
-        self.flushConsoleInput();
-        return null;
-      }
+      } else |_| {}
     }
     if (encoding.sequenceLen(raw)) |seqlen| {
       if (seqlen > 1) {
@@ -715,8 +727,15 @@ pub const Editor = struct {
   /// if for some reason the vterm doesn't support it
   const TYPED_CLIPBOARD_BYTE_THRESHOLD = 3;
   
-  fn handleInput(self: *Editor, is_clipboard: bool) !void {
+  const HandleInputResult = struct {
+    is_special: bool = false,
+    nread: usize = 0,
+  };
+  
+  fn handleInput(self: *Editor, is_clipboard: bool) !HandleInputResult {
+    var nread: usize = 0;
     if (self.readKey()) |keysym| {
+      nread += self.in_read;
       if (self.unprotected_hideable_msg != null) {
         self.unsetHideableMsg();
         self.needs_redraw = true;
@@ -725,6 +744,7 @@ pub const Editor = struct {
         .paste_begin => {
           // see https://invisible-island.net/xterm/xterm-paste64.html
           while (self.readKey()) |keysym1| {
+            nread += self.in_read;
             switch (keysym1.key) {
               .paste_end => { break; },
               else => {
@@ -732,12 +752,17 @@ pub const Editor = struct {
               },
             }
           }
-          return;
+          return .{ .is_special = true, .nread = nread };
         },
         else => {},
       }
       try self.state_handler.handleInput(self, &keysym, is_clipboard);
+      return .{
+        .is_special = keysym.isSpecial(),
+        .nread = nread,
+      };
     }
+    return .{};
   }
   
   fn handleInputPolling(self: *Editor) !void {
@@ -755,10 +780,13 @@ pub const Editor = struct {
           &pollfd,
           0
         ) catch {
-          return self.handleInput(false);
+          _ = try self.handleInput(false);
+          return;
         };
+        
         if (pollres == 0) {
-          return self.handleInput(false);
+          _ = try self.handleInput(false);
+          return;
         }
         
         while (true) {
@@ -769,7 +797,8 @@ pub const Editor = struct {
             @intFromPtr(&int_bytes_avail)
           ) < 0) {
             // ignore error reading available bytes and return
-            return self.handleInput(false);
+            _ = try self.handleInput(false);
+            return;
           }
           
           // no more bytes left
@@ -777,23 +806,40 @@ pub const Editor = struct {
             return;
           }
         
-          const bytes_avail: usize = @min(@as(usize, @intCast(int_bytes_avail)), self.in_buf.buffer.len);
-          try self.readRawIntoBuffer(bytes_avail);
+          const bytes_avail: usize = @intCast(int_bytes_avail);
+          var bytes_read: usize = 0;
+          
+          // although you could read *bytes_avail* bytes of input from stdin
+          // into a buffer, doing so would remove timing information needed
+          // to parse escape sequences
+          
           if (self.has_bracketed_paste) {
-            // handled in handleInput
-            while (self.in_read < self.in_buf.len) {
-              try self.handleInput(false);
-            }
-            self.in_buf.resize(0) catch unreachable;
-          } else {
-            var is_clipboard = bytes_avail > TYPED_CLIPBOARD_BYTE_THRESHOLD;
-            while (self.in_read < self.in_buf.len) {
-              if (self.in_buf.slice()[self.in_read] == kbd.Keysym.ESC) {
-                is_clipboard = false;
+            // bracketed pasting is handled in handleInput
+            while (bytes_read < bytes_avail) {
+              const res = try self.handleInput(false);
+              if (res.nread == 0) {
+                break;
               }
-              try self.handleInput(is_clipboard);
+              bytes_read += res.nread;
             }
-            self.in_buf.resize(0) catch unreachable;
+          } else {
+            const is_clipboard = bytes_avail > TYPED_CLIPBOARD_BYTE_THRESHOLD;
+            while (bytes_read < bytes_avail) {
+              const res = try self.handleInput(is_clipboard);
+              if (res.nread == 0) {
+                break;
+              }
+              bytes_read += res.nread;
+            }
+          }
+          
+          // remaining keys
+          while (bytes_read < bytes_avail) {
+            const res = try self.handleInput(false);
+            if (res.nread == 0) {
+              break;
+            }
+            bytes_read += res.nread;
           }
         }
       },
@@ -1098,14 +1144,13 @@ pub const Editor = struct {
   
   // tick
   
-  const REFRESH_RATE_NS = 16700000;
-  const REFRESH_RATE_MS = REFRESH_RATE_NS / 1000000;
+  const REFRESH_RATE_MS = 16;
   
   pub fn run(self: *Editor) !void {
     try self.enableRawMode();
     try self.enableTermExts();
     self.needs_redraw = true;
-    var ts = std.time.microTimestamp();
+    var ts = std.time.milliTimestamp();
     while (true) {
       if (sig.resized) {
         sig.resized = false;
@@ -1121,10 +1166,10 @@ pub const Editor = struct {
       };
       try self.handleOutput();
       
-      const new_ts = std.time.microTimestamp();
-      const elapsed = (new_ts - ts) * 1000;
-      if (elapsed < REFRESH_RATE_NS) {
-        const refresh_ts = REFRESH_RATE_NS - (new_ts - ts) * 1000;
+      const new_ts = std.time.milliTimestamp();
+      const elapsed = (new_ts - ts);
+      if (elapsed < REFRESH_RATE_MS) {
+        const refresh_ts = (REFRESH_RATE_MS - (new_ts - ts)) * std.time.ns_per_ms;
         std.time.sleep(@intCast(refresh_ts));
       }
       ts = new_ts;

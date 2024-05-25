@@ -174,9 +174,7 @@ pub fn runFromStart(
   }
   
   var src_view = text_handler.srcView();
-  
   var anchor_start_offset: u32 = 0;
-  
   var pos: u32 = 0;
   outer: while (try src_view.codepointSliceAt(pos)) |bytes| {
     for (self.token_types.items, 0..self.token_types.items.len) |*tt, typeid| {
@@ -268,7 +266,7 @@ pub fn run(
       if (tt.pattern == null) {
         continue;
       }
-      
+
       const result = try tt.pattern.?.checkMatchGeneric(&src_view, &.{
         .match_from = @intCast(pos),
         .anchor_start_offset = @intCast(anchor_start_offset),
