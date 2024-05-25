@@ -85,6 +85,20 @@ pub fn handleInput(
     self.needs_redraw = true;
   }
   else if (this_shortcuts.key("quit", keysym)) {
+    if (self.text_handler.buffer_changed) {
+      self.setState(editor.State.command);
+      self.setCmdData(&.{
+        .prompt = PROMPT_QUIT_CONFIRM,
+        .fns = editor.Commands.Prompt.Fns,
+        .args = .{
+          .prompt = .{
+            .handleYes = QuitPrompt.handleYes,
+            .handleNo = QuitPrompt.handleNo,
+          },
+        },
+      });
+      return;
+    }
     return error.Quit;
   }
   else if (this_shortcuts.key("save", keysym)) {
@@ -257,3 +271,25 @@ pub fn renderStatus(self: *editor.Editor) !void {
   );
   try self.writeAll(status_slice);
 }
+
+pub const PROMPT_QUIT_CONFIRM = "Save before quitting?";
+
+const QuitPrompt = struct {
+  fn handleYes(self: *editor.Editor) !void {
+    self.text_handler.save(self) catch |err| {
+      self.setState(editor.State.command);
+      self.setCmdData(&.{
+        .prompt = editor.Commands.Open.PROMPT_SAVE_NEW,
+        .fns = editor.Commands.Open.FnsTryToSave,
+      });
+      try editor.Commands.Open.setupUnableToSavePrompt(self, err);
+      return;
+    };
+    return error.Quit;
+  }
+  
+  fn handleNo(self: *editor.Editor) !void {
+    _ = self;
+    return error.Quit;
+  }
+};

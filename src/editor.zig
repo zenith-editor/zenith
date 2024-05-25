@@ -74,8 +74,14 @@ pub const CommandData = struct {
       regex: ?Expr = null,
     };
     
+    pub const Prompt = struct {
+      handleYes: *const fn(self: *Editor) anyerror!void,
+      handleNo: *const fn(self: *Editor) anyerror!void,
+    };
+    
     replace_all: ReplaceAll,
     find: Find,
+    prompt: Prompt,
     
     fn deinit(self: *Args, allocr: std.mem.Allocator) void {
       switch (self.*) {
@@ -87,6 +93,7 @@ pub const CommandData = struct {
             regex.deinit(allocr);
           }
         },
+        else => {},
       }
     }
   };
@@ -153,6 +160,7 @@ pub const Commands = struct {
   pub const GotoLine = @import("./cmd/gotoline.zig");
   pub const Find = @import("./cmd/find.zig");
   pub const Replace = @import("./cmd/replace.zig");
+  pub const Prompt = @import("./cmd/prompt.zig");
 };
 
 pub const HideableMessage = struct {
