@@ -7,6 +7,12 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 pub const Keysym = struct {
+  pub const Mouse = struct {
+    x: u32,
+    y: u32,
+    is_release: bool,
+  };
+  
   pub const Key = union(enum) {
     normal: u8,
     multibyte: [4]u8,
@@ -22,6 +28,9 @@ pub const Keysym = struct {
     pgdown,
     paste_begin,
     paste_end,
+    scroll_up,
+    scroll_down,
+    mouse: Mouse,
   };
   
   raw: u8,
@@ -69,12 +78,32 @@ pub const Keysym = struct {
     };
   }
   
+  pub fn initMouse(x: u32, y: u32, is_release: bool) Keysym {
+    return Keysym {
+      .raw = 0,
+      .key = .{
+        .mouse = .{
+          .x = x,
+          .y = y,
+          .is_release = is_release,
+        },
+      },
+    };
+  }
+  
   pub fn isSpecial(self: *const Keysym) bool {
     if (self.ctrl_key)
       return true;
     return switch(self.key) {
       .normal => false,
       else => true,
+    };
+  }
+  
+  pub fn isMouse(self: *const Keysym) bool {
+    return switch(self.key) {
+      .mouse => true,
+      else => false,
     };
   }
   

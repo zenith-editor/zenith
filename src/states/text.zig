@@ -40,11 +40,19 @@ pub fn handleTextNavigation(self: *editor.Editor, keysym: *const kbd.Keysym) !bo
     return true;
   }
   else if (keysym.key == kbd.Keysym.Key.pgup) {
-    self.text_handler.goPgUp(self);
+    self.text_handler.goPgUp(self, false);
     return true;
   }
   else if (keysym.key == kbd.Keysym.Key.pgdown) {
-    self.text_handler.goPgDown(self);
+    self.text_handler.goPgDown(self, false);
+    return true;
+  }
+  else if (keysym.key == kbd.Keysym.Key.scroll_up) {
+    self.text_handler.goPgUp(self, true);
+    return true;
+  }
+  else if (keysym.key == kbd.Keysym.Key.scroll_down) {
+    self.text_handler.goPgDown(self, true);
     return true;
   }
   else if (keysym.key == kbd.Keysym.Key.home) {
@@ -52,8 +60,14 @@ pub fn handleTextNavigation(self: *editor.Editor, keysym: *const kbd.Keysym) !bo
     return true;
   }
   else if (keysym.key == kbd.Keysym.Key.end) {
-    try self.text_handler.goTail(self);
+    self.text_handler.goTail(self);
     return true;
+  }
+  else if (keysym.isMouse()) {
+    if (!keysym.key.mouse.is_release) {
+      self.text_handler.gotoCursor(self, keysym.key.mouse.x - 1, keysym.key.mouse.y - 1);
+      return true;
+    }
   }
   return false;
 }

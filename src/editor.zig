@@ -202,6 +202,9 @@ pub const Editor = struct {
   
   // terminal extensions
   has_bracketed_paste: bool = false,
+  has_alt_screen_buf: bool = false,
+  has_alt_scroll_mode: bool = false,
+  has_mouse_tracking: bool = false,
   
   pub fn create(allocr: std.mem.Allocator) !Editor {
     const stdin: std.fs.File = std.io.getStdIn();
@@ -441,6 +444,54 @@ pub const Editor = struct {
           else if (matcher.match("1;5C")) {
             return .{ .raw = 0, .key = .right, .ctrl_key = true, };
           }
+          else if (matcher.match("<0;")) {
+            var input: std.BoundedArray(u8, 16) = .{};
+            var is_release = false;
+            while (self.readByte() catch null) |cont| {
+              if (cont == 'M' or cont == 'm') {
+                is_release = cont == 'm';
+                break;
+              } else {
+                input.append(cont) catch {
+                  // escape sequence too large
+                  self.flushConsoleInput();
+                  return null;
+                };
+              }
+            }
+            var iter = std.mem.splitScalar(u8, input.slice(), ';');
+            var x: ?u32 = null;
+            var y: ?u32 = null;
+
+            while (iter.next()) |value| {
+              const pos = std.fmt.parseInt(u32, value, 10) catch return null;
+              if (x == null) { x = pos; }
+              else if (y == null) { y = pos; }
+              else { break; }
+            }
+            
+            return kbd.Keysym.initMouse(
+              x orelse return null,
+              y orelse return null,
+              is_release
+            );
+          }
+          else if (matcher.match("<64;")) {
+            while (self.readByte() catch null) |cont| {
+              if (cont == 'M' or cont == 'm') {
+                break;
+              }
+            }
+            return kbd.Keysym.initSpecial(.scroll_up);
+          }
+          else if (matcher.match("<65;")) {
+            while (self.readByte() catch null) |cont| {
+              if (cont == 'M' or cont == 'm') {
+                break;
+              }
+            }
+            return kbd.Keysym.initSpecial(.scroll_down);
+          }
           // 2 bytes
           else if (matcher.match("3~")) { return kbd.Keysym.initSpecial(.del); }
           else if (matcher.match("5~")) { return kbd.Keysym.initSpecial(.pgup); }
@@ -633,12 +684,16 @@ pub const Editor = struct {
     }
   }
   
-  pub fn getTextWidth(self: *const Editor) u32 {
+  pub fn getTextLeftPadding(self: *const Editor) u32 {
     if (self.conf.show_line_numbers) {
-      return self.w_width - self.text_handler.line_digits - 1;
+      return self.text_handler.line_digits + 1;
     } else {
-      return self.w_width;
+      return 0;
     }
+  }
+  
+  pub fn getTextWidth(self: *const Editor) u32 {
+    return self.w_width - self.getTextLeftPadding();
   }
   
   pub fn getTextHeight(self: *const Editor) u32 {
@@ -989,17 +1044,39 @@ pub const Editor = struct {
   
   // terminal extensions
   
-  const ESC_EXT_PASTE = "\x1b[?2004h";
-  const ESC_EXT_PASTE_DISABLE = "\x1b[?2004l";
+  const TermExt = struct {
+    ansi: []const []const u8,
+    flag: []const u8,
+    conf: []const u8,
+  };
+  
+  const TERM_EXT = [_]TermExt {
+    .{ .ansi=&.{"2004"}, .flag="has_bracketed_paste", .conf="force_bracketed_paste" },
+    .{ .ansi=&.{"1049"}, .flag="has_alt_screen_buf", .conf="force_alt_screen_buf" },
+    .{ .ansi=&.{"1007"}, .flag="has_alt_scroll_mode", .conf="force_alt_scroll_mode" },
+    // enables mouse tracking, sgr mouse mode
+    .{ .ansi=&.{"1000","1006"}, .flag="has_mouse_tracking", .conf="force_mouse_tracking" },
+  };
   
   fn enableTermExts(self: *Editor) !void {
-    try self.outw.writeAll(ESC_EXT_PASTE);
-    // TODO: check if terminal actually supports bracketed pastes
-    self.has_bracketed_paste = true;
+    inline for(&TERM_EXT) |*term_ext| {
+      if (@field(self.conf, term_ext.conf)) {
+        inline for (term_ext.ansi) |ansi| {
+          try self.outw.writeAll("\x1b[?" ++ ansi ++ "h");
+        }
+        @field(self, term_ext.flag) = true;
+      } else {
+        @field(self, term_ext.flag) = false;
+      }
+    }
   }
   fn disableTermExts(self: *Editor) !void {
-    if (self.has_bracketed_paste) {
-      try self.outw.writeAll(ESC_EXT_PASTE_DISABLE);
+    inline for(&TERM_EXT) |*term_ext| {
+      if (@field(self, term_ext.flag)) {
+        inline for (term_ext.ansi) |ansi| {
+          try self.outw.writeAll("\x1b[?" ++ ansi ++ "l");
+        }
+      }
     }
   }
   

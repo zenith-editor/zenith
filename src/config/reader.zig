@@ -122,8 +122,32 @@ use_native_clipboard: bool = true,
 show_line_numbers: bool = true,
 wrap_text: bool = true,
 undo_memory_limit: usize = 4 * 1024 * 1024,
+
+//terminal feature flags
+force_bracketed_paste: bool = true,
+force_alt_screen_buf: bool = true,
+force_alt_scroll_mode: bool = true,
+force_mouse_tracking: bool = true,
+
 highlights: std.ArrayListUnmanaged(Highlight) = .{},
 highlights_ext_to_idx: std.StringHashMapUnmanaged(u32) = .{},
+
+// regular config fields
+const ConfigField = struct {
+  field: []const u8,
+  conf: []const u8,
+};
+
+const REGULAR_CONFIG_FIELDS = [_]ConfigField {
+  .{ .field="use_tabs", .conf="use-tabs" },
+  .{ .field="use_native_clipboard", .conf="use-native-clipboard" },
+  .{ .field="show_line_numbers", .conf="show-line-numbers" },
+  .{ .field="wrap_text", .conf="wrap-text" },
+  .{ .field="force_bracketed_paste", .conf="force-bracketed-paste" },
+  .{ .field="force_alt_screen_buf", .conf="force-alt-screen-buf" },
+  .{ .field="force_alt_scroll_mode", .conf="force-alt-scroll-mode" },
+  .{ .field="force_mouse_tracking", .conf="force-mouse-tracking" },
+};
 
 // methods
 
@@ -279,17 +303,17 @@ fn parseInner(
             } else {
               self.tab_size = @intCast(int);
             }
-          } else if (try kv.get(bool, "use-tabs")) |b| {
-            self.use_tabs = b;
-          } else if (try kv.get(bool, "use-native-clipboard")) |b| {
-            self.use_native_clipboard = b;
-          } else if (try kv.get(bool, "show-line-numbers")) |b| {
-            self.show_line_numbers = b;
-          } else if (try kv.get(bool, "wrap-text")) |b| {
-            self.wrap_text = b;
           } else if (try kv.get(i64, "undo-memory-limit")) |int| {
             self.undo_memory_limit = @intCast(int);
           } else {
+            inline for (&REGULAR_CONFIG_FIELDS) |*config_field| {
+              if (try kv.get(
+                @TypeOf(@field(self, config_field.field)),
+                config_field.conf)) |b| {
+                @field(self, config_field.field) = b;
+                return;
+              }
+            }
             return error.UnknownKey;
           }
         },

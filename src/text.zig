@@ -499,8 +499,11 @@ pub const TextHandler = struct {
     E.needs_update_cursor = true;
   }
   
-  pub fn goPgUp(self: *TextHandler, E: *Editor) void {
-    const scroll_delta = E.getTextHeight() + 1;
+  pub fn goPgUp(self: *TextHandler, E: *Editor, is_scroll: bool) void {
+    var scroll_delta = E.getTextHeight() + 1;
+    if (is_scroll) {
+      scroll_delta >>= 2;
+    }
     if (self.cursor.row < scroll_delta) {
       self.cursor.row = 0;
     } else {
@@ -512,8 +515,11 @@ pub const TextHandler = struct {
     E.needs_update_cursor = true;
   }
   
-  pub fn goPgDown(self: *TextHandler, E: *Editor) void {
-    const scroll_delta = E.getTextHeight() + 1;
+  pub fn goPgDown(self: *TextHandler, E: *Editor, is_scroll: bool) void {
+    var scroll_delta = E.getTextHeight() + 1;
+    if (is_scroll) {
+      scroll_delta >>= 2;
+    }
     self.cursor.row += scroll_delta;
     if (self.cursor.row >= self.lineinfo.getLen()) {
       self.cursor.row = self.lineinfo.getLen() - 1;
@@ -638,7 +644,7 @@ pub const TextHandler = struct {
     E.needs_update_cursor = true;
   }
   
-  pub fn goTail(self: *TextHandler, E: *Editor) !void {
+  pub fn goTail(self: *TextHandler, E: *Editor) void {
     const offset_start: u32 = self.lineinfo.getOffset(self.cursor.row);
     const offset_end: u32 = self.getRowOffsetEnd(self.cursor.row);
     
@@ -714,7 +720,8 @@ pub const TextHandler = struct {
     E.needs_redraw = true;
   }
   
-  pub fn gotoPos(self: *TextHandler, E: *Editor, pos: u32) !void {
+  pub fn gotoPos(self: *TextHandler, E: *Editor, pos: u32)
+    error{Overflow}!void {
     if (pos >= self.getLogicalLen()) {
       return error.Overflow;
     }
@@ -727,13 +734,48 @@ pub const TextHandler = struct {
       self.cursor.gfx_col = 0;
       var iter = self.iterate(offset_start);
       while (iter.nextCodepointSliceUntil(pos)) |char| {
-        self.cursor.gfx_col += encoding.countCharCols(try std.unicode.utf8Decode(char));
+        self.cursor.gfx_col += encoding.countCharCols(std.unicode.utf8Decode(char) catch unreachable);
       }
     }
     self.scroll.col = 0;
     self.scroll.gfx_col = 0;
     self.syncColumnScroll(E);
     self.syncRowScroll(E);
+    E.needs_redraw = true;
+  }
+  
+  pub fn gotoCursor(self: *TextHandler, E: *Editor, cursor_x: u32, cursor_y: u32)
+    void {
+    if (cursor_y > E.getTextHeight()) {
+      return;
+    }
+    if (cursor_x < E.getTextLeftPadding()) {
+      return;
+    }
+    
+    self.cursor.row = cursor_y + self.scroll.row;
+    const target_gfx_col = (cursor_x - E.getTextLeftPadding()) + self.scroll.gfx_col;
+    
+    const offset_start: u32 = self.lineinfo.getOffset(self.cursor.row);
+    const offset_end: u32 = self.getRowOffsetEnd(self.cursor.row);
+    const rowlen: u32 = offset_end - offset_start;
+    if (!self.lineinfo.checkIsMultibyte(self.cursor.row)) {
+      self.cursor.col = @min(target_gfx_col, rowlen);
+      self.cursor.gfx_col = self.cursor.col;
+    } else {
+      self.cursor.col = 0;
+      var iter = self.iterate(offset_start);
+      while (iter.nextCodepointSliceUntil(offset_end)) |char| {
+        const ccol = encoding.countCharCols(std.unicode.utf8Decode(char) catch unreachable);
+        if ((self.cursor.gfx_col + ccol) > target_gfx_col) {
+          break;
+        }
+        self.cursor.col += @intCast(char.len);
+        self.cursor.gfx_col += ccol;
+      }
+    }
+    
+    // shouldn't need to resync scroll
     E.needs_redraw = true;
   }
   
@@ -1157,7 +1199,7 @@ pub const TextHandler = struct {
     if (!delete_next_char) {
       if (self.cursor.gfx_col == 0 or delete_first_col_in_cont) {
         self.cursor.row -= 1;
-        try self.goTail(E);
+        self.goTail(E);
       } else {
         self.goLeft(E);
       }
@@ -1385,7 +1427,7 @@ pub const TextHandler = struct {
     ) {
       self.lineinfo.remove(removed_line_start);
       self.cursor.row = removed_line_start - 1;
-      try self.goTail(E);
+      self.goTail(E);
     } else {
       self.cursor.row = removed_line_start;
       const row_start = self.lineinfo.getOffset(self.cursor.row);
@@ -1424,7 +1466,7 @@ pub const TextHandler = struct {
     self.cursor = markers.start_cur;
     if (self.cursor.row >= self.lineinfo.getLen()) {
       self.cursor.row = self.lineinfo.getLen() - 1;
-      try self.goTail(E);
+      self.goTail(E);
       self.syncRowScroll(E);
     } else {
       self.syncColumnScroll(E);
@@ -1873,7 +1915,7 @@ pub const TextHandler = struct {
     while (iter.nextCodepointSliceUntil(offset_end)) |bytes| {
       try line.appendSlice(bytes);
     }
-    try self.goTail(E);
+    self.goTail(E);
     try self.insertSlice(E, line.items);
   }
   
