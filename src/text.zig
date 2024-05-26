@@ -753,9 +753,14 @@ pub const TextHandler = struct {
       return;
     }
     
-    self.cursor.row = cursor_y + self.scroll.row;
+    var target_row: u32 = cursor_y + self.scroll.row;
     const target_gfx_col = (cursor_x - E.getTextLeftPadding()) + self.scroll.gfx_col;
     
+    if (target_row >= self.lineinfo.getLen()) {
+      target_row = self.lineinfo.getLen() - 1;
+    }
+    
+    self.cursor.row = target_row;
     const offset_start: u32 = self.lineinfo.getOffset(self.cursor.row);
     const offset_end: u32 = self.getRowOffsetEnd(self.cursor.row);
     const rowlen: u32 = offset_end - offset_start;
@@ -1068,11 +1073,21 @@ pub const TextHandler = struct {
       try self.recheckIsMultibyte(@intCast(i));
     }
     if (E.conf.wrap_text) {
-      return (try self.wrapTextFrom(
+      const insidx_end: u32 = @intCast(insidx + slice.len);
+      const ins_row: u32 = @intCast(first_row_after_insidx - 1);
+      const next_row: u32 = (try self.wrapTextFrom(
         E,
         @intCast(first_row_after_insidx - 1),
         @intCast(first_row_after_insidx + newlines.items.len)
-      )) - 1;
+      ));
+      var row: u32 = next_row;
+      while (row > ins_row) {
+        row -= 1;
+        if (self.lineinfo.getOffset(@intCast(row)) <= insidx_end) {
+          return @intCast(row);
+        }
+      }
+      return self.lineinfo.findMaxLineBeforeOffset(insidx_end, ins_row);
     } else {
       return @intCast(first_row_after_insidx - 1 + newlines.items.len);
     }
@@ -1087,7 +1102,13 @@ pub const TextHandler = struct {
         return err;
       }
     };
-    return self.insertSliceAtPosWithHints(E, insidx, slice, true, false);
+    return self.insertSliceAtPosWithHints(
+      E,
+      insidx,
+      slice,
+      true, // use_cursor_line_hint
+      false, // is_slice_always_inline
+    );
   }
   
   fn insertSliceAtPosWithHints(
@@ -1141,6 +1162,8 @@ pub const TextHandler = struct {
       }
     }
     
+    self.scroll.col = 0;
+    self.scroll.gfx_col = 0;
     self.syncColumnScroll(E);
     self.syncRowScroll(E);
   }
