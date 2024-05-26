@@ -209,12 +209,9 @@ pub fn runFromStart(
 
 /// Retokenize text buffer, assumes that only one continuous region
 /// is changed before the call.
-///
-/// This function is generic to facilitate dependency injection.
-fn runInner(
+pub fn run(
   self: *Highlight,
-  comptime T: type,
-  text_handler: *const T,
+  text_handler: *const text.TextHandler,
   allocr: std.mem.Allocator,
   changed_region_start_in: u32,
   changed_region_end: u32,
@@ -349,38 +346,6 @@ fn runInner(
   if (comptime build_config.dbg_highlighting) {
     std.debug.print("=> highlight: {any}\n", .{self.tokens.items});
   }
-}
-
-test runInner {
-//   const LineInfoTest = struct {
-//     
-//   };
-//   
-//   const TextHandlerTest = struct {
-//     lineinfo: LineInfoTest,
-//   };
-}
-
-pub fn run(
-  self: *Highlight,
-  text_handler: *const text.TextHandler,
-  allocr: std.mem.Allocator,
-  changed_region_start_in: u32,
-  changed_region_end: u32,
-  shift: u32,
-  is_insert: bool,
-  line_start: u32,
-) !void {
-  return self.runInner(
-    text.TextHandler,
-    text_handler,
-    allocr,
-    changed_region_start_in,
-    changed_region_end,
-    shift,
-    is_insert,
-    line_start,
-  );
 }
 
 /// Finds the last token with pos_start <= pos

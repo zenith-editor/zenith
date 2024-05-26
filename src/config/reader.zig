@@ -122,7 +122,7 @@ use_native_clipboard: bool = true,
 show_line_numbers: bool = true,
 wrap_text: bool = true,
 undo_memory_limit: usize = 4 * 1024 * 1024, // bytes
-escape_time: i64 = 1000, // ms
+escape_time: i64 = 20, // ms
 
 //terminal feature flags
 force_bracketed_paste: bool = true,
