@@ -208,10 +208,13 @@ pub fn runFromStart(
 }
 
 /// Retokenize text buffer, assumes that only one continuous region
-/// is changed before the call
-pub fn run(
+/// is changed before the call.
+///
+/// This function is generic to facilitate dependency injection.
+fn runInner(
   self: *Highlight,
-  text_handler: *const text.TextHandler,
+  comptime T: type,
+  text_handler: *const T,
   allocr: std.mem.Allocator,
   changed_region_start_in: u32,
   changed_region_end: u32,
@@ -221,8 +224,9 @@ pub fn run(
 ) !void {
   var src_view = text_handler.srcView();
   
-  const changed_region_start = text_handler.lineinfo.getOffset(line_start);
-  const opt_tok_idx_at_pos = self.findLastNearestToken(changed_region_start, 0);
+  const opt_tok_idx_at_pos = self.findLastNearestToken(
+    text_handler.lineinfo.getOffset(line_start), 0
+  );
   
   if (opt_tok_idx_at_pos == null) {
     return self.runFromStart(text_handler, allocr);
@@ -232,17 +236,19 @@ pub fn run(
 
   if (is_insert) {
     for(self.tokens.items[(tok_idx_at_pos+1)..]) |*token| {
-      token.pos_start += shift;
-      token.pos_end += shift;
+      if (token.pos_start >= changed_region_start_in) {
+        token.pos_start += shift;
+        token.pos_end += shift;
+      }
     }
   } else {
     const delete_end = changed_region_start_in + shift;
     const tok_idx_at_delete_end = self.findLastNearestToken(delete_end, tok_idx_at_pos).?;
-    if (tok_idx_at_delete_end > (tok_idx_at_pos  + 1)) {
+    if (tok_idx_at_delete_end > (tok_idx_at_pos + 1)) {
       try self.tokens.replaceRange(
         allocr,
         tok_idx_at_pos + 1,
-        tok_idx_at_delete_end - (tok_idx_at_pos  + 1),
+        tok_idx_at_delete_end - (tok_idx_at_pos + 1),
         &[_]Token{}
       );
     }
@@ -256,7 +262,13 @@ pub fn run(
   
   var pos: u32 = self.tokens.items[tok_idx_at_pos].pos_start;
   var existing_idx: usize = tok_idx_at_pos;
-  var anchor_start_offset: u32 = text_handler.lineinfo.getOffset(line_start);
+  var anchor_start_offset: u32 = blk: {
+    var anchor_start_line = line_start;
+    while (anchor_start_line > 0 and text_handler.lineinfo.getOffset(anchor_start_line) > pos) {
+      anchor_start_line -= 1;
+    }
+    break :blk text_handler.lineinfo.getOffset(anchor_start_line);
+  };
   var new_token_region = std.ArrayList(Token).init(allocr);
   defer new_token_region.deinit();
   var shared_suffix = false;
@@ -279,6 +291,7 @@ pub fn run(
             text_handler, allocr, pos, @intCast(result.pos), tt, typeid
           ),
         };
+        
         
         existing_idx_catchup: while (existing_idx < self.tokens.items.len) {
           if (self.tokens.items[existing_idx].pos_start >= token.pos_start) {
@@ -313,25 +326,61 @@ pub fn run(
   // replace region
   if (comptime build_config.dbg_highlighting) {
     std.debug.print("old highlight: {any}\n", .{self.tokens.items});
+    std.debug.print("new highlight: {any}\n", .{new_token_region.items});
   }
   if (shared_suffix) {
+    const existing_start = tok_idx_at_pos;
+    
     if (comptime build_config.dbg_highlighting) {
-      std.debug.print("new highlight: {any}\n", .{new_token_region.items});
+      std.debug.print("shared from {}..{}\n", .{existing_start,existing_idx});
     }
     try self.tokens.replaceRange(
       allocr,
-      tok_idx_at_pos,
-      existing_idx - tok_idx_at_pos,
-      new_token_region.items
-    );
+      existing_start,
+      existing_idx - existing_start,
+      new_token_region.items);
   } else {
-    try self.tokens.replaceRange(
-      allocr,
-      tok_idx_at_pos,
-      self.tokens.items.len - tok_idx_at_pos,
-      new_token_region.items
-    );
+    if (comptime build_config.dbg_highlighting) {
+      std.debug.print("new at {}\n", .{tok_idx_at_pos});
+    }
+    self.tokens.shrinkRetainingCapacity(existing_idx);
+    try self.tokens.appendSlice(allocr, new_token_region.items);
   }
+  if (comptime build_config.dbg_highlighting) {
+    std.debug.print("=> highlight: {any}\n", .{self.tokens.items});
+  }
+}
+
+test runInner {
+//   const LineInfoTest = struct {
+//     
+//   };
+//   
+//   const TextHandlerTest = struct {
+//     lineinfo: LineInfoTest,
+//   };
+}
+
+pub fn run(
+  self: *Highlight,
+  text_handler: *const text.TextHandler,
+  allocr: std.mem.Allocator,
+  changed_region_start_in: u32,
+  changed_region_end: u32,
+  shift: u32,
+  is_insert: bool,
+  line_start: u32,
+) !void {
+  return self.runInner(
+    text.TextHandler,
+    text_handler,
+    allocr,
+    changed_region_start_in,
+    changed_region_end,
+    shift,
+    is_insert,
+    line_start,
+  );
 }
 
 /// Finds the last token with pos_start <= pos
