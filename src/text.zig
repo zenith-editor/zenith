@@ -1003,7 +1003,7 @@ pub const TextHandler = struct {
     while (iter.nextCodepointSliceUntil(self.calcOffsetFromCursor())) |char| {
       if (
         char.len == 1 and
-        (char[0] == ' ' or char == '\t')
+        (char[0] == ' ' or char[0] == '\t')
       ) {
         indent.appendSlice(char) catch break;
       } else {
