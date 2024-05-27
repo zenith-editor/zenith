@@ -109,7 +109,7 @@ pub fn loadTokenTypesForFile(
       
     try self.token_types.append(allocr, .{
       .color = editor.Editor.ColorCode.init(
-        tt.color, null, tt.is_bold
+        tt.color, null, tt.deco
       ),
       .pattern = blk: {
         if (tt.pattern == null) {

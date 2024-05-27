@@ -4,11 +4,9 @@
 
 These are some guidelines I try to follow when writing code:
 
-* Follow the principle of locality of behavior: functions, variables and
-classes that have the same behavior should be placed closer together.
+* Follow the principle of locality of behavior: functions, variables and classes that have the same behavior should be placed closer together.
 * Constructor functions should be named `create` if it has side-effects (such as allocating memory), `init` should be used otherwise.
-* Method names should be verb (+ object). i.e. `getProperty()` instead of
-`property()`
+* Method names should be verb (+ object). i.e. `getProperty()` instead of `property()`
 * Always use blocks for if/while/for statements.
 
 * Follow some rules about complexity Rob Pike wrote about in "Notes on Programming in C":

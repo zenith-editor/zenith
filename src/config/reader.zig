@@ -64,7 +64,7 @@ pub const HighlightType = struct {
   name: []u8,
   pattern: ?[]u8,
   color: ?u32,
-  is_bold: bool,
+  deco: editor.Editor.ColorCode.Decoration,
   flags: patterns.Expr.Flags,
   promote_types: ?PromoteTypesList = null,
   
@@ -367,7 +367,7 @@ const HighlightWriter = struct {
   pattern: ?[]u8 = null,
   flags: patterns.Expr.Flags = .{},
   color: ?u32 = null,
-  is_bold: bool = false,
+  deco: editor.Editor.ColorCode.Decoration = .{},
   promote_types: std.ArrayListUnmanaged(PromoteType) = .{},
   
   highlight: Highlight = .{},
@@ -403,7 +403,7 @@ const HighlightWriter = struct {
       .pattern = self.pattern,
       .flags = self.flags,
       .color = self.color,
-      .is_bold = self.is_bold,
+      .deco = self.deco,
       .promote_types = (
         if (self.promote_types.items.len > 0)
           try PromoteTypesList.create(self.state.allocr, &self.promote_types)
@@ -420,7 +420,7 @@ const HighlightWriter = struct {
     self.pattern = null;
     self.flags = .{};
     self.color = null;
-    self.is_bold = false;
+    self.deco = .{};
     self.promote_types = .{};
   }
 };
@@ -474,7 +474,11 @@ fn parseHighlight(self: *Reader, state: *ParserState, hl_parse: *HighlightToPars
             return error.ExpectedColorCode;
           }
         } else if (try kv.get(bool, "bold")) |b| {
-          writer.is_bold = b;
+          writer.deco.is_bold = b;
+        } else if (try kv.get(bool, "italic")) |b| {
+          writer.deco.is_italic = b;
+        } else if (try kv.get(bool, "underline")) |b| {
+          writer.deco.is_underline = b;
         } else if (std.mem.startsWith(u8, kv.key, "promote:")) {
           
           const promote_key = kv.key[("promote:".len)..];

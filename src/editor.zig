@@ -556,6 +556,8 @@ pub const Editor = struct {
   pub const ESC_COLOR_DEFAULT = "\x1b[0m";
   
   pub const ESC_FG_BOLD = "\x1b[1m";
+  pub const ESC_FG_ITALIC = "\x1b[3m";
+  pub const ESC_FG_UNDERLINE = "\x1b[4m";
   pub const ESC_FG_EMPHASIZE = "\x1b[38;5;8m";
   
   pub const HTAB_CHAR = ESC_FG_EMPHASIZE ++ "\xc2\xbb " ++ ESC_COLOR_DEFAULT;
@@ -597,9 +599,23 @@ pub const Editor = struct {
       }
     };
     
+    pub const Decoration = struct {
+      is_bold: bool = false,
+      is_italic: bool = false,
+      is_underline: bool = false,
+      
+      pub fn eql(self: *const Decoration, other: *const Decoration) bool {
+        return (
+          self.is_bold == other.is_bold and
+          self.is_italic == other.is_italic and
+          self.is_underline == other.is_underline
+        );
+      }
+    };
+    
     fg: ?u32 = null,
     bg: Bg = .transparent,
-    is_bold: bool = false,
+    deco: Decoration = .{},
     
     pub const MAX_COLORS = 15;
     
@@ -622,7 +638,7 @@ pub const Editor = struct {
       "white",
     };
     
-    pub fn init(fg: ?u32, bg: ?u32, is_bold: bool) ColorCode {
+    pub fn init(fg: ?u32, bg: ?u32, deco: Decoration) ColorCode {
       return .{
         .fg = (if (fg != null and fg.? <= MAX_COLORS) fg.? else null),
         .bg = blk: {
@@ -632,7 +648,7 @@ pub const Editor = struct {
             break :blk .transparent;
           }
         },
-        .is_bold = is_bold,
+        .deco = deco,
       };
     }
     
@@ -640,7 +656,7 @@ pub const Editor = struct {
       return (
         self.fg == other.fg and
         self.bg.eql(&other.bg) and
-        self.is_bold == other.is_bold
+        self.deco.eql(&other.deco)
       );
     }
     
@@ -891,8 +907,14 @@ pub const Editor = struct {
         if (color_code.fg) |fg| {
           try self.editor.writeFmt("\x1b[38;5;{d}m", .{fg});
         }
-        if (color_code.is_bold) {
+        if (color_code.deco.is_bold) {
           try self.editor.writeAll(ESC_FG_BOLD);
+        }
+        if (color_code.deco.is_italic) {
+          try self.editor.writeAll(ESC_FG_ITALIC);
+        }
+        if (color_code.deco.is_underline) {
+          try self.editor.writeAll(ESC_FG_UNDERLINE);
         }
       } else {
         try self.editor.writeAll(ESC_COLOR_DEFAULT);

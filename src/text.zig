@@ -746,7 +746,7 @@ pub const TextHandler = struct {
   
   pub fn gotoCursor(self: *TextHandler, E: *Editor, cursor_x: u32, cursor_y: u32)
     void {
-    if (cursor_y > E.getTextHeight()) {
+    if (cursor_y >= E.getTextHeight()) {
       return;
     }
     if (cursor_x < E.getTextLeftPadding()) {
@@ -1001,7 +1001,10 @@ pub const TextHandler = struct {
     
     var iter = self.iterate(self.lineinfo.getOffset(self.cursor.row));
     while (iter.nextCodepointSliceUntil(self.calcOffsetFromCursor())) |char| {
-      if (std.mem.eql(u8, char, " ")) {
+      if (
+        char.len == 1 and
+        (char[0] == ' ' or char == '\t')
+      ) {
         indent.appendSlice(char) catch break;
       } else {
         break;

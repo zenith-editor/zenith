@@ -14,16 +14,6 @@ in_pattern: []const u8,
 str_idx: usize = 0,
 flags: Expr.Flags,
 
-fn findLastSimpleExpr(expr: *Expr) ?usize {
-  if (expr.instrs.items.len == 0) {
-    return null;
-  }
-  if (expr.instrs.items[expr.instrs.items.len - 1].isSimpleMatcher()) {
-    return expr.instrs.items.len - 1;
-  }
-  return null;
-}
-
 const QualifierCodegenInfo = struct {
   expr_shift: usize,
 };
@@ -122,6 +112,7 @@ fn parseGroup(
   const group_or_root: GroupOrRoot = parse_stack.items[parse_stack.items.len - 1];
   
   var escaped = false;
+  var is_last_simple_matcher: bool = false;
   
   outer: while (self.str_idx < self.in_pattern.len) {
     const seqlen = try std.unicode.utf8ByteSequenceLength(
@@ -143,8 +134,10 @@ fn parseGroup(
     
     switch (char) {
       '+', '-', '*', '?' => |qualifier| {
-        if (findLastSimpleExpr(expr)) |L0| {
+        if (is_last_simple_matcher) {
+          const L0 = expr.instrs.items.len - 1;
           _ = try genQualifier(allocr, qualifier, expr, L0);
+          is_last_simple_matcher = false;
         } else {
           return error.ExpectedSimpleExpr;
         }
@@ -235,6 +228,8 @@ fn parseGroup(
           });
         }
         
+        is_last_simple_matcher = true;
+        
         if (range_inverse) {
           if (ranges.items.len == 1 and ranges.items[0].from == ranges.items[0].to) {
             try expr.instrs.append(allocr, .{
@@ -283,6 +278,8 @@ fn parseGroup(
         continue :outer;
       },
       '(' => {
+        is_last_simple_matcher = false;
+        
         self.str_idx += 1;
         
         const group_id = expr.num_groups;
@@ -300,6 +297,8 @@ fn parseGroup(
         return;
       },
       ')' => {
+        is_last_simple_matcher = false;
+
         self.str_idx += 1;
         if (group_or_root.group_id == null) {
           return error.UnbalancedGroupBrackets;
@@ -349,6 +348,7 @@ fn parseGroup(
         return;
       },
       '|' => {
+        is_last_simple_matcher = false;
         // (L0)    split L1, L2
         // (L0+1)  L1: ...
         // len+0 accounts for new L0
@@ -379,15 +379,19 @@ fn parseGroup(
         escaped = true;
       },
       '.' => {
+        is_last_simple_matcher = true;
         try expr.instrs.append(allocr, .{ .any = {}, });
       },
       '^' => {
+        is_last_simple_matcher = false;
         try expr.instrs.append(allocr, .{ .anchor_start = {}, });
       },
       '$' => {
+        is_last_simple_matcher = false;
         try expr.instrs.append(allocr, .{ .anchor_end = {}, });
       },
       else => {
+        is_last_simple_matcher = true;
         try expr.instrs.append(allocr, .{ .char = char, });
       },
     }
