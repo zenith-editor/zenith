@@ -129,6 +129,7 @@ show_line_numbers: bool = true,
 wrap_text: bool = true,
 undo_memory_limit: usize = 4 * 1024 * 1024, // bytes
 escape_time: i64 = 20, // ms
+large_file_limit: u32 = 10 * 1024 * 1024, // bytes
 
 //terminal feature flags
 force_bracketed_paste: bool = true,
@@ -301,7 +302,13 @@ fn parseInner(
               self.tab_size = @intCast(int);
             }
           } else if (try kv.get(i64, "undo-memory-limit")) |int| {
-            self.undo_memory_limit = @intCast(int);
+            self.undo_memory_limit =
+              if (int > std.math.maxInt(usize) or int < 0) std.math.maxInt(usize)
+              else @intCast(int);
+          } else if (try kv.get(i64, "large-file-limit")) |int| {
+            self.large_file_limit =
+              if (int > std.math.maxInt(u32) or int < 0) std.math.maxInt(u32)
+              else @intCast(int);
           } else {
             inline for (&REGULAR_CONFIG_FIELDS) |*config_field| {
               if (try kv.get(

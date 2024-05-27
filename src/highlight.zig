@@ -165,7 +165,7 @@ fn promoteTokenType(
   return typeid;
 }
 
-pub fn runFromStart(
+pub fn runText(
   self: *Highlight,
   text_handler: *const text.TextHandler,
   allocr: std.mem.Allocator,
@@ -212,7 +212,7 @@ pub fn runFromStart(
 
 /// Retokenize text buffer, assumes that only one continuous region
 /// is changed before the call.
-pub fn run(
+pub fn runFrom(
   self: *Highlight,
   text_handler: *const text.TextHandler,
   allocr: std.mem.Allocator,
@@ -229,7 +229,7 @@ pub fn run(
   );
   
   if (opt_tok_idx_at_pos == null) {
-    return self.runFromStart(text_handler, allocr);
+    return self.runText(text_handler, allocr);
   }
   
   const tok_idx_at_pos = opt_tok_idx_at_pos.?;

@@ -156,7 +156,7 @@ pub const TextHandler = struct {
   // events
   
   pub fn onResize(self: *TextHandler, E: *Editor) !void {
-    if (E.conf.wrap_text) {
+    if (self.isTextWrapped(E)) {
       try self.wrapText(E);
     }
   }
@@ -279,7 +279,7 @@ pub const TextHandler = struct {
     
     self.calcLineDigits(E);
     
-    if (E.conf.wrap_text) {
+    if (self.isTextWrapped(E)) {
       // wrap text must be done after calcLineDigits
       try self.wrapText(E);
     }
@@ -906,7 +906,7 @@ pub const TextHandler = struct {
     
     // Highlighting
     
-    try self.rehighlight(
+    try self.highlightFrom(
       E,
       insidx, // changed_region_start_in
       @intCast(insidx + char.len), // changed_region_end
@@ -925,7 +925,7 @@ pub const TextHandler = struct {
         try self.recheckIsMultibyte(self.cursor.row);
         try self.recheckIsMultibyte(self.cursor.row + 1);
       }
-      if (line_inserted and E.conf.wrap_text) {
+      if (line_inserted and self.isTextWrapped(E)) {
         try self.wrapLine(E, self.cursor.row+1);
       }
       self.goDownHead(E);
@@ -935,7 +935,7 @@ pub const TextHandler = struct {
         self.lineinfo.setMultibyte(self.cursor.row, true);
       }
       self.lineinfo.increaseOffsets(self.cursor.row + 1, @intCast(char.len));
-      if (E.conf.wrap_text) {
+      if (self.isTextWrapped(E)) {
         try self.wrapLine(E, self.cursor.row);
         if (
           self.cursor.col == self.getRowLen(self.cursor.row) and
@@ -1075,7 +1075,7 @@ pub const TextHandler = struct {
     for ((first_row_after_insidx - 1)..(first_row_after_insidx + newlines.items.len)) |i| {
       try self.recheckIsMultibyte(@intCast(i));
     }
-    if (E.conf.wrap_text) {
+    if (self.isTextWrapped(E)) {
       const insidx_end: u32 = @intCast(insidx + slice.len);
       const ins_row: u32 = @intCast(first_row_after_insidx - 1);
       const next_row: u32 = (try self.wrapTextFrom(
@@ -1137,7 +1137,7 @@ pub const TextHandler = struct {
 
     // Highlighting
       
-    try self.rehighlight(
+    try self.highlightFrom(
       E,
       insidx, // changed_region_start_in
       @intCast(insidx + slice.len), // changed_region_end
@@ -1271,7 +1271,7 @@ pub const TextHandler = struct {
     
     // Highlighting
     
-    try self.rehighlight(
+    try self.highlightFrom(
       E,
       delidx, // changed_region_start_in
       delidx, // changed_region_end
@@ -1295,14 +1295,14 @@ pub const TextHandler = struct {
         self.lineinfo.decreaseOffsets(cur_at_deleted_char.row+1, 1);
         self.lineinfo.remove(cur_at_deleted_char.row+1);
         try self.recheckIsMultibyteAfterDelete(cur_at_deleted_char.row, deleted_char_is_mb);
-        if (E.conf.wrap_text) {
+        if (self.isTextWrapped(E)) {
           try self.wrapLine(E, cur_at_deleted_char.row);
         }
         self.calcLineDigits(E);
       } else {
         self.lineinfo.decreaseOffsets(cur_at_deleted_char.row + 1, seqlen);
         try self.recheckIsMultibyteAfterDelete(cur_at_deleted_char.row, deleted_char_is_mb);
-        if (E.conf.wrap_text) {
+        if (self.isTextWrapped(E)) {
           try self.wrapLine(E, cur_at_deleted_char.row);
         }
       }
@@ -1315,7 +1315,7 @@ pub const TextHandler = struct {
         } else {
           self.lineinfo.decreaseOffsets(cur_at_deleted_char.row+1, seqlen);
           try self.recheckIsMultibyteAfterDelete(cur_at_deleted_char.row, deleted_char_is_mb);
-          if (E.conf.wrap_text) {
+          if (self.isTextWrapped(E)) {
             try self.wrapLine(E, cur_at_deleted_char.row);
           }
         }
@@ -1330,7 +1330,7 @@ pub const TextHandler = struct {
       } else {
         self.lineinfo.decreaseOffsets(cur_at_deleted_char.row + 1, seqlen);
         try self.recheckIsMultibyteAfterDelete(cur_at_deleted_char.row, deleted_char_is_mb);
-        if (E.conf.wrap_text) {
+        if (self.isTextWrapped(E)) {
           try self.wrapLine(E, cur_at_deleted_char.row);
         }
       }
@@ -1429,7 +1429,7 @@ pub const TextHandler = struct {
     
     // Highlighting
     
-    try self.rehighlight(
+    try self.highlightFrom(
       E,
       delete_start, // changed_region_start_in
       delete_start, // changed_region_end
@@ -1443,7 +1443,7 @@ pub const TextHandler = struct {
       try self.recheckIsMultibyte(removed_line_start + 1);
     }
     
-    if (E.conf.wrap_text) {
+    if (self.isTextWrapped(E)) {
       _ = try self.wrapTextFrom(E, removed_line_start, removed_line_start+1);
     }
     
@@ -1594,7 +1594,7 @@ pub const TextHandler = struct {
     // Highlighting
     if (new_buffer.len < old_buffer_len) {
       // decrease
-      try self.rehighlight(
+      try self.highlightFrom(
         E,
         replace_start, // changed_region_start_in
         replace_end, // changed_region_end
@@ -1604,7 +1604,7 @@ pub const TextHandler = struct {
       );
     } else {
       // increase
-      try self.rehighlight(
+      try self.highlightFrom(
         E,
         replace_start, // changed_region_start_in
         replace_end, // changed_region_end
@@ -1947,6 +1947,16 @@ pub const TextHandler = struct {
   
   // line wrapping
   
+  pub fn isTextWrapped(self: *const TextHandler, E: *const Editor) bool {
+    if (!E.conf.wrap_text) {
+      return false;
+    }
+    if (self.getLogicalLen() >= E.conf.large_file_limit) {
+      return false;
+    }
+    return true;
+  }
+  
   pub fn wrapText(self: *TextHandler, E: *Editor) !void {
     var line: u32 = 0;
     while (line < self.lineinfo.getLen()) {
@@ -1977,10 +1987,13 @@ pub const TextHandler = struct {
   // Highlighting
   
   pub fn highlightText(self: *TextHandler, E: *Editor) !void {
-    return self.highlight.runFromStart(self, E.allocr);
+    if (self.getLogicalLen() >= E.conf.large_file_limit) {
+      return;
+    }
+    return self.highlight.runText(self, E.allocr);
   }
   
-  pub fn rehighlight(
+  pub fn highlightFrom(
     self: *TextHandler, E: *Editor,
     changed_region_start: u32,
     changed_region_end: u32,
@@ -1988,7 +2001,10 @@ pub const TextHandler = struct {
     is_insert: bool,
     line_start: u32,
   ) !void {
-    return self.highlight.run(
+    if (self.getLogicalLen() >= E.conf.large_file_limit) {
+      return;
+    }
+    return self.highlight.runFrom(
       self,
       E.allocr,
       changed_region_start,
