@@ -234,6 +234,8 @@ pub const Parser = struct {
         }
       } else if (Parser.isSpace(char)) {
         self.skipSpace();
+      } else if (char == '\n') {
+        self.pos += 1;
       } else {
         break;
       }

@@ -96,18 +96,24 @@ pub const PromoteTypesList = Rc(std.ArrayListUnmanaged(PromoteType));
 
 pub const Highlight = struct {
   tokens: std.ArrayListUnmanaged(HighlightType) = .{},
-  extension: ?[]u8 = null,
-  name_to_idx: std.StringHashMapUnmanaged(u32) = .{},
+  name_to_token: std.StringHashMapUnmanaged(u32) = .{},
   
   fn deinit(self: *Highlight, allocr: std.mem.Allocator) void {
     for (self.tokens.items) |*token| {
       token.deinit(allocr);
     }
     self.tokens.deinit(allocr);
-    if (self.extension) |extension| {
-      allocr.free(extension);
-    }
-    self.name_to_idx.deinit(allocr);
+    self.name_to_token.deinit(allocr);
+  }
+};
+
+const HighlightToParse = struct {
+  path: ?[]u8 = null,
+  extension: ?[]u8 = null,
+  
+  fn deinit(self: *HighlightToParse, allocr: std.mem.Allocator) void {
+    if (self.path) |s| { allocr.free(s); }
+    if (self.extension) |s| { allocr.free(s); }
   }
 };
 
@@ -130,7 +136,9 @@ force_alt_screen_buf: bool = true,
 force_alt_scroll_mode: bool = true,
 force_mouse_tracking: bool = true,
 
-highlights: std.ArrayListUnmanaged(Highlight) = .{},
+highlights: std.ArrayListUnmanaged(?Highlight) = .{},
+highlights_to_parse: std.ArrayListUnmanaged(HighlightToParse) = .{},
+/// extension key strings owned highlights_to_parse
 highlights_ext_to_idx: std.StringHashMapUnmanaged(u32) = .{},
 
 // regular config fields
@@ -248,10 +256,6 @@ pub fn open(allocr: std.mem.Allocator) ConfigResult {
   };
   switch(res.reader.parse(allocr, res.source)) {
     .ok => {
-      res.reader.config_dir.?.close();
-      res.reader.config_dir = null;
-      allocr.free(res.reader.config_filepath.?);
-      res.reader.config_filepath = null;
       return .{ .ok = res.reader, };
     },
     .err => |err| {
@@ -260,19 +264,10 @@ pub fn open(allocr: std.mem.Allocator) ConfigResult {
   }
 }
 
-const HighlightToParse = struct {
-  path: ?[]u8 = null,
-  extension: ?[]u8 = null,
-  
-  fn deinit(self: *HighlightToParse, allocr: std.mem.Allocator) void {
-    if (self.path) |s| { allocr.free(s); }
-    if (self.extension) |s| { allocr.free(s); }
-  }
-};
-
 const ParserState = struct {
   config_section: ConfigSection = .global,
   highlights: std.ArrayListUnmanaged(HighlightToParse) = .{},
+  /// Must be E.allocr
   allocr: std.mem.Allocator,
   
   fn deinit(self: *ParserState) void {
@@ -331,6 +326,13 @@ fn parseInner(
               return error.DuplicateKey;
             }
             highlight.extension = try state.allocr.dupe(u8, s);
+            const old = try self.highlights_ext_to_idx.fetchPut(
+              state.allocr,
+              highlight.extension.?, @intCast(highlight_idx)
+            );
+            if (old != null) {
+              return error.DuplicateKey;
+            }
           } else {
             return error.UnknownKey;
           }
@@ -361,7 +363,7 @@ fn parseInner(
 
 const HighlightWriter = struct {
   reader: *Reader,
-  state: *ParserState,
+  allocr: std.mem.Allocator,
   
   name: ?[]u8 = null,
   pattern: ?[]u8 = null,
@@ -374,20 +376,20 @@ const HighlightWriter = struct {
   
   fn deinit(self: *HighlightWriter) void {
     if (self.pattern) |pattern| {
-      self.state.allocr.free(pattern);
+      self.allocr.free(pattern);
     }
     for (self.promote_types.items) |*match| {
       match.deinit(self.allocr);
     }
-    self.promote_types.deinit(self.state.allocr);
-    self.highlight.deinit(self.state.allocr);
+    self.promote_types.deinit(self.allocr);
+    self.highlight.deinit(self.allocr);
   }
   
   fn setPattern(self: *HighlightWriter, pattern: []const u8) !void {
     if (self.pattern != null) {
       return error.DuplicateKey;
     }
-    self.pattern = try self.state.allocr.dupe(u8, pattern);
+    self.pattern = try self.allocr.dupe(u8, pattern);
   }
   
   fn setFlags(self: *HighlightWriter, flags: []const u8) !void {
@@ -398,7 +400,7 @@ const HighlightWriter = struct {
   
   fn flush(self: *HighlightWriter) !void {
     const tt_idx = self.highlight.tokens.items.len;
-    try self.highlight.tokens.append(self.state.allocr, .{
+    try self.highlight.tokens.append(self.allocr, .{
       .name = self.name.?,
       .pattern = self.pattern,
       .flags = self.flags,
@@ -406,13 +408,13 @@ const HighlightWriter = struct {
       .deco = self.deco,
       .promote_types = (
         if (self.promote_types.items.len > 0)
-          try PromoteTypesList.create(self.state.allocr, &self.promote_types)
+          try PromoteTypesList.create(self.allocr, &self.promote_types)
         else
           null
       ),
     });
-    if (try self.highlight.name_to_idx.fetchPut(
-      self.state.allocr, self.name.?, @intCast(tt_idx)
+    if (try self.highlight.name_to_token.fetchPut(
+      self.allocr, self.name.?, @intCast(tt_idx)
     ) != null) {
       return error.DuplicateKey;
     }
@@ -425,37 +427,46 @@ const HighlightWriter = struct {
   }
 };
 
-fn parseHighlight(self: *Reader, state: *ParserState, hl_parse: *HighlightToParse) !void {
+pub fn parseHighlight(
+  self: *Reader,
+  allocr: std.mem.Allocator,
+  hl_id: usize,
+) !void {
+  if (self.highlights.items[hl_id] != null) {
+    return;
+  }
+  
+  const hl_parse = &self.highlights_to_parse.items[hl_id];
   const highlight_filepath: []u8 =
     try Reader.getConfigFile(
-      state.allocr,
+      allocr,
       self.config_dir.?,
       hl_parse.path orelse { return error.HighlightLoadError; }
     );
-  defer state.allocr.free(highlight_filepath);
+  defer allocr.free(highlight_filepath);
   
   const file = try std.fs.openFileAbsolute(highlight_filepath, .{.mode = .read_only});
   defer file.close();
   
-  const source = try file.readToEndAlloc(state.allocr, 1 << 24);
-  defer state.allocr.free(source);
+  const source = try file.readToEndAlloc(allocr, 1 << 24);
+  defer allocr.free(source);
   
   var P = parser.Parser.init(source);
   
   var writer: HighlightWriter = .{
     .reader = self,
-    .state = state,
+    .allocr = allocr,
   };
   
   while (true) {
-    var expr = switch (P.nextExpr(state.allocr)) {
+    var expr = switch (P.nextExpr(allocr)) {
       .ok => |val| val,
       .err => {
         // TODO: propagate error code
         return error.HighlightParseError;
       },
     } orelse break;
-    errdefer expr.deinit(state.allocr);
+    errdefer expr.deinit(allocr);
     
     switch (expr) {
       .kv => |*kv| {
@@ -485,24 +496,24 @@ fn parseHighlight(self: *Reader, state: *ParserState, hl_parse: *HighlightToPars
           if (promote_key.len == 0) {
             return error.InvalidKey;
           }
-          const to_typeid = writer.highlight.name_to_idx.get(promote_key) orelse {
+          const to_typeid = writer.highlight.name_to_token.get(promote_key) orelse {
             return error.InvalidKey;
           };
-          var promote_strs = std.ArrayList([]u8).init(state.allocr);
+          var promote_strs = std.ArrayList([]u8).init(allocr);
           errdefer promote_strs.deinit();
           const val_arr = (try kv.val.get([]parser.Value)) orelse {
             return error.InvalidKey;
           };
           for (val_arr) |val| {
             try promote_strs.append(
-              try state.allocr.dupe(
+              try allocr.dupe(
                 u8,
                 try val.get([]const u8) orelse { return error.InvalidKey; }
               )
             );
           }
           std.mem.sort([]const u8, promote_strs.items, {}, utils.lessThanStr);
-          try writer.promote_types.append(state.allocr, .{
+          try writer.promote_types.append(allocr, .{
             .to_typeid = to_typeid,
             .matches = try promote_strs.toOwnedSlice(),
           });
@@ -514,7 +525,7 @@ fn parseHighlight(self: *Reader, state: *ParserState, hl_parse: *HighlightToPars
         if (writer.name != null) {
            try writer.flush();
         }
-        writer.name = try state.allocr.dupe(u8, table_section);
+        writer.name = try allocr.dupe(u8, table_section);
       },
       else => {
         return error.HighlightParseError;
@@ -526,19 +537,7 @@ fn parseHighlight(self: *Reader, state: *ParserState, hl_parse: *HighlightToPars
     try writer.flush();
   }
   
-  const highlight_idx = self.highlights.items.len;
-  if (hl_parse.extension != null) {
-    writer.highlight.extension = hl_parse.extension.?;
-    hl_parse.extension = null;
-    const old = try self.highlights_ext_to_idx.fetchPut(
-      state.allocr,
-      writer.highlight.extension.?, @intCast(highlight_idx)
-    );
-    if (old != null) {
-      return error.DuplicateKey;
-    }
-  }
-  try self.highlights.append(state.allocr, writer.highlight);
+  self.highlights.items[hl_id] = writer.highlight;
   writer.highlight = .{};
 }
 
@@ -563,19 +562,11 @@ fn parse(self: *Reader, allocr: std.mem.Allocator, source: []const u8) ParseResu
     };
   }
   
-  for (state.highlights.items) |*highlight| {
-    self.parseHighlight(&state, highlight) catch |err| {
-      const path = highlight.path.?;
-      highlight.path = null;
-      return .{
-        .err = .{
-          .type = err,
-          .pos = 0,
-          .location = .{ .highlight = path, },
-        },
-      };
-    };
-  }
+  self.highlights_to_parse = state.highlights;
+  state.highlights = .{};
+  self.highlights.appendNTimes(allocr, null, self.highlights_to_parse.items.len) catch |err| {
+    return .{ .err = .{ .type = err, } };
+  };
   
   return .{ .ok = {}, };
 }

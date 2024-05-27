@@ -91,7 +91,7 @@ pub fn loadTokenTypesForFile(
   self: *Highlight,
   text_handler: *const text.TextHandler,
   allocr: std.mem.Allocator,
-  cfg: *const config.Reader, 
+  cfg: *config.Reader, 
 ) !void {
   self.clear(allocr);
 
@@ -103,7 +103,10 @@ pub fn loadTokenTypesForFile(
   const highlight_idx = cfg.highlights_ext_to_idx.get(extension) orelse {
     return;
   };
-  const highlight = &cfg.highlights.items[highlight_idx];
+  
+  // TODO: log parseHighlight error
+  try cfg.parseHighlight(allocr, highlight_idx);
+  const highlight = &cfg.highlights.items[highlight_idx].?;
   for (highlight.tokens.items) |*tt| {
     // TODO: error
       

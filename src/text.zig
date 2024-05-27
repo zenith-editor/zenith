@@ -367,7 +367,7 @@ pub const TextHandler = struct {
   }
   
   fn recheckIsMultibyteAfterDelete(self: *TextHandler, line: u32, deleted_char_is_mb: bool) !void {
-    if (!self.lineinfo.checkIsMultibyte(line) and !deleted_char_is_mb) {
+    if (!self.lineinfo.isMultibyte(line) and !deleted_char_is_mb) {
       // fast path to avoid looping through the string
       return;
     }
@@ -436,7 +436,7 @@ pub const TextHandler = struct {
       self.scroll.col = 0;
       self.scroll.gfx_col = 0;
     } else {
-      if (!self.lineinfo.checkIsMultibyte(self.cursor.row)) {
+      if (!self.lineinfo.isMultibyte(self.cursor.row)) {
         if (old_gfx_col >= rowlen) {
           self.cursor.col = rowlen;
           self.cursor.gfx_col = rowlen;
@@ -648,7 +648,7 @@ pub const TextHandler = struct {
     const offset_start: u32 = self.lineinfo.getOffset(self.cursor.row);
     const offset_end: u32 = self.getRowOffsetEnd(self.cursor.row);
     
-    if (!self.lineinfo.checkIsMultibyte(self.cursor.row)) {
+    if (!self.lineinfo.isMultibyte(self.cursor.row)) {
       const rowlen = offset_end - offset_start;
       self.cursor.col = rowlen;
       self.cursor.gfx_col = rowlen;
@@ -727,7 +727,7 @@ pub const TextHandler = struct {
     }
     self.cursor.row = self.lineinfo.findMaxLineBeforeOffset(pos, 0);
     self.cursor.col = pos - self.lineinfo.getOffset(self.cursor.row);
-    if (!self.lineinfo.checkIsMultibyte(self.cursor.row)) {
+    if (!self.lineinfo.isMultibyte(self.cursor.row)) {
       self.cursor.gfx_col = self.cursor.col;
     } else {
       const offset_start: u32 = self.lineinfo.getOffset(self.cursor.row);
@@ -764,7 +764,7 @@ pub const TextHandler = struct {
     const offset_start: u32 = self.lineinfo.getOffset(self.cursor.row);
     const offset_end: u32 = self.getRowOffsetEnd(self.cursor.row);
     const rowlen: u32 = offset_end - offset_start;
-    if (!self.lineinfo.checkIsMultibyte(self.cursor.row)) {
+    if (!self.lineinfo.isMultibyte(self.cursor.row)) {
       self.cursor.col = @min(target_gfx_col, rowlen);
       self.cursor.gfx_col = self.cursor.col;
     } else {
@@ -809,7 +809,7 @@ pub const TextHandler = struct {
       }
     }
     
-    if (!self.lineinfo.checkIsMultibyte(self.cursor.row)) {
+    if (!self.lineinfo.isMultibyte(self.cursor.row)) {
       self.scroll.col = target_gfx_col;
       self.scroll.gfx_col = target_gfx_col;
     } else {
@@ -868,7 +868,7 @@ pub const TextHandler = struct {
     
     // Perform insertion
     
-    const line_is_multibyte = self.lineinfo.checkIsMultibyte(self.cursor.row);
+    const line_is_multibyte = self.lineinfo.isMultibyte(self.cursor.row);
     const insidx: u32 = self.calcOffsetFromCursor();
     
     self.undo_mgr.doAppend(insidx, @intCast(char.len)) catch |err| {
@@ -1143,7 +1143,7 @@ pub const TextHandler = struct {
       @intCast(insidx + slice.len), // changed_region_end
       @intCast(slice.len), // shift
       true, // is_insert
-      self.cursor.row // line_start
+      (first_row_after_insidx - 1) // line_start
     );
     
     // Move the cursor to end of entered slice
@@ -1154,7 +1154,7 @@ pub const TextHandler = struct {
     const insidx_end: u32 = @intCast(insidx + slice.len);
     self.cursor.col = insidx_end - offset_start;
     
-    if (!self.lineinfo.checkIsMultibyte(self.cursor.row)) {
+    if (!self.lineinfo.isMultibyte(self.cursor.row)) {
       self.cursor.gfx_col = self.cursor.col;
     } else {
       self.cursor.gfx_col = 0;
@@ -1212,7 +1212,7 @@ pub const TextHandler = struct {
     const delete_first_col_in_cont = blk: {
       if (self.lineinfo.isContLine(cur_at_deleted_char.row) and cur_at_deleted_char.gfx_col == 1) {
         const rowlen = self.getRowLen(cur_at_deleted_char.row);
-        if (self.lineinfo.checkIsMultibyte(cur_at_deleted_char.row)) {
+        if (self.lineinfo.isMultibyte(cur_at_deleted_char.row)) {
           const bytes = self.bytesStartingAt(self.lineinfo.getOffset(cur_at_deleted_char.row)).?;
           const seqlen1 = encoding.sequenceLen(bytes[0]) catch unreachable;
           break :blk (rowlen == seqlen1);
@@ -1459,7 +1459,7 @@ pub const TextHandler = struct {
       const row_start = self.lineinfo.getOffset(self.cursor.row);
       self.cursor.col = delete_start - row_start;
       
-      if (!self.lineinfo.checkIsMultibyte(self.cursor.row)) {
+      if (!self.lineinfo.isMultibyte(self.cursor.row)) {
         self.cursor.gfx_col = self.cursor.col;
       } else {
         self.cursor.gfx_col = 0;

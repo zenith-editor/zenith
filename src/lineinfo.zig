@@ -281,7 +281,7 @@ pub const LineInfoList = struct {
   
   // Multibyte
   
-  pub fn checkIsMultibyte(self: *const LineInfoList, idx: u32) bool {
+  pub fn isMultibyte(self: *const LineInfoList, idx: u32) bool {
     return self.line_data.items[idx].flags.is_multibyte;
   }
   
@@ -314,7 +314,7 @@ pub const LineInfoList = struct {
   pub fn updateLineWrap(
     self: *LineInfoList,
     text_handler: *const text.TextHandler,
-    E: *Editor,
+    E: *const Editor,
     start_line_idx: u32,
   ) !UpdateLineWrapResult {
     const columns = E.getTextWidth() - 1;
@@ -329,8 +329,9 @@ pub const LineInfoList = struct {
     const start_line_offset: u32 = self.line_data.items[start_line_idx].offset;
     const start_line_is_mb =
       self.line_data.items[start_line_idx].flags.is_multibyte;
-      
-    var new_cont_lines = std.ArrayList(u32).init(E.allocr);
+    
+    var stack_allocr = std.heap.stackFallback(16, std.heap.page_allocator);
+    var new_cont_lines = std.ArrayList(u32).init(stack_allocr.get());
     defer new_cont_lines.deinit();
     
     if (start_line_is_mb) {
@@ -359,8 +360,10 @@ pub const LineInfoList = struct {
         offset += columns;
       }
     }
+    
     const next_line_idx_new: u32 =
       @intCast(start_line_idx + 1 + new_cont_lines.items.len);
+      
     // Reserve/delete space for new cont-lines
     
     if (next_line_idx_new < next_line_idx) {

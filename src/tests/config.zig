@@ -88,12 +88,13 @@ test "kv with comments" {
   var gpa = std.heap.GeneralPurposeAllocator(.{}){};
   const allocr = gpa.allocator();
   var parser = Parser.init(
-    \\ # comment1
-    \\    #comment 2
-    \\truth=true
     \\
-    \\  #comment 3
-    \\faux=false #comment4
+    \\ # comment
+    \\    #comment
+    \\truth=true
+    \\#comment
+    \\  #comment
+    \\faux=false #comment
   );
   {
     var expr = parser.nextExpr(allocr).ok.?;
