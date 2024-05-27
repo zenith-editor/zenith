@@ -100,6 +100,41 @@ const GroupOrRoot = struct {
   group_id: ?usize,
 };
 
+const ParseEscapeResult = struct {
+  char: u32,
+  seqlen: u3,
+};
+
+fn parseEscapeChar(self: *Self) !ParseEscapeResult {
+  if (self.str_idx >= self.in_pattern.len) {
+    return error.ExpectedEscapeChar;
+  }
+  
+  const seqlen = try std.unicode.utf8ByteSequenceLength(
+    self.in_pattern[self.str_idx]
+  );
+  if ((self.in_pattern.len - self.str_idx) < seqlen) {
+    return error.Utf8ExpectedContinuation;
+  }
+  const char: u32 = try std.unicode.utf8Decode(
+    self.in_pattern[self.str_idx..(self.str_idx+seqlen)]
+  );
+
+  var esc_char: u32 = undefined;
+  switch (char) {
+    '\\' => { esc_char = '\\'; },
+    'b' => { esc_char = 0x08; }, // backspace
+    'f' => { esc_char = 0x0C; }, // form feed
+    'n' => { esc_char = 0x0A; },
+    'r' => { esc_char = 0x0D; },
+    't' => { esc_char = 0x09; }, // horiz. tab
+    else => {
+      esc_char = char;
+    },
+  }
+  return .{ .char = esc_char, .seqlen = seqlen, };
+}
+
 fn parseGroup(
   self: *Self,
   allocr: std.mem.Allocator,
@@ -111,7 +146,6 @@ fn parseGroup(
   
   const group_or_root: GroupOrRoot = parse_stack.items[parse_stack.items.len - 1];
   
-  var escaped = false;
   var is_last_simple_matcher: bool = false;
   
   outer: while (self.str_idx < self.in_pattern.len) {
@@ -124,13 +158,6 @@ fn parseGroup(
     const char: u32 = try std.unicode.utf8Decode(
       self.in_pattern[self.str_idx..(self.str_idx+seqlen)]
     );
-    
-    if (escaped) {
-      try expr.instrs.append(allocr, .{ .char = char, });
-      escaped = false;
-      self.str_idx += seqlen;
-      continue :outer;
-    }
     
     switch (char) {
       '+', '-', '*', '?' => |qualifier| {
@@ -147,7 +174,6 @@ fn parseGroup(
         
         const ParseState = enum {
           Normal,
-          Escaped,
           SpecifyTo,
         };
         
@@ -165,60 +191,59 @@ fn parseGroup(
         }
         
         inner: while (self.str_idx < self.in_pattern.len) {
-          const seqlen1 = try std.unicode.utf8ByteSequenceLength(
+          var range_seqlen = try std.unicode.utf8ByteSequenceLength(
             self.in_pattern[self.str_idx]
           );
-          if ((self.in_pattern.len - self.str_idx) < seqlen1) {
+          if ((self.in_pattern.len - self.str_idx) < range_seqlen) {
             return error.Utf8ExpectedContinuation;
           }
-          const char1: u32 = try std.unicode.utf8Decode(
-            self.in_pattern[self.str_idx..(self.str_idx+seqlen1)]
+          var range_char: u32 = try std.unicode.utf8Decode(
+            self.in_pattern[self.str_idx..(self.str_idx+range_seqlen)]
           );
           
-          if (state != .Escaped) {
-            switch (char1) {
-              '-' => {
-                if (from == null or state == .SpecifyTo) {
-                  return error.ExpectedEscapeBeforeDashInRange;
-                }
-                self.str_idx += seqlen1;
-                state = .SpecifyTo;
-                continue :inner;
-              },
-              ']' => {
-                self.str_idx += seqlen1;
-                break :inner;
-              },
-              '\\' => {
-                self.str_idx += seqlen1;
-                state = .Escaped;
-                continue :inner;
-              },
-              else => {},
-            }
+          switch (range_char) {
+            '-' => {
+              if (from == null or state == .SpecifyTo) {
+                return error.ExpectedEscapeBeforeDashInRange;
+              }
+              self.str_idx += range_seqlen;
+              state = .SpecifyTo;
+              continue :inner;
+            },
+            ']' => {
+              self.str_idx += range_seqlen;
+              break :inner;
+            },
+            '\\' => {
+              self.str_idx += range_seqlen;
+              const res = try self.parseEscapeChar();
+              range_char = res.char;
+              range_seqlen = res.seqlen;
+            },
+            else => {},
           }
           
           if (state == .SpecifyTo) {
-            self.str_idx += seqlen1;
+            self.str_idx += range_seqlen;
             try ranges.append(allocr, .{
               .from = from.?,
-              .to = char1,
+              .to = range_char,
             });
             from = null;
             state = .Normal;
             continue :inner;
           }
           
-          self.str_idx += seqlen1;
+          self.str_idx += range_seqlen;
           if (from == null) {
-            from = char1;
+            from = range_char;
           } else {
             try ranges.append(allocr, .{
               .from = from.?,
               .to = from.?,
             });
+            from = range_char;
           }
-          continue :inner;
         }
         
         if (from != null) {
@@ -376,7 +401,11 @@ fn parseGroup(
         }
       },
       '\\' => {
-        escaped = true;
+        self.str_idx += seqlen;
+        const res = try self.parseEscapeChar();
+        try expr.instrs.append(allocr, .{ .char = res.char, });
+        self.str_idx += res.seqlen;
+        continue :outer;
       },
       '.' => {
         is_last_simple_matcher = true;

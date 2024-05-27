@@ -16,6 +16,15 @@ test "simple one" {
   try std.testing.expectEqual(2, (try expr.checkMatch("as", &.{})).pos);
 }
 
+test "escape" {
+  var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+  const allocr = gpa.allocator();
+  var expr = try Expr.create(allocr, "\\\\", &.{}).asErr();
+  defer expr.deinit(allocr);
+  try std.testing.expectEqual(1, (try expr.checkMatch("\\", &.{})).pos);
+  try std.testing.expectEqual(0, (try expr.checkMatch("a", &.{})).pos);
+}
+
 test "any" {
   var gpa = std.heap.GeneralPurposeAllocator(.{}){};
   const allocr = gpa.allocator();
@@ -160,6 +169,28 @@ test "simple range" {
   try std.testing.expectEqual(1, (try expr.checkMatch("x0", &.{})).pos);
 }
 
+test "simple range chars" {
+  var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+  const allocr = gpa.allocator();
+  var expr = try Expr.create(allocr, "[az]", &.{}).asErr();
+  defer expr.deinit(allocr);
+  try std.testing.expectEqual(1, (try expr.checkMatch("aaa", &.{})).pos);
+  try std.testing.expectEqual(1, (try expr.checkMatch("zzz", &.{})).pos);
+  try std.testing.expectEqual(0, (try expr.checkMatch("b", &.{})).pos);
+  try std.testing.expectEqual(0, (try expr.checkMatch("", &.{})).pos);
+}
+
+test "simple range escape" {
+  var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+  const allocr = gpa.allocator();
+  var expr = try Expr.create(allocr, "[\\\\\\n]", &.{ .is_multiline = true, }).asErr();
+  defer expr.deinit(allocr);
+  try std.testing.expectEqual(1, (try expr.checkMatch("\\", &.{})).pos);
+  try std.testing.expectEqual(1, (try expr.checkMatch("\n", &.{})).pos);
+  try std.testing.expectEqual(0, (try expr.checkMatch("a", &.{})).pos);
+  try std.testing.expectEqual(0, (try expr.checkMatch("", &.{})).pos);
+}
+
 test "simple range inverse" {
   var gpa = std.heap.GeneralPurposeAllocator(.{}){};
   const allocr = gpa.allocator();
@@ -167,6 +198,17 @@ test "simple range inverse" {
   defer expr.deinit(allocr);
   try std.testing.expectEqual(1, (try expr.checkMatch("0", &.{})).pos);
   try std.testing.expectEqual(0, (try expr.checkMatch("b", &.{})).pos);
+}
+
+test "simple range escape inverse" {
+  var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+  const allocr = gpa.allocator();
+  var expr = try Expr.create(allocr, "[^\\\\n]", &.{}).asErr();
+  defer expr.deinit(allocr);
+  try std.testing.expectEqual(0, (try expr.checkMatch("\\", &.{})).pos);
+  try std.testing.expectEqual(0, (try expr.checkMatch("\n", &.{})).pos);
+  try std.testing.expectEqual(1, (try expr.checkMatch("a", &.{})).pos);
+  try std.testing.expectEqual(0, (try expr.checkMatch("", &.{})).pos);
 }
 
 test "group" {

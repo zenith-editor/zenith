@@ -33,6 +33,7 @@ pub const CreateErrorType = error {
   ExpectedSimpleExpr,
   ExpectedEscapeBeforeDashInRange,
   UnbalancedGroupBrackets,
+  ExpectedEscapeChar,
 };
 
 pub const CreateError = struct {
@@ -126,7 +127,8 @@ pub fn create(
       },
       error.ExpectedSimpleExpr,
       error.ExpectedEscapeBeforeDashInRange,
-      error.UnbalancedGroupBrackets => |suberr| {
+      error.UnbalancedGroupBrackets,
+      error.ExpectedEscapeChar => |suberr| {
         return .{
           .err = .{
             .type = @errorCast(suberr),
