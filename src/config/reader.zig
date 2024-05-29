@@ -107,13 +107,16 @@ pub const Highlight = struct {
   }
 };
 
-const HighlightToParse = struct {
+const HighlightDecl = struct {
   path: ?[]u8 = null,
-  extension: ?[]u8 = null,
+  extension: std.ArrayListUnmanaged([]u8) = .{},
   
-  fn deinit(self: *HighlightToParse, allocr: std.mem.Allocator) void {
+  fn deinit(self: *HighlightDecl, allocr: std.mem.Allocator) void {
     if (self.path) |s| { allocr.free(s); }
-    if (self.extension) |s| { allocr.free(s); }
+    for (self.extension.items) |ext| {
+      allocr.free(ext);
+    }
+    self.extension.deinit(allocr);
   }
 };
 
@@ -138,8 +141,8 @@ force_alt_scroll_mode: bool = true,
 force_mouse_tracking: bool = true,
 
 highlights: std.ArrayListUnmanaged(?Highlight) = .{},
-highlights_to_parse: std.ArrayListUnmanaged(HighlightToParse) = .{},
-/// extension key strings owned highlights_to_parse
+highlights_decl: std.ArrayListUnmanaged(HighlightDecl) = .{},
+/// extension key strings owned highlights_decl
 highlights_ext_to_idx: std.StringHashMapUnmanaged(u32) = .{},
 
 // regular config fields
@@ -267,15 +270,15 @@ pub fn open(allocr: std.mem.Allocator) ConfigResult {
 
 const ParserState = struct {
   config_section: ConfigSection = .global,
-  highlights: std.ArrayListUnmanaged(HighlightToParse) = .{},
+  highlights_decl: std.ArrayListUnmanaged(HighlightDecl) = .{},
   /// Must be E.allocr
   allocr: std.mem.Allocator,
   
   fn deinit(self: *ParserState) void {
-    for (self.highlights.items) |*highlight| {
+    for (self.highlights_decl.items) |*highlight| {
       highlight.deinit(self.allocr);
     }
-    self.highlights.deinit(self.allocr);
+    self.highlights_decl.deinit(self.allocr);
   }
 };
 
@@ -322,23 +325,37 @@ fn parseInner(
           }
         },
         .highlight => |highlight_idx| {
-          const highlight = &state.highlights.items[highlight_idx];
+          const highlight = &state.highlights_decl.items[highlight_idx];
           if (try kv.get([]const u8, "path")) |s| {
             if (highlight.path != null) {
               return error.DuplicateKey;
             }
             highlight.path = try state.allocr.dupe(u8, s);
-          } else if (try kv.get([]const u8, "extension")) |s| {
-            if (highlight.extension != null) {
-              return error.DuplicateKey;
-            }
-            highlight.extension = try state.allocr.dupe(u8, s);
-            const old = try self.highlights_ext_to_idx.fetchPut(
-              state.allocr,
-              highlight.extension.?, @intCast(highlight_idx)
-            );
-            if (old != null) {
-              return error.DuplicateKey;
+          } else if (std.mem.eql(u8, kv.key, "extension")) {
+            if (kv.val.getOpt([]const u8)) |s| {
+              const ext = try state.allocr.dupe(u8, s);
+              try highlight.extension.append(state.allocr, ext);
+              const old = try self.highlights_ext_to_idx.fetchPut(
+                state.allocr,
+                ext, @intCast(highlight_idx)
+              );
+              if (old != null) {
+                return error.DuplicateKey;
+              }
+            } else if (kv.val.getOpt([]parser.Value)) |array| {
+              for (array) |val| {
+                const ext = try state.allocr.dupe(u8, try val.getErr([]const u8));
+                try highlight.extension.append(state.allocr, ext);
+                const old = try self.highlights_ext_to_idx.fetchPut(
+                  state.allocr,
+                  ext, @intCast(highlight_idx)
+                );
+                if (old != null) {
+                  return error.DuplicateKey;
+                }
+              }
+            } else {
+              return error.UnknownKey;
             }
           } else {
             return error.UnknownKey;
@@ -359,8 +376,8 @@ fn parseInner(
         if (highlight.len == 0) {
           return error.InvalidSection;
         }
-        state.config_section = .{ .highlight = state.highlights.items.len, };
-        try state.highlights.append(state.allocr, .{});
+        state.config_section = .{ .highlight = state.highlights_decl.items.len, };
+        try state.highlights_decl.append(state.allocr, .{});
       } else {
         return error.InvalidSection;
       }
@@ -443,7 +460,7 @@ pub fn parseHighlight(
     return;
   }
   
-  const hl_parse = &self.highlights_to_parse.items[hl_id];
+  const hl_parse = &self.highlights_decl.items[hl_id];
   const highlight_filepath: []u8 =
     try Reader.getConfigFile(
       allocr,
@@ -482,11 +499,11 @@ pub fn parseHighlight(
         } else if (try kv.get([]const u8, "flags")) |s| {
           try writer.setFlags(s);
         } else if (std.mem.eql(u8, kv.key, "color")) {
-          if (kv.val.get([]const u8) catch null) |s| {
+          if (kv.val.getOpt([]const u8)) |s| {
             writer.color = editor.Editor.ColorCode.idFromStr(s) orelse {
               return error.ExpectedColorCode;
             };
-          } else if (kv.val.get(i64) catch null) |int| {
+          } else if (kv.val.getOpt(i64)) |int| {
             writer.color = @intCast(int);
           } else {
             return error.ExpectedColorCode;
@@ -508,14 +525,14 @@ pub fn parseHighlight(
           };
           var promote_strs = std.ArrayList([]u8).init(allocr);
           errdefer promote_strs.deinit();
-          const val_arr = (try kv.val.get([]parser.Value)) orelse {
+          const val_arr = (kv.val.getOpt([]parser.Value)) orelse {
             return error.InvalidKey;
           };
           for (val_arr) |val| {
             try promote_strs.append(
               try allocr.dupe(
                 u8,
-                try val.get([]const u8) orelse { return error.InvalidKey; }
+                val.getOpt([]const u8) orelse { return error.InvalidKey; }
               )
             );
           }
@@ -569,9 +586,9 @@ fn parse(self: *Reader, allocr: std.mem.Allocator, source: []const u8) ParseResu
     };
   }
   
-  self.highlights_to_parse = state.highlights;
-  state.highlights = .{};
-  self.highlights.appendNTimes(allocr, null, self.highlights_to_parse.items.len) catch |err| {
+  self.highlights_decl = state.highlights_decl;
+  state.highlights_decl = .{};
+  self.highlights.appendNTimes(allocr, null, self.highlights_decl.items.len) catch |err| {
     return .{ .err = .{ .type = err, } };
   };
   

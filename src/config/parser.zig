@@ -32,7 +32,7 @@ pub const Value = union(enum) {
     self.* = .uninitialized;
   }
   
-  pub fn get(self: *const Value, comptime T: type) AccessError!?T {
+  pub fn getErr(self: *const Value, comptime T: type) AccessError!T {
     switch(T) {
       inline i64 => {
         switch(self.*) {
@@ -49,7 +49,7 @@ pub const Value = union(enum) {
       inline []const u8 => {
         switch(self.*) {
           .string => |*v| { return v.items; },
-          else => { return error.ExpectedBoolValue; },
+          else => { return error.ExpectedStringValue; },
         }
       },
       inline []Value => {
@@ -62,6 +62,10 @@ pub const Value = union(enum) {
         @compileError("invalid type");
       },
     }
+  }
+  
+  pub fn getOpt(self: *const Value, comptime T: type) ?T {
+    return self.getErr(T) catch null;
   }
 };
 
@@ -95,7 +99,7 @@ pub const KV = struct {
     if (!std.mem.eql(u8, self.key, key)) {
       return null;
     }
-    return self.val.get(T);
+    return try self.val.getErr(T);
   }
   
 };
