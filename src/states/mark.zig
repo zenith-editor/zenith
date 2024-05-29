@@ -41,6 +41,9 @@ pub fn handleInput(
   }
   
   if (try handleTextNavigation(self, keysym)) {
+    if (self.conf.update_cur_on_nav and self.text_handler.markers != null) {
+      self.text_handler.markEnd(self);
+    }
     return;
   }
   else if (keysym.raw == kbd.Keysym.NEWLINE) {

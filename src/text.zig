@@ -1850,11 +1850,7 @@ pub const TextHandler = struct {
   // markers
   
   pub fn markStart(self: *TextHandler, E: *Editor) void {
-    var markidx: u32 = self.calcOffsetFromCursor();
-    const logical_len = self.getLogicalLen();
-    if (markidx >= logical_len) {
-      markidx = logical_len;
-    }
+    const markidx: u32 = self.calcOffsetFromCursor();
     self.markers = .{
       .start = markidx,
       .end = markidx,
@@ -1865,16 +1861,12 @@ pub const TextHandler = struct {
   }
   
   pub fn markEnd(self: *TextHandler, E: *Editor) void {
-    var markidx: u32 = self.calcOffsetFromCursor();
-    const logical_len = self.getLogicalLen();
-    if (markidx >= logical_len) {
-      markidx = logical_len;
-    }
+    const markidx: u32 = self.calcOffsetFromCursor();
     if (self.markers) |*markers| {
       if (markidx > markers.start) {
         markers.end = markidx;
       } else {
-        const end: u32 = markers.start;
+        const end: u32 = markers.end;
         markers.* = .{
           .start = markidx,
           .end = end,
