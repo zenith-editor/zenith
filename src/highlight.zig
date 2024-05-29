@@ -344,7 +344,12 @@ pub fn runFrom(
       std.debug.print("new at {}\n", .{tok_idx_at_pos});
     }
     self.tokens.shrinkRetainingCapacity(existing_idx);
-    try self.tokens.appendSlice(allocr, new_token_region.items);
+    try self.tokens.replaceRange(
+      allocr,
+      tok_idx_at_pos,
+      self.tokens.items.len - tok_idx_at_pos,
+      new_token_region.items
+    );
   }
   if (comptime build_config.dbg_highlighting) {
     std.debug.print("=> highlight: {any}\n", .{self.tokens.items});
