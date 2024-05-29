@@ -16,6 +16,13 @@ pub fn isMultibyte(byte: u8) bool {
   };
 }
 
+pub fn isSpace(bytes: []const u8) bool {
+  return bytes.len == 1 and (
+    bytes[0] == ' ' or
+    bytes[0] == '\t'
+  );
+}
+
 pub fn sequenceLen(first_byte: u8) !u3 {
   return std.unicode.utf8ByteSequenceLength(first_byte);
 }

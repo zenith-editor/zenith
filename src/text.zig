@@ -567,10 +567,13 @@ pub const TextHandler = struct {
     }
     self.goLeft(E);
     const row_start: u32 = self.lineinfo.getOffset(self.cursor.row);
+    var go_left_end: ?bool = null;
     while (self.cursor.col > 0) {
       var char: u32 = 0;
       const new_cursor = self.goLeftTextPos(self.cursor, row_start, &char);
-      if (!encoding.isKeywordChar(char)) {
+      if (go_left_end == null) {
+        go_left_end = encoding.isKeywordChar(char);
+      } else if (encoding.isKeywordChar(char) != go_left_end.?) {
         break;
       }
       self.cursor = new_cursor;
@@ -618,10 +621,13 @@ pub const TextHandler = struct {
     }
     self.goRight(E);
     const row_start: u32 = self.lineinfo.getOffset(self.cursor.row);
+    var go_right_end: ?bool = null;
     while (self.cursor.col < rowlen) {
       var char: u32 = 0;
       const new_cursor = self.goRightTextPos(self.cursor, row_start, &char);
-      if (!encoding.isKeywordChar(char)) {
+      if (go_right_end == null) {
+        go_right_end = encoding.isKeywordChar(char);
+      } else if (encoding.isKeywordChar(char) != go_right_end.?) {
         break;
       }
       self.cursor = new_cursor;
@@ -633,14 +639,33 @@ pub const TextHandler = struct {
     E.needs_update_cursor = true;
   }
   
-  pub fn goHead(self: *TextHandler, E: *Editor) void {
+  pub fn goHeadOrContentStart(self: *TextHandler, E: *Editor) void {
+    const offset_start: u32 = self.lineinfo.getOffset(self.cursor.row);
+    const offset_end: u32 = self.getRowOffsetEnd(self.cursor.row);
+    
+    const init_col = self.cursor.col;
     self.cursor.col = 0;
     self.cursor.gfx_col = 0;
-    if (self.scroll.col != 0) {
-      E.needs_redraw = true;
+    
+    var iter = self.iterate(offset_start);
+    while (iter.nextCodepointSliceUntil(offset_end)) |bytes| {
+      if (encoding.isSpace(bytes)) {
+        self.cursor.col += 1;
+        self.cursor.gfx_col += 1;
+      } else {
+        break;
+      }
     }
-    self.scroll.col = 0;
-    self.scroll.gfx_col = 0;
+    
+    if (init_col == self.cursor.col) {
+      self.cursor.col = 0;
+      self.cursor.gfx_col = 0;
+      self.scroll.col = 0;
+      self.scroll.gfx_col = 0;
+    } else {
+      self.syncColumnScroll(E);
+    }
+    E.needs_redraw = true;
     E.needs_update_cursor = true;
   }
   
@@ -1000,12 +1025,9 @@ pub const TextHandler = struct {
     var indent: std.BoundedArray(u8, 32) = .{};
     
     var iter = self.iterate(self.lineinfo.getOffset(self.cursor.row));
-    while (iter.nextCodepointSliceUntil(self.calcOffsetFromCursor())) |char| {
-      if (
-        char.len == 1 and
-        (char[0] == ' ' or char[0] == '\t')
-      ) {
-        indent.appendSlice(char) catch break;
+    while (iter.nextCodepointSliceUntil(self.calcOffsetFromCursor())) |bytes| {
+      if (encoding.isSpace(bytes)) {
+        indent.appendSlice(bytes) catch break;
       } else {
         break;
       }

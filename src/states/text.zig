@@ -56,7 +56,7 @@ pub fn handleTextNavigation(self: *editor.Editor, keysym: *const kbd.Keysym) !bo
     return true;
   }
   else if (keysym.key == kbd.Keysym.Key.home) {
-    self.text_handler.goHead(self);
+    self.text_handler.goHeadOrContentStart(self);
     return true;
   }
   else if (keysym.key == kbd.Keysym.Key.end) {
