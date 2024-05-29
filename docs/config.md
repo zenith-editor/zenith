@@ -9,13 +9,13 @@ Zenith looks up the main `zenith.conf` config file in the following directories:
 Zenith uses a custom dialect of [TOML](https://toml.io/en/v1.0.0) to store configuration data. This dialect only supports pairs of keys and values, table headers in square brackets, and array headers in double square brackets. Only strings, integers (signed 64-bit), booleans and arrays are supported. In addition, the following extensions are supported:
 
   1. Zig-style multi-line strings:
+  
+  Example of the string `"a\nb"` represented under the new multi-line syntax:
 
 ```
 key=\\a
     \\b
 ```
-  
-  Above is an example of the string `"a\nb"` represented under the new multi-line syntax.
 
 Paths are specified relative to the directory containing the `zenith.conf` file.
 
@@ -69,6 +69,10 @@ extension = ".zig"
   
   (int) This configuration determines the time delay (in milliseconds) for recognizing the escape key from stdin. In Xterm-compatible terminals, this configuration is used to resolve ambiguity in parsing escape sequences, where a single escape character is followed by standard printable characters. It operates similarly to the 'escape-time' setting in tmux. Default is *20 ms*.
 
+  * `update-cursor-on-navigate` (since *0.4.0*):
+  
+  (bool) If set to true, when the user navigates in the text marking mode, the start/end point will automatically be set to the current position of the cursor.
+
 ### Terminal feature flags
 
 The following configuration keys control the use of specific terminal features by the editor. When the keys are set to true, the editor will use these features *if* the terminal supports them. Setting them to false means these features will not be used. The default setting for all configuration keys is *true*.
@@ -80,7 +84,7 @@ The following configuration keys control the use of specific terminal features b
 
 ## Syntax highlighting config
 
-Syntax highlighting is defined by external configuration files. These file contains a collection of patterns that the editor uses to recognize various syntax elements. To specify the syntax highlighting file that the editor should use for a file extension, add the following to `zenith.conf`:
+Syntax highlighting is defined by external configuration files. These files may contain collections of patterns that the editor uses to recognize various syntax elements. Zenith reads every highlighting configuration declared in `zenith.conf`, which looks like this:
 
 ```
 [[highlight.zig]]
@@ -90,7 +94,49 @@ extension = ".zig"
 
 where `path` is the location of the syntax highlighting file relative to the parent directory of `zenith.conf`, and `extension` tells the text editor that this config should be used for files of this file extension.
 
-In `highlight/zig.conf`, syntax highlighting may be specified like so:
+Within the syntax highlighting file, you may specify the token types of the language being highlighted. Token types may be declared like in the following example:
+
+```
+[[string]]
+pattern=\\".-"
+color="blue"
+```
+
+In this example, a "string" token type is defined, which matches any text with the pattern `".-"` (see [Patterns](./patterns.md)). The token is specified to be the color blue.
+
+## Config keys
+
+  * `pattern` (since *0.3.0*):
+  
+  (string) The pattern of the token
+  
+  * `flags` (since *0.3.0*):
+  
+  (string) Short code for flags used by pattern. (see [Patterns#Flags](./patterns.md#flags))
+    
+  * `color` (since *0.3.0*):
+  
+  (string or int) The color of the token
+
+  * `bold` (since *0.3.0*):
+  
+  (bool) Whether the token should be bold
+  
+  * `italic` (since *0.3.0*):
+  
+  (bool) Whether the token should be italic
+  
+  * `underline` (since *0.3.0*):
+  
+  (bool) Whether the token should be underline
+
+  * `promote:...` (since *0.3.0*):
+  
+  (array of strings) List of raw-text tokens to promote to token type ...
+
+## Example
+
+Here is an example of a highlighting config file for Zig:
 
 ```
 [[string]]
@@ -130,5 +176,3 @@ color="cyan"
 pattern=\\//.*
 color="dark-gray"
 ```
-
-todo: document syntax highlighting config
