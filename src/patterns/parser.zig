@@ -173,12 +173,12 @@ fn parseGroup(
         self.str_idx += seqlen;
         
         const ParseState = enum {
-          Normal,
-          SpecifyTo,
+          normal,
+          specify_to,
         };
         
         var from: ?u32 = null;
-        var state: ParseState = .Normal;
+        var state: ParseState = .normal;
         var range_inverse = false;
         var ranges: std.ArrayListUnmanaged(Instr.Range) = .{};
         
@@ -203,11 +203,11 @@ fn parseGroup(
           
           switch (range_char) {
             '-' => {
-              if (from == null or state == .SpecifyTo) {
+              if (from == null or state == .specify_to) {
                 return error.ExpectedEscapeBeforeDashInRange;
               }
               self.str_idx += range_seqlen;
-              state = .SpecifyTo;
+              state = .specify_to;
               continue :inner;
             },
             ']' => {
@@ -223,14 +223,14 @@ fn parseGroup(
             else => {},
           }
           
-          if (state == .SpecifyTo) {
+          if (state == .specify_to) {
             self.str_idx += range_seqlen;
             try ranges.append(allocr, .{
               .from = from.?,
               .to = range_char,
             });
             from = null;
-            state = .Normal;
+            state = .normal;
             continue :inner;
           }
           

@@ -253,13 +253,7 @@ const VM = struct {
   arena: std.heap.ArenaAllocator,
   thread_stack: ThreadStack = .{},
   fully_matched: bool = false,
-  
-  const NextInstrResult = enum {
-    Stop,
-    Continue,
-    Matched,
-  };
-  
+
   fn deinit(self: *VM) void {
     self.arena.deinit();
   }
