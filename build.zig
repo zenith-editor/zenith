@@ -26,11 +26,24 @@ pub fn build(b: *std.Build) !void {
     options.addOption(bool, dbg_opt.name, build_opt);
   }
 
+  const version_opt = b.option(
+    []const u8, "version", "overrides the version reported",
+  ) orelse v: {
+    var code: u8 = undefined;
+    const git_describe = b.runAllowFail(&[_][]const u8{
+      "git", "describe", "--tags",
+    }, &code, .Ignore) catch {
+      break :v "<unk>";
+    };
+    break :v std.mem.trim(u8, git_describe, " \n\r");
+  };
+  options.addOption([]const u8, "version", version_opt);
+  
   // exe
   
   const target = b.standardTargetOptions(.{});
   const optimize = b.standardOptimizeOption(.{});
-
+  
   const exe = b.addExecutable(.{
     .name = "zenith",
     .root_source_file = .{ .path = "src/main.zig" },
