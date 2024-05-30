@@ -134,6 +134,7 @@ undo_memory_limit: usize = 4 * 1024 * 1024, // bytes
 escape_time: i64 = 20, // ms
 large_file_limit: u32 = 10 * 1024 * 1024, // bytes
 update_cur_on_nav: bool = false,
+use_file_opener: ?[][]u8 = null,
 
 //terminal feature flags
 force_bracketed_paste: bool = true,
@@ -314,6 +315,24 @@ fn parseInner(
             self.large_file_limit =
               if (int > std.math.maxInt(u32) or int < 0) std.math.maxInt(u32)
               else @intCast(int);
+          } else if (try kv.get([]parser.Value, "use-file-opener")) |val_arr| {
+            if (self.use_file_opener != null) {
+              return error.DuplicateKey;
+            }
+            var use_file_opener = std.ArrayList([]u8).init(state.allocr);
+            errdefer {
+              for (use_file_opener.items) |item| { state.allocr.free(item); }
+              use_file_opener.deinit();
+            }
+            for (val_arr) |val| {
+              try use_file_opener.append(
+                try state.allocr.dupe(
+                  u8,
+                  val.getOpt([]const u8) orelse { return error.InvalidKey; }
+                )
+              );
+            }
+            self.use_file_opener = try use_file_opener.toOwnedSlice();
           } else {
             inline for (&REGULAR_CONFIG_FIELDS) |*config_field| {
               if (try kv.get(
@@ -517,7 +536,6 @@ pub fn parseHighlight(
         } else if (try kv.get(bool, "underline")) |b| {
           writer.deco.is_underline = b;
         } else if (std.mem.startsWith(u8, kv.key, "promote:")) {
-          
           const promote_key = kv.key[("promote:".len)..];
           if (promote_key.len == 0) {
             return error.InvalidKey;
@@ -526,7 +544,10 @@ pub fn parseHighlight(
             return error.InvalidKey;
           };
           var promote_strs = std.ArrayList([]u8).init(allocr);
-          errdefer promote_strs.deinit();
+          errdefer {
+            for (promote_strs.items) |item| { allocr.free(item); }
+            promote_strs.deinit();
+          }
           const val_arr = (kv.val.getOpt([]parser.Value)) orelse {
             return error.InvalidKey;
           };

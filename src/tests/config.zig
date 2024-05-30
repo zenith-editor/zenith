@@ -84,6 +84,8 @@ test "kv with bool val" {
   }
 }
 
+// TODO: array
+
 test "kv with comments" {
   var gpa = std.heap.GeneralPurposeAllocator(.{}){};
   const allocr = gpa.allocator();

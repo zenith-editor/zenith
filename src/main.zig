@@ -6,7 +6,7 @@
 const std = @import("std");
 
 const str = @import("./str.zig");
-const sig = @import("./sig.zig");
+const sig = @import("./platform/sig.zig");
 const editor = @import("./editor.zig");
 
 fn showHelp(program_name: []const u8) !void {

@@ -186,14 +186,6 @@ pub const TextHandler = struct {
       return error.FileTooBig;
     }
     
-    var new_buffer = str.String.init(BufferAllocator);
-    errdefer new_buffer.deinit();
-    const new_buffer_slice = try new_buffer.addManyAsSlice(size);
-    _ = try file.readAll(new_buffer_slice);
-    if (!std.unicode.utf8ValidateSlice(new_buffer.items)) {
-      return error.InvalidUtf8;
-    }
-    
     if (self.file != null) {
       self.file.?.close();
     }
@@ -204,6 +196,15 @@ pub const TextHandler = struct {
     
     if (flush_buffer) {
       self.clearBuffersForFile(E.allocr);
+      
+      var new_buffer = str.String.init(BufferAllocator);
+      errdefer new_buffer.deinit();
+      const new_buffer_slice = try new_buffer.addManyAsSlice(size);
+      _ = try self.file.?.readAll(new_buffer_slice);
+      if (!std.unicode.utf8ValidateSlice(new_buffer.items)) {
+        return error.InvalidUtf8;
+      }
+      
       self.readLines(E, new_buffer) catch |err| {
         self.clearBuffersForFile(E.allocr);
         return err;

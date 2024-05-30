@@ -106,28 +106,21 @@ pub fn handleInput(
       self.text_handler.file == null and
       self.text_handler.file_path.items.len == 0
     ) {
-      self.setState(editor.State.command);
-      self.setCmdData(&.{
-        .prompt = editor.Commands.Open.PROMPT_SAVE,
-        .fns = editor.Commands.Open.FnsTryToSave,
-      });
+      _ = try editor.Commands.Open.setupTryToSave(self, false);
     } else {
       self.text_handler.save(self) catch |err| {
-        self.setState(editor.State.command);
-        self.setCmdData(&.{
-          .prompt = editor.Commands.Open.PROMPT_SAVE_NEW,
-          .fns = editor.Commands.Open.FnsTryToSave,
-        });
-        try editor.Commands.Open.setupUnableToSavePrompt(self, err);
+        if (try editor.Commands.Open.setupTryToSave(self, true)) {
+          try self.getCmdData().replacePromptOverlayFmt(
+            self,
+            editor.Commands.Open.PROMPT_ERR_SAVE_FILE,
+            .{err}
+          );
+        }
       };
     }
   }
   else if (this_shortcuts.key("open", keysym)) {
-    self.setState(editor.State.command);
-    self.setCmdData(&.{
-      .prompt = editor.Commands.Open.PROMPT_OPEN,
-      .fns = editor.Commands.Open.Fns,
-    });
+    _ = try editor.Commands.Open.setupOpen(self, null);
   }
   else if (this_shortcuts.key("goto", keysym)) {
     self.setState(editor.State.command);
@@ -280,12 +273,13 @@ pub const PROMPT_QUIT_CONFIRM = "Save before quitting?";
 const QuitPrompt = struct {
   fn handleYes(self: *editor.Editor) !void {
     self.text_handler.save(self) catch |err| {
-      self.setState(editor.State.command);
-      self.setCmdData(&.{
-        .prompt = editor.Commands.Open.PROMPT_SAVE_NEW,
-        .fns = editor.Commands.Open.FnsTryToSave,
-      });
-      try editor.Commands.Open.setupUnableToSavePrompt(self, err);
+      if (try editor.Commands.Open.setupTryToSave(self, true)) {
+        try self.getCmdData().replacePromptOverlayFmt(
+          self,
+          editor.Commands.Open.PROMPT_ERR_SAVE_FILE,
+          .{err}
+        );
+      }
       return;
     };
     return error.Quit;

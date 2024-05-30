@@ -19,7 +19,7 @@ $(ZIG_CACHE):
 		fi \
 	else \
 		mkdir -p $(ZIG_CACHE_TMP); \
-		ln -s $(ZIG_CACHE_TMP) $(ZIG_CACHE); \
+		ln -sf $(ZIG_CACHE_TMP) $(ZIG_CACHE); \
 	fi
 
 .PHONY: release

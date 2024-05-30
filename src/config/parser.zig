@@ -608,6 +608,7 @@ pub const Parser = struct {
           },
           ',' => {
             self.pos += 1;
+            self.skipSpaceBeforeExpr();
           },
           else => {
             return error.ExpectedArrayValue;

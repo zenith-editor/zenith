@@ -11,7 +11,7 @@ const config = @import("./config.zig");
 const kbd = @import("./kbd.zig");
 const str = @import("./str.zig");
 const text = @import("./text.zig");
-const sig = @import("./sig.zig");
+const sig = @import("./platform/sig.zig");
 const shortcuts = @import("./shortcuts.zig");
 const encoding = @import("./encoding.zig");
 const highlight = @import("./highlight.zig");
@@ -337,8 +337,13 @@ pub const Editor = struct {
   // raw mode
   
   fn enableRawMode(self: *Editor) !void {
-    var termios = try std.posix.tcgetattr(self.in.handle);
-    self.orig_termios = termios;
+    var termios: std.posix.termios = undefined;
+    if (self.orig_termios) |orig_termios| {
+      termios = orig_termios;
+    } else {
+      termios = try std.posix.tcgetattr(self.in.handle);
+      self.orig_termios = termios;
+    }
     
     termios.iflag.BRKINT = false;
     termios.iflag.ICRNL = false;
@@ -362,10 +367,38 @@ pub const Editor = struct {
     try std.posix.tcsetattr(self.in.handle, std.posix.TCSA.FLUSH, termios);
   }
   
-  fn disableRawMode(self: *Editor) !void {
+  pub fn enableRawModeForSpawnedApplications(self: *Editor) !void {
+    // actual, real raw mode as seen in cfmakeraw
+    var termios: std.posix.termios = self.orig_termios.?;
+    
+    termios.iflag.IGNBRK = false;
+    termios.iflag.BRKINT = false;
+    termios.iflag.PARMRK = false;
+    termios.iflag.ISTRIP = false;
+    termios.iflag.INLCR = false;
+    termios.iflag.IGNCR = false;
+    termios.iflag.ICRNL = false;
+    termios.iflag.IXON = false;
+    
+    termios.oflag.OPOST = false;
+    
+    termios.cflag.CSIZE = std.posix.CSIZE.CS8;
+    termios.cflag.PARENB = false;
+    
+    termios.lflag.ECHO = false;
+    termios.lflag.ECHONL = false;
+    termios.lflag.ICANON = false;
+    termios.lflag.IEXTEN = false;
+    termios.lflag.ISIG = false;
+    
+    try std.posix.tcsetattr(self.in.handle, std.posix.TCSA.FLUSH, termios);
+  }
+  
+  pub fn disableRawMode(self: *Editor) !void {
     if (self.orig_termios) |termios| {
       try std.posix.tcsetattr(self.in.handle, std.posix.TCSA.FLUSH, termios);
     }
+    // self.orig_termios = null;
   }
   
   // console input
@@ -708,7 +741,7 @@ pub const Editor = struct {
       const oldh = self.w_height;
       var wsz: std.os.linux.winsize = undefined;
       const rc = std.os.linux.ioctl(self.in.handle, std.os.linux.T.IOCGWINSZ, @intFromPtr(&wsz));
-      if (std.os.linux.E.init(rc) == .SUCCESS) {
+      if (std.posix.errno(rc) == .SUCCESS) {
         self.w_height = wsz.ws_row;
         self.w_width = wsz.ws_col;
       }
@@ -786,8 +819,8 @@ pub const Editor = struct {
       .linux => {
         var pollfd = [1]std.posix.pollfd{
           .{
-            .fd = std.posix.STDIN_FILENO,
-            .events = std.os.linux.POLL.IN,
+            .fd = self.in.handle,
+            .events = std.posix.POLL.IN,
             .revents = 0,
           }
         };
@@ -808,7 +841,7 @@ pub const Editor = struct {
         while (true) {
           var int_bytes_avail: i32 = 0;
           if (std.os.linux.ioctl(
-            std.posix.STDIN_FILENO,
+            self.in.handle,
             std.os.linux.T.FIONREAD,
             @intFromPtr(&int_bytes_avail)
           ) < 0) {
@@ -1156,9 +1189,22 @@ pub const Editor = struct {
     }
   }
   
-  // terminal restore
+  // terminal setup & restore
+  
+  pub fn resetTerminal(self: *Editor) !void {
+    try self.outw.writeAll("\x1b" ++ "c");
+  }
+  
+  pub fn setupTerminal(self: *Editor) !void {
+    try self.resetTerminal();
+    try self.enableRawMode();
+    try self.enableTermExts();
+    self.needs_redraw = true;
+    self.needs_update_cursor = true;
+  }
   
   pub fn restoreTerminal(self: *Editor) !void {
+//     try self.resetTerminal();
     try self.disableTermExts();
     try self.refreshScreen();
     try self.disableRawMode();
@@ -1166,12 +1212,10 @@ pub const Editor = struct {
   
   // tick
   
-  const REFRESH_RATE_MS = 16;
+  pub const REFRESH_RATE_MS = 16;
   
   pub fn run(self: *Editor) !void {
-    try self.enableRawMode();
-    try self.enableTermExts();
-    self.needs_redraw = true;
+    try self.setupTerminal();
     var ts = std.time.milliTimestamp();
     while (true) {
       if (sig.resized) {
@@ -1201,13 +1245,7 @@ pub const Editor = struct {
   
   /// opened_file_str must be allocated by E.allocr
   pub fn openAtStart(self: *Editor, opened_file_str: str.StringUnmanaged) !void {
-    self.setState(.command);
-    self.setCmdData(&.{
-      .prompt = Commands.Open.PROMPT_OPEN,
-      .fns = Commands.Open.Fns,
-      .cmdinp = opened_file_str,
-    });
-    try Commands.Open.onInputted(self);
+    _ = try Commands.Open.setupOpen(self, opened_file_str);
   }
   
 };
