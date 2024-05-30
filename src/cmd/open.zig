@@ -131,13 +131,6 @@ fn runFileOpener(
   try std.posix.dup2(old_stdin, std.posix.STDIN_FILENO);
   try std.posix.dup2(old_stderr, std.posix.STDERR_FILENO);
   
-  // termios
-  {
-    std.time.sleep(100 * std.time.ns_per_ms);
-    const c_termios = try std.posix.tcgetattr(pty_res.master.handle);
-    std.debug.print("{}\n", .{c_termios.iflag});
-    try std.posix.tcsetattr(self.in.handle, std.posix.TCSA.FLUSH, c_termios);
-  }
   // poll
   
   var poll_fds = [_]std.posix.pollfd{
@@ -159,6 +152,7 @@ fn runFileOpener(
   };
   var stdout_pipe = std.fifo.LinearFifo(u8, .Dynamic).init(self.allocr);
   defer stdout_pipe.deinit();
+  var is_termios_setup = false;
   
   while (!sig.sigchld_triggered) {
     const poll_res = std.posix.poll(&poll_fds, editor.Editor.REFRESH_RATE_MS) catch { break; };
@@ -217,6 +211,12 @@ fn runFileOpener(
           break;
         }
         try self.outw.writeAll(buf[0..amt]);
+        if (!is_termios_setup) {
+          // termios
+          const c_termios = try std.posix.tcgetattr(pty_res.master.handle);
+          try std.posix.tcsetattr(self.in.handle, std.posix.TCSA.FLUSH, c_termios);
+          is_termios_setup = true;
+        }
       }
     }
   }
