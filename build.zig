@@ -46,7 +46,7 @@ pub fn build(b: *std.Build) !void {
   
   const exe = b.addExecutable(.{
     .name = "zenith",
-    .root_source_file = .{ .path = "src/main.zig" },
+    .root_source_file = b.path("src/main.zig"),
     .target = target,
     .optimize = optimize,
   });
@@ -58,14 +58,14 @@ pub fn build(b: *std.Build) !void {
   // modules (for testing)
   
   const patterns_module = b.addModule("patterns", .{
-    .root_source_file = .{ .path = "src/patterns.zig" },
+    .root_source_file = b.path("src/patterns.zig"),
     .target = target,
     .optimize = optimize,
   });
   patterns_module.addOptions("build_config", options);
   
   const config_module = b.addModule("config", .{
-    .root_source_file = .{ .path = "src/config.zig" },
+    .root_source_file = b.path("src/config.zig"),
     .target = target,
     .optimize = optimize,
   });
@@ -94,7 +94,7 @@ pub fn build(b: *std.Build) !void {
   }) |test_target| {
     const build_tests = b.addTest(.{
       .name = try std.fmt.allocPrint(b.allocator, "test_{s}", .{test_target.name}),
-      .root_source_file = .{ .path = test_target.path, },
+      .root_source_file = b.path(test_target.path),
       .target = target,
       .optimize = optimize,
     });
@@ -141,7 +141,7 @@ pub fn build(b: *std.Build) !void {
   }) |bench_target| {
     const build_benchs = b.addExecutable(.{
       .name = try std.fmt.allocPrint(b.allocator, "bench_{s}", .{bench_target.name}),
-      .root_source_file = .{ .path = bench_target.path, },
+      .root_source_file = b.path(bench_target.path),
       .target = target,
       .optimize = optimize,
     });
