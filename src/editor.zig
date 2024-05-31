@@ -235,12 +235,10 @@ pub const Editor = struct {
   }
   
   fn loadConfig(self: *Editor) !void {
-    var result = config.Reader.open(self.allocr);
+    var result = self.conf.open(self.allocr);
     
     switch (result) {
-      .ok => |conf_ok| {
-        self.conf = conf_ok;
-      },
+      .ok => {},
       .err => |*err| {
         defer err.deinit(self.allocr);
         if (err.type == error.FileNotFound and err.location == .not_loaded) {
@@ -785,7 +783,11 @@ pub const Editor = struct {
     var nread: usize = 0;
     if (self.readKey()) |keysym| {
       nread += self.in_read;
-      if (self.unprotected_hideable_msg != null) {
+      // TODO: specify ctrl-h somewhere else as opposed to hardcoding it
+      if (
+        !(keysym.ctrl_key and keysym.isChar('h')) and
+        self.unprotected_hideable_msg != null
+      ) {
         self.unsetHideableMsg();
         self.needs_redraw = true;
       }

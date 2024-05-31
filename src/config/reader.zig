@@ -54,8 +54,7 @@ pub const ConfigError = struct {
   }
 };
 
-const ParseResult = Error(void, ConfigError);
-pub const ConfigResult = Error(Reader, ConfigError);
+pub const ConfigResult = Error(void, ConfigError);
 
 const CONFIG_DIR = "zenith";
 const CONFIG_FILENAME = "zenith.conf";
@@ -231,39 +230,34 @@ fn getConfigFile(
 }
 
 const OpenWithoutParsingResult = struct {
-  reader: Reader,
   source: []u8,
 };
 
-fn openWithoutParsing(allocr: std.mem.Allocator) ConfigError.Type!OpenWithoutParsingResult {
-  var config_dir: std.fs.Dir = try Reader.getConfigDir();
-  errdefer config_dir.close();
+fn openWithoutParsing(self: *Reader, allocr: std.mem.Allocator) ConfigError.Type!OpenWithoutParsingResult {
+  var config_dir: ?std.fs.Dir = try Reader.getConfigDir();
+  errdefer if (config_dir != null) config_dir.?.close();
   
   const config_filepath: []u8 =
-    try Reader.getConfigFile(allocr, config_dir, CONFIG_FILENAME);
-  errdefer allocr.free(config_filepath);
+    try Reader.getConfigFile(allocr, config_dir.?, CONFIG_FILENAME);
   
-  const reader: Reader = .{
-    .config_dir = config_dir,
-    .config_filepath = config_filepath,
-  };
+  self.config_dir = config_dir;
+  config_dir = null;
+  self.config_filepath = config_filepath;
   
-  const file = try std.fs.openFileAbsolute(reader.config_filepath.?, .{.mode = .read_only});
+  const file = try std.fs.openFileAbsolute(self.config_filepath.?, .{.mode = .read_only});
   defer file.close();
   
   const source = try file.readToEndAlloc(allocr, 1 << 24);
-  errdefer allocr.free(source);
-  
-  return .{ .reader = reader, .source = source, };
+  return .{ .source = source, };
 }
 
-pub fn open(allocr: std.mem.Allocator) ConfigResult {
-  var res = openWithoutParsing(allocr) catch |err| {
+pub fn open(self: *Reader, allocr: std.mem.Allocator) ConfigResult {
+  const res = self.openWithoutParsing(allocr) catch |err| {
     return .{ .err = .{ .type = err, }, };
   };
-  switch(res.reader.parse(allocr, res.source)) {
+  switch(self.parse(allocr, res.source)) {
     .ok => {
-      return .{ .ok = res.reader, };
+      return .{ .ok = {}, };
     },
     .err => |err| {
       return .{ .err = err, };
@@ -588,7 +582,7 @@ pub fn parseHighlight(
   writer.highlight = .{};
 }
 
-fn parse(self: *Reader, allocr: std.mem.Allocator, source: []const u8) ParseResult {
+fn parse(self: *Reader, allocr: std.mem.Allocator, source: []const u8) ConfigResult {
   var P = parser.Parser.init(source);
   var state: ParserState = .{
     .allocr = allocr,
