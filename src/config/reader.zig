@@ -133,7 +133,7 @@ wrap_text: bool = true,
 undo_memory_limit: usize = 4 * 1024 * 1024, // bytes
 escape_time: i64 = 20, // ms
 large_file_limit: u32 = 10 * 1024 * 1024, // bytes
-update_cur_on_nav: bool = false,
+update_mark_on_nav: bool = false,
 use_file_opener: ?[][]u8 = null,
 
 //terminal feature flags
@@ -159,7 +159,7 @@ const REGULAR_CONFIG_FIELDS = [_]ConfigField {
   .{ .field="show_line_numbers", .conf="show-line-numbers" },
   .{ .field="wrap_text", .conf="wrap-text" },
   .{ .field="escape_time", .conf="escape-time" },
-  .{ .field="update_cur_on_nav", .conf="update-cursor-on-navigate" },
+  .{ .field="update_mark_on_nav", .conf="update-mark-on-navigate" },
   .{ .field="force_bracketed_paste", .conf="force-bracketed-paste" },
   .{ .field="force_alt_screen_buf", .conf="force-alt-screen-buf" },
   .{ .field="force_alt_scroll_mode", .conf="force-alt-scroll-mode" },
