@@ -12,6 +12,9 @@ const kbd = @import("../kbd.zig");
 const text = @import("../text.zig");
 const editor = @import("../editor.zig");
 
+const this_shortcuts = @import("../shortcuts.zig").CMD_GOTO_LINE;
+const this_shortcuts_help = @import("../shortcuts.zig").CMD_GOTO_LINE_HELP;
+
 pub fn onInputted(self: *editor.Editor) !void {
   self.needs_update_cursor = true;
   var text_handler: *text.TextHandler = &self.text_handler;
@@ -32,16 +35,18 @@ pub fn onInputted(self: *editor.Editor) !void {
 }
 
 pub fn onKey(self: *editor.Editor, keysym: *const kbd.Keysym) !bool {
-  if (keysym.getPrint()) |key| {
-    if (key == 'g') {
-      self.text_handler.gotoFirstLine(self);
-      self.setState(.text);
-      return true;
-    } else if (key == 'G') {
-      self.text_handler.gotoLastLine(self);
-      self.setState(.text);
-      return true;
-    }
+  if (this_shortcuts.key("help", keysym)) {
+    self.copyHideableMsg(&this_shortcuts_help);
+    self.needs_redraw = true;
+    return true;
+  } else if (this_shortcuts.key("first", keysym)) {
+    self.text_handler.gotoFirstLine(self);
+    self.setState(.text);
+    return true;
+  } else if (this_shortcuts.key("last", keysym)) {
+    self.text_handler.gotoLastLine(self);
+    self.setState(.text);
+    return true;
   }
   return false;
 }

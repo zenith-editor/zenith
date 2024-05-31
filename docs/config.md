@@ -67,11 +67,30 @@ extension = ".zig"
 
   * `escape-time` (since *0.3.0*):
   
-  (int) This configuration determines the time delay (in milliseconds) for recognizing the escape key from stdin. In Xterm-compatible terminals, this configuration is used to resolve ambiguity in parsing escape sequences, where a single escape character is followed by standard printable characters. It operates similarly to the 'escape-time' setting in tmux. Default is *20 ms*.
-
-  * `update-cursor-on-navigate` (since *0.4.0*):
+  (int) This configuration determines the time delay (in milliseconds) for recognizing the escape key from stdin. In Xterm-compatible terminals, this configuration is used to resolve ambiguity in parsing escape sequences, where an escape sequence beginning with a standard printable character is indistinguishable from the an escape key press, and then a printable character being typed. It operates similarly to the 'escape-time' setting in tmux. Default is *20 ms*.
+ 
+  * `large-file-limit` (since *0.3.2*):
   
-  (bool) If set to true, when the user navigates in the text marking mode, the start/end point will automatically be set to the current position of the cursor.
+  (int) Specifies the minimum number of bytes needed for a file to be classified as a large file. When a large file is opened, the following operations will be disabled:
+
+    * Text wrapping
+    * Syntax highlighting
+    
+    Defaults to *10 MiB*.
+  
+  * `update-mark-on-navigate` (since *0.3.2*):
+  
+  (bool) If set to true, then when navigating in text marking mode, the markers will automatically move without needing to press Enter. Defaults to *false*.
+
+  * `use-file-opener` (since *0.3.2*):
+  
+  (array of strings) Specifies the command used for opening a file manager. If this setting exists, then when prompting for a file, Zenith will try to call the external file manager application and read the path of the selected file. The file manager should return the selected file by writing into stdout, and it should display its UI by writing into stderr. Defaults to nothing.
+
+  *nnn* is the recommended file manager. In order to to use nnn as the file manager, set the configuration to the following:
+  
+```
+use-file-opener = ["nnn", "-p", "-"]
+```
 
 ### Terminal feature flags
 
@@ -84,7 +103,7 @@ The following configuration keys control the use of specific terminal features b
 
 ## Syntax highlighting config
 
-Syntax highlighting is defined by external configuration files. These files may contain collections of patterns that the editor uses to recognize various syntax elements. Zenith reads every highlighting configuration declared in `zenith.conf`, which looks like this:
+Syntax highlighting is defined by external configuration files. These files may contain collections of patterns that the editor uses to recognize various syntax elements. Zenith reads every highlighting configuration declared in `zenith.conf`. Here is an example of a *highlighting declaration*:
 
 ```
 [[highlight.zig]]
@@ -104,7 +123,17 @@ color="blue"
 
 In this example, a "string" token type is defined, which matches any text with the pattern `".-"` (see [Patterns](./patterns.md)). The token is specified to be the color blue.
 
-## Config keys
+## Config keys for highlighting declarations
+
+  * `path` (since *0.3.0*):
+    
+    (string) Path of the highlighting file, relative to the parent config directory.
+    
+  * `extension` (since *0.3.0*):
+  
+    (string, or array of strings) Specifies for which file extension that this highlighting schema should be applied to. Each extension must begin with a '.'.
+
+## Config keys for highlighting file
 
   * `pattern` (since *0.3.0*):
   

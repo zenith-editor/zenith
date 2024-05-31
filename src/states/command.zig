@@ -10,7 +10,7 @@ const text = @import("../text.zig");
 const editor = @import("../editor.zig");
 const encoding = @import("../encoding.zig");
 
-const CMD_PROMPT = editor.Editor.ESC_FG_EMPHASIZE ++ " >" ++ editor.Editor.ESC_COLOR_DEFAULT;
+const CMD_PROMPT = editor.Esc.FG_EMPHASIZE ++ " >" ++ editor.Esc.COLOR_DEFAULT;
 const CMD_PROMPT_COLS = 2;
 
 pub fn onUnset(self: *editor.Editor, next_state: editor.State) void {
@@ -94,7 +94,7 @@ pub fn handleInput(
 
 pub fn renderStatus(self: *editor.Editor) !void {
   try self.moveCursor(self.getTextHeight(), 0);
-  try self.writeAll(editor.Editor.ESC_CLEAR_LINE);
+  try self.writeAll(editor.Esc.CLEAR_LINE);
   const cmd_data: *editor.CommandData = self.getCmdData();
   if (cmd_data.promptoverlay) |promptoverlay| {
     try self.writeAll(promptoverlay.slice());
@@ -102,14 +102,14 @@ pub fn renderStatus(self: *editor.Editor) !void {
     try self.writeAll(prompt);
   }
   try self.moveCursor((self.getTextHeight() + 1), 0);
-  try self.writeAll(editor.Editor.ESC_CLEAR_LINE);
+  try self.writeAll(editor.Esc.CLEAR_LINE);
   try self.writeAll(CMD_PROMPT);
   var col: u32 = 0;
   for (cmd_data.cmdinp.items) |byte| {
     if (col > self.getTextWidth()) {
       return;
     }
-    try self.outw.writeByte(byte);
+    try self.writeByte(byte);
     col += 1;
   }
   try self.moveCursor(

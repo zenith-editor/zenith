@@ -2,11 +2,17 @@
 
 ![](/docs/preview.jpg)
 
-A very minimal console text editor written in Zig.
+ * **What it is:** a console-based text editor
+ 
+   * ... that is easy to learn with familiar keyboard shortcuts
+   * ... that is lightweight and requires no external dependencies
+   * ... that is written in Zig
+ 
+ * **What it is not:** an IDE
 
 ## Requirements
 
- * A terminal emulator that supports ANSI escape sequences (currently tested with xterm on Linux)
+ * An xterm-compatible terminal emulator
 
 ## Build
 
@@ -15,64 +21,28 @@ A very minimal console text editor written in Zig.
 For debug builds, use the command:
 
 ```
-zig build
+make
 ```
 
 For release:
 
 ```
-zig build -Doptimize=ReleaseSafe
+make release
 ```
 
 ## Usage
 
-### Text mode
+Zenith is a modal editor. It supports the following modes:
 
-By default, zenith starts in text mode, which supports the following shortcuts (`^x` means ctrl + x):
+  * Text mode (default)
+  * Block mode (or text marking mode)
+  * Command mode
+  
+You can switch from any other mode back to text mode by pressing escape.
 
-```
-^q: quit
-^s: save
-^o: open
-^b: block mode
-^v: paste
-^g: goto line (cmd)
-^f: find (cmd)
-^z: undo
-^d: duplicate line
-```
+Navigation is done with the arrow keys, page up/down, home/end keys. Editing works as you would expect from a modern non-terminal based word processor.
 
-Text navigation is done with the arrow keys and the PgUp/PgDown keys.
-Home/End can be used to go to the start/end of a line.
-
-### Block mode
-
-Within block mode (accessible with `^b`), you can mark a block of text by moving your cursor and pressing Enter. Block mode supports the shortcuts:
-
-```
-enter: set end marker position
-^c: copy marked block
-^x: cut marked block
-del/backspace: delete a block of text
->: indent
-<: dedent
-```
-
-### Command mode
-
-Shortcuts such as ^g, ^f takes you to command mode.
-
-* `^g`: go to line
- * Enter a valid line number to go to a specific line
- * Type `g` to go to first line
- * Type `G` to go to last line
-
-* `^f`: find and mark searched text
- * Use the up/down arrow keys to search forward or backwards.
- * `^r` to replace currently selected 
- * `^h` to replace all instances
- * `^b` to send to block mode
- * `^e` to search with regex
+For more help, press `^h` (ctrl-h) to show keyboard shortcuts.
 
 ## License
 

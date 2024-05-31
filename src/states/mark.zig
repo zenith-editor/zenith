@@ -115,7 +115,7 @@ pub fn handleOutput(self: *editor.Editor) !void {
 
 pub fn renderStatus(self: *editor.Editor) !void {
   try self.moveCursor(self.getTextHeight(), 0);
-  try self.writeAll(editor.Editor.ESC_CLEAR_LINE);
+  try self.writeAll(editor.Esc.CLEAR_LINE);
   try self.writeAll("Enter: mark end, Del: delete");
   var status: [32]u8 = undefined;
   const status_slice = try std.fmt.bufPrint(

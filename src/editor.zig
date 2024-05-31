@@ -164,12 +164,57 @@ pub const Commands = struct {
 };
 
 pub const HideableMessage = struct {
+  header: ?[]const u8 = null,
   text: str.MaybeOwnedSlice,
   rows: u32,
+  offset: u32 = 0,
+  offset_rows: u32 = 0,
   
-  pub fn deinit(self: *HideableMessage, allocator: std.mem.Allocator) void {
+  fn deinit(self: *HideableMessage, allocator: std.mem.Allocator) void {
     self.text.deinit(allocator);
   }
+  
+  fn calcRenderableRows(self: *const HideableMessage) u32 {
+    return @min(self.rows - self.offset_rows, 5);
+  }
+  
+  fn scrollNext(self: *HideableMessage) bool {
+    const renderable_rows = self.calcRenderableRows();
+    const slice = self.text.slice();
+    var row: u32 = 0;
+    while (self.offset < slice.len) {
+      const byte = slice[self.offset];
+      self.offset += 1;
+      if (byte == '\n') {
+        self.offset_rows += 1;
+        row += 1;
+        if (row == renderable_rows) {
+          break;
+        }
+      }
+    }
+    if (self.offset == slice.len and slice[slice.len - 1] != '\n') {
+      self.offset_rows += 1;
+    }
+    return self.offset == slice.len;
+  }
+};
+
+pub const TextBoxDecorations = struct {
+  pub const BORDER = [_][]const u8{"═","╔","╗","╚","╝"};
+};
+
+pub const Esc = struct {
+  pub const CLEAR_SCREEN = "\x1b[2J";
+  pub const CLEAR_LINE = "\x1b[2K";
+  pub const RESET_POS = "\x1b[H";
+  pub const COLOR_INVERT = "\x1b[7m";
+  pub const COLOR_DEFAULT = "\x1b[0m";
+  
+  pub const FG_BOLD = "\x1b[1m";
+  pub const FG_ITALIC = "\x1b[3m";
+  pub const FG_UNDERLINE = "\x1b[4m";
+  pub const FG_EMPHASIZE = "\x1b[38;5;8m";
 };
 
 pub const Editor = struct {
@@ -308,21 +353,35 @@ pub const Editor = struct {
   // hideable message
   
   pub fn setHideableMsgConst(self: *Editor, static: []const u8) void {
-    if (self.unprotected_hideable_msg) |*msg| {
-      msg.deinit(self.allocr);
-    }
-    self.unprotected_hideable_msg = .{
+    self.copyHideableMsg(&.{
       .text = .{ .static = static, },
       .rows = 1,
-    };
+    });
   }
   
   pub fn copyHideableMsg(self: *Editor, other: *const HideableMessage) void {
-    if (self.unprotected_hideable_msg) |*msg| {
-      msg.deinit(self.allocr);
+    switch (other.text) {
+      .owned => {
+        if (self.unprotected_hideable_msg) |*msg| {
+          msg.deinit(self.allocr);
+        }
+        @panic("TODO");
+      },
+      .static => {
+        if (self.unprotected_hideable_msg) |*msg| {
+          if (!msg.text.isOwned() and msg.text.static.ptr == other.text.static.ptr) {
+            if (msg.scrollNext()) {
+              msg.deinit(self.allocr);
+              self.unprotected_hideable_msg = null;
+            }
+            return;
+          } else {
+            msg.deinit(self.allocr);
+          }
+        }
+        self.unprotected_hideable_msg = other.*;
+      },
     }
-    std.debug.assert(!other.text.isOwned());
-    self.unprotected_hideable_msg = other.*;
   }
   
   pub fn unsetHideableMsg(self: *Editor) void {
@@ -580,21 +639,10 @@ pub const Editor = struct {
   
   // console output
   
-  pub const ESC_CLEAR_SCREEN = "\x1b[2J";
-  pub const ESC_CLEAR_LINE = "\x1b[2K";
-  pub const ESC_RESET_POS = "\x1b[H";
-  pub const ESC_COLOR_INVERT = "\x1b[7m";
-  pub const ESC_COLOR_DEFAULT = "\x1b[0m";
-  
-  pub const ESC_FG_BOLD = "\x1b[1m";
-  pub const ESC_FG_ITALIC = "\x1b[3m";
-  pub const ESC_FG_UNDERLINE = "\x1b[4m";
-  pub const ESC_FG_EMPHASIZE = "\x1b[38;5;8m";
-  
-  pub const HTAB_CHAR = ESC_FG_EMPHASIZE ++ "\xc2\xbb " ++ ESC_COLOR_DEFAULT;
+  pub const HTAB_CHAR = Esc.FG_EMPHASIZE ++ "\xc2\xbb " ++ Esc.COLOR_DEFAULT;
   pub const HTAB_COLS = 2;
-  pub const LINEWRAP_SYM = ESC_FG_EMPHASIZE ++ "\xe2\x8f\x8e" ++ ESC_COLOR_DEFAULT;
-  pub const LINENO_COLOR = ESC_FG_EMPHASIZE;
+  pub const LINEWRAP_SYM = Esc.FG_EMPHASIZE ++ "\xe2\x8f\x8e" ++ Esc.COLOR_DEFAULT;
+  pub const LINENO_COLOR = Esc.FG_EMPHASIZE;
   
   pub const COLOR_CODE_INVERT: ColorCode = .{
     .bg = .invert,
@@ -705,6 +753,10 @@ pub const Editor = struct {
     return self.outw.writeAll(bytes);
   }
   
+  pub fn writeByte(self: *Editor, byte: u8) !void {
+    return self.outw.writeByte(byte);
+  }
+  
   pub fn writeFmt(self: *Editor, comptime fmt: []const u8, args: anytype,) !void {
     return std.fmt.format(self.outw, fmt, args);
   }
@@ -727,8 +779,8 @@ pub const Editor = struct {
   }
   
   pub fn refreshScreen(self: *Editor) !void {
-    try self.outw.writeAll(Editor.ESC_CLEAR_SCREEN);
-    try self.outw.writeAll(Editor.ESC_RESET_POS);
+    try self.writeAll(Esc.CLEAR_SCREEN);
+    try self.writeAll(Esc.RESET_POS);
   }
   
   // console dims
@@ -928,14 +980,14 @@ pub const Editor = struct {
     
     fn writeColorCode(self: *ColumnPrinter) !void {
       if (self.color_code) |color_code| {
-        try self.editor.writeAll(ESC_COLOR_DEFAULT);
+        try self.editor.writeAll(Esc.COLOR_DEFAULT);
         switch (color_code.bg) {
           .transparent => {},
           .coded => |coded| {
             try self.editor.writeFmt("\x1b[48;5;{d}m", .{coded});
           },
           .invert => {
-            try self.editor.writeAll(ESC_COLOR_INVERT);
+            try self.editor.writeAll(Esc.COLOR_INVERT);
             return;
           }
         }
@@ -943,16 +995,16 @@ pub const Editor = struct {
           try self.editor.writeFmt("\x1b[38;5;{d}m", .{fg});
         }
         if (color_code.deco.is_bold) {
-          try self.editor.writeAll(ESC_FG_BOLD);
+          try self.editor.writeAll(Esc.FG_BOLD);
         }
         if (color_code.deco.is_italic) {
-          try self.editor.writeAll(ESC_FG_ITALIC);
+          try self.editor.writeAll(Esc.FG_ITALIC);
         }
         if (color_code.deco.is_underline) {
-          try self.editor.writeAll(ESC_FG_UNDERLINE);
+          try self.editor.writeAll(Esc.FG_UNDERLINE);
         }
       } else {
-        try self.editor.writeAll(ESC_COLOR_DEFAULT);
+        try self.editor.writeAll(Esc.COLOR_DEFAULT);
       }
     }
     
@@ -1015,21 +1067,21 @@ pub const Editor = struct {
         else
           try std.fmt.bufPrint(&lineno, "{d}", .{line_no});
         for(0..(self.text_handler.line_digits - lineno_slice.len)) |_| {
-          try self.outw.writeByte(' ');
+          try self.writeByte(' ');
         }
         if (
           (comptime build_config.dbg_show_multibyte_line) and
           self.text_handler.lineinfo.checkIsMultibyte(@intCast(i))
         ) {
-          try self.outw.writeAll(ESC_COLOR_INVERT);
-          try self.outw.writeAll(lineno_slice);
-          try self.outw.writeAll(ESC_COLOR_DEFAULT);
+          try self.writeAll(Esc.COLOR_INVERT);
+          try self.writeAll(lineno_slice);
+          try self.writeAll(Esc.COLOR_DEFAULT);
         } else {
-          try self.outw.writeAll(LINENO_COLOR);
-          try self.outw.writeAll(lineno_slice);
-          try self.outw.writeAll(ESC_COLOR_DEFAULT);
+          try self.writeAll(LINENO_COLOR);
+          try self.writeAll(lineno_slice);
+          try self.writeAll(Esc.COLOR_DEFAULT);
         }
-        try self.outw.writeByte(' ');
+        try self.writeByte(' ');
       }
       
       // Column
@@ -1110,7 +1162,7 @@ pub const Editor = struct {
       try printer.setColor(null);
       
       if ((i+1) < text_handler.lineinfo.getLen() and text_handler.lineinfo.isContLine(@intCast(i + 1))) {
-        try self.outw.writeAll(LINEWRAP_SYM);
+        try self.writeAll(LINEWRAP_SYM);
       }
       
       row += 1;
@@ -1130,22 +1182,72 @@ pub const Editor = struct {
   }
   
   fn showUpperLayers(self: *Editor) !void {
-    if (self.unprotected_hideable_msg) |msg| {
+    if (self.unprotected_hideable_msg) |*msg| {
+      const renderable_rows_inner: u32 = msg.calcRenderableRows();
+      const renderable_rows_outer: u32 = renderable_rows_inner + 2;
       var row: u32 = 0;
-      if (self.getTextHeight() >= msg.rows) {
-        row = self.getTextHeight() - msg.rows;
+      var draw_row: u32 = 0;
+      if (self.getTextHeight() >= renderable_rows_outer) {
+        row = self.getTextHeight() - renderable_rows_outer;
       }
+      const start_row = row;
       try self.moveCursor(row, 0);
-      try self.outw.writeAll(ESC_CLEAR_LINE);
-      for (msg.text.slice()) |char| {
-        if (char == '\n') {
-          row += 1;
-          try self.moveCursor(row, 0);
-          try self.outw.writeAll(ESC_CLEAR_LINE);
-        } else {
-          try self.outw.writeByte(char);
+      try self.writeAll(Esc.CLEAR_LINE);
+      
+      // top line
+      try self.writeAll(TextBoxDecorations.BORDER[1]);
+      if (msg.header) |header| {
+        const header_max_width = self.w_width - 2;
+        const header_col = blk: {
+          if (header_max_width > header.len) {
+            break :blk ((header_max_width - header.len) / 2);
+          } else {
+            break :blk 0;
+          }
+        };
+        var i: u32 = 0;
+        while (i < header_max_width) {
+          if (i == header_col) {
+            try self.writeAll(header);
+            i += @intCast(header.len);
+          } else {
+            try self.writeAll(TextBoxDecorations.BORDER[0]);
+            i += 1;
+          }
+        }
+      } else {
+        for (0..self.w_width-2) |_| {
+          try self.writeAll(TextBoxDecorations.BORDER[0]);
         }
       }
+      try self.writeAll(TextBoxDecorations.BORDER[2]);
+      try self.writeAll("\n");
+      
+      // inner
+      row += 1;
+      try self.moveCursor(row, 0);
+      try self.writeAll(Esc.CLEAR_LINE);
+      for (msg.text.slice()[msg.offset..]) |byte| {
+        if (byte == '\n') {
+          row += 1;
+          draw_row += 1;
+          try self.moveCursor(row, 0);
+          try self.writeAll(Esc.CLEAR_LINE);
+          if (draw_row == renderable_rows_inner) {
+            break;
+          }
+        } else {
+          try self.writeByte(byte);
+        }
+      }
+      
+      // bottom line
+      try self.moveCursor(start_row + 1 + renderable_rows_inner, 0);
+      try self.writeAll(TextBoxDecorations.BORDER[3]);
+      for (0..self.w_width-2) |_| {
+        try self.writeAll(TextBoxDecorations.BORDER[0]);
+      }
+      try self.writeAll(TextBoxDecorations.BORDER[4]);
     }
   }
   
@@ -1173,7 +1275,7 @@ pub const Editor = struct {
     inline for(&TERM_EXT) |*term_ext| {
       if (@field(self.conf, term_ext.conf)) {
         inline for (term_ext.ansi) |ansi| {
-          try self.outw.writeAll("\x1b[?" ++ ansi ++ "h");
+          try self.writeAll("\x1b[?" ++ ansi ++ "h");
         }
         @field(self, term_ext.flag) = true;
       } else {
@@ -1185,7 +1287,7 @@ pub const Editor = struct {
     inline for(&TERM_EXT) |*term_ext| {
       if (@field(self, term_ext.flag)) {
         inline for (term_ext.ansi) |ansi| {
-          try self.outw.writeAll("\x1b[?" ++ ansi ++ "l");
+          try self.writeAll("\x1b[?" ++ ansi ++ "l");
         }
       }
     }
@@ -1194,7 +1296,7 @@ pub const Editor = struct {
   // terminal setup & restore
   
   pub fn resetTerminal(self: *Editor) !void {
-    try self.outw.writeAll("\x1b" ++ "c");
+    try self.writeAll("\x1b" ++ "c");
   }
   
   pub fn setupTerminal(self: *Editor) !void {

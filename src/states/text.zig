@@ -241,16 +241,16 @@ pub fn handleOutput(self: *editor.Editor) !void {
 pub fn renderStatus(self: *editor.Editor) !void {
   try self.moveCursor(self.getTextHeight(), 0);
   const text_handler: *const text.TextHandler = &self.text_handler;
-  try self.writeAll(editor.Editor.ESC_CLEAR_LINE);
+  try self.writeAll(editor.Esc.CLEAR_LINE);
   if (text_handler.buffer_changed) {
     try self.writeAll("[*] ");
   } else {
     try self.writeAll("[ ] ");
   }
   if (text_handler.file_path.items.len > 0) {
-    try self.writeAll(editor.Editor.ESC_FG_EMPHASIZE);
+    try self.writeAll(editor.Esc.FG_EMPHASIZE);
     try self.writeAll(text_handler.file_path.items);
-    try self.writeAll(editor.Editor.ESC_COLOR_DEFAULT);
+    try self.writeAll(editor.Esc.COLOR_DEFAULT);
   }
   var status: [32]u8 = undefined;
   const status_slice = try std.fmt.bufPrint(

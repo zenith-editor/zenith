@@ -210,7 +210,7 @@ fn runFileOpener(
         if (amt == 0) {
           break;
         }
-        try self.outw.writeAll(buf[0..amt]);
+        try self.writeAll(buf[0..amt]);
         if (!is_termios_setup) {
           // termios
           const c_termios = try std.posix.tcgetattr(pty_res.master.handle);

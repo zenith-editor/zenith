@@ -26,7 +26,7 @@ pub const Section = struct {
   
   fn genHelp(comptime self: *const Section) HideableMessage {
     comptime {
-      const text = self.name ++ "\n" ++ Section.genHelpTail(self.list);
+      const text = Section.genHelpTail(self.list);
       var rows: u32 = 1;
       for (text) |char| {
         if (char == '\n') {
@@ -34,6 +34,7 @@ pub const Section = struct {
         }
       }
       return .{
+        .header = self.name,
         .text = .{ .static = text, },
         .rows = rows,
       };
@@ -67,14 +68,14 @@ pub const Shortcut = struct {
 pub const STATE_TEXT = Section {
   .name = "text mode",
   .list = &[_]Shortcut{
-    .{ .key='h', .ctrl=true, .id="help", .desc="help" },
+    .{ .key='h', .ctrl=true, .id="help", .desc="help (or next page)" },
     .{ .key='q', .ctrl=true, .id="quit", .desc="quit" },
     .{ .key='s', .ctrl=true, .id="save", .desc="save" },
     .{ .key='o', .ctrl=true, .id="open", .desc="open (cmd)" },
     .{ .key='g', .ctrl=true, .id="goto", .desc="go to line (cmd)" },
     .{ .key='a', .ctrl=true, .id="all", .desc="select all" },
     .{ .key='l', .ctrl=true, .id="line", .desc="mark line" },
-    .{ .key='b', .ctrl=true, .id="block", .desc="block mode (cmd)" },
+    .{ .key='b', .ctrl=true, .id="block", .desc="block mode" },
     .{ .key='d', .ctrl=true, .id="dup", .desc="duplicate line" },
     .{ .key='k', .ctrl=true, .id="delline", .desc="delete line" },
     .{ .key='w', .ctrl=true, .id="delword", .desc="delete word" },
@@ -87,7 +88,7 @@ pub const STATE_TEXT = Section {
 pub const STATE_TEXT_HELP = STATE_TEXT.genHelp();
 
 pub const STATE_MARK = Section {
-  .name = "mark mode",
+  .name = "Mark mode",
   .list = &[_]Shortcut{
     .{ .key='h', .ctrl=true, .id="help", .desc="help" },
     .{ .key='c', .ctrl=true, .id="copy", .desc="copy" },
@@ -101,7 +102,7 @@ pub const STATE_MARK = Section {
 pub const STATE_MARK_HELP = STATE_MARK.genHelp();
 
 pub const CMD_FIND = Section {
-  .name = "find",
+  .name = "Find",
   .list = &[_]Shortcut{
     .{ .key='h', .ctrl=true, .id="help", .desc="help" },
     .{ .key='b', .ctrl=true, .id="block", .desc="send to block mode (cmd)" },
@@ -114,3 +115,13 @@ pub const CMD_FIND = Section {
   },
 };
 pub const CMD_FIND_HELP = CMD_FIND.genHelp();
+
+pub const CMD_GOTO_LINE = Section {
+  .name = "Go to line",
+  .list = &[_]Shortcut{
+    .{ .key='h', .ctrl=true, .id="help", .desc="help" },
+    .{ .key='g', .ctrl=false, .id="first", .desc="go to first line" },
+    .{ .key='G', .ctrl=false, .id="last", .desc="go to last line" },
+  },
+};
+pub const CMD_GOTO_LINE_HELP = CMD_GOTO_LINE.genHelp();

@@ -1249,9 +1249,8 @@ pub const TextHandler = struct {
       if (self.cursor.gfx_col == 0 or delete_first_col_in_cont) {
         self.cursor.row -= 1;
         self.goTail(E);
-      } else {
-        self.goLeft(E);
       }
+      self.goLeft(E);
     }
     
     // Perform deletion
