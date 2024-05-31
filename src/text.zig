@@ -92,6 +92,8 @@ pub const TextHandler = struct {
   pub const Markers = struct {
     /// Logical position of starting marker
     start: u32,
+    /// Logical position of starting marker when user first starts marking
+    orig_start: u32,
     /// Logical position of ending marker
     end: u32,
     /// Cursor at starting marker
@@ -197,13 +199,16 @@ pub const TextHandler = struct {
     if (flush_buffer) {
       self.clearBuffersForFile(E.allocr);
       
-      var new_buffer = str.String.init(BufferAllocator);
-      errdefer new_buffer.deinit();
-      const new_buffer_slice = try new_buffer.addManyAsSlice(size);
-      _ = try self.file.?.readAll(new_buffer_slice);
-      if (!std.unicode.utf8ValidateSlice(new_buffer.items)) {
-        return error.InvalidUtf8;
-      }
+      const new_buffer = blk: {
+        var ret_buffer = str.String.init(BufferAllocator);
+        errdefer ret_buffer.deinit();
+        const new_buffer_slice = try ret_buffer.addManyAsSlice(size);
+        _ = try self.file.?.readAll(new_buffer_slice);
+        if (!std.unicode.utf8ValidateSlice(ret_buffer.items)) {
+          return error.InvalidUtf8;
+        }
+        break :blk ret_buffer;
+      };
       
       self.readLines(E, new_buffer) catch |err| {
         self.clearBuffersForFile(E.allocr);
@@ -220,7 +225,7 @@ pub const TextHandler = struct {
     self.scroll = .{};
     self.markers = null;
     self.buffer.clearAndFree();
-    self.lineinfo.clear();
+    self.lineinfo.reset();
     self.head_end = 0;
     self.tail_start = 0;
     self.gap.shrinkRetainingCapacity(0);
@@ -251,12 +256,11 @@ pub const TextHandler = struct {
     OutOfMemory,
   };
   
-  /// Read lines from new_buffer
+  /// Read lines from new_buffer. Takes ownership of the new_buffer
   fn readLines(self: *TextHandler, E: *Editor, new_buffer: str.String) ReadLineError!void {
     self.buffer = new_buffer;
     
-    // first line
-    try self.lineinfo.append(0);
+    // first line already added
     
     // tail lines
     var is_mb = false;
@@ -1249,8 +1253,12 @@ pub const TextHandler = struct {
       if (self.cursor.gfx_col == 0 or delete_first_col_in_cont) {
         self.cursor.row -= 1;
         self.goTail(E);
+        if (delete_first_col_in_cont) {
+          self.goLeft(E);
+        }
+      } else {
+        self.goLeft(E);
       }
-      self.goLeft(E);
     }
     
     // Perform deletion
@@ -1299,7 +1307,13 @@ pub const TextHandler = struct {
       delidx, // changed_region_end
       @intCast(seqlen), // shift
       false, // is_insert
-      cur_at_deleted_char.row // line_start
+      blk: { // line_start
+        if (!delete_next_char and self.cursor.gfx_col == 0 and self.cursor.row > 0) {
+          break :blk cur_at_deleted_char.row - 1;
+        } else {
+          break :blk cur_at_deleted_char.row;
+        }
+      }
     );
     
     // Update line offset info
@@ -1619,7 +1633,7 @@ pub const TextHandler = struct {
       try self.highlightFrom(
         E,
         replace_start, // changed_region_start_in
-        replace_end, // changed_region_end
+        @intCast(replace_start + new_buffer.len), // changed_region_end
         @intCast(old_buffer_len - new_buffer.len), // shift
         false,
         replace_line_start
@@ -1629,7 +1643,7 @@ pub const TextHandler = struct {
       try self.highlightFrom(
         E,
         replace_start, // changed_region_start_in
-        replace_end, // changed_region_end
+        @intCast(replace_start + new_buffer.len), // changed_region_end
         @intCast(new_buffer.len - old_buffer_len), // shift
         true,
         replace_line_start
@@ -1855,6 +1869,7 @@ pub const TextHandler = struct {
       .start = markidx,
       .end = markidx,
       .start_cur = self.cursor,
+      .orig_start = markidx,
     };
     E.needs_redraw = true;
     E.needs_update_cursor = true;
@@ -1863,13 +1878,29 @@ pub const TextHandler = struct {
   pub fn markEnd(self: *TextHandler, E: *Editor) void {
     const markidx: u32 = self.calcOffsetFromCursor();
     if (self.markers) |*markers| {
-      if (markidx > markers.start) {
-        markers.end = markidx;
+      const orig_start: u32 = markers.orig_start;
+      if (markidx > markers.orig_start) {
+        if (markers.start < orig_start) {
+          // flip the selection direction
+          const orig_row = self.lineinfo.findMaxLineBeforeOffset(orig_start, 0);
+          const orig_cur: TextPos = .{
+            .row = orig_row,
+            .col = orig_start - self.lineinfo.getOffset(orig_row),
+          };
+          markers.* = .{
+            .start = orig_start,
+            .orig_start = orig_start,
+            .end = markidx,
+            .start_cur = orig_cur,
+          };
+        } else {
+          markers.end = markidx;
+        }
       } else {
-        const end: u32 = markers.end;
         markers.* = .{
           .start = markidx,
-          .end = end,
+          .orig_start = orig_start,
+          .end = orig_start,
           .start_cur = self.cursor,
         };
       }
@@ -1882,6 +1913,7 @@ pub const TextHandler = struct {
   pub fn markAll(self: *TextHandler, E: *Editor) void {
     self.markers = .{
       .start = 0,
+      .orig_start = 0,
       .end = self.getLogicalLen(),
       .start_cur = .{
         .row = 0,
@@ -1893,8 +1925,10 @@ pub const TextHandler = struct {
   }
   
   pub fn markLine(self: *TextHandler, E: *Editor) void {
+    const mark_start = self.lineinfo.getOffset(self.cursor.row);
     self.markers = .{
-      .start = self.lineinfo.getOffset(self.cursor.row),
+      .start = mark_start,
+      .orig_start = mark_start,
       .end = self.getRowOffsetEnd(self.cursor.row),
       .start_cur = .{
         .row = self.cursor.row,

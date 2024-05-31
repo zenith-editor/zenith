@@ -70,8 +70,19 @@ pub const LineInfoList = struct {
     return @intCast(self.line_data.items.len);
   }
   
-  pub fn clear(self: *LineInfoList) void {
-    self.line_data.clearRetainingCapacity();
+  pub fn reset(self: *LineInfoList) void {
+    const len = self.line_data.items.len;
+    self.line_data.replaceRangeAssumeCapacity(
+      0,
+      len,
+      &[_]LineData{
+        .{
+          .offset = 0,
+          .line_no = 1,
+          .flags = .{},
+        },
+      },
+    );
   }
   
   pub fn remove(self: *LineInfoList, idx: u32) void {

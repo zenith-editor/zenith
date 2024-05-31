@@ -38,7 +38,7 @@ fn genQualifier(
       return .{ .expr_shift = 0, };
     },
     '*' => {
-      // (L0)    L0: split L1, L2
+      // (L0)    L0: split L2, L1
       // (L0+1)  L1: <char>
       // len+0 accounts for new L0
       // (len+1) jmp L0
@@ -77,7 +77,7 @@ fn genQualifier(
       return .{ .expr_shift = 1, };
     },
     '?' => {
-      // (L0)    L0: split L1, L2
+      // (L0)    L0: split L2, L1
       // (L0+1)  L1: <char>
       // len+0 accounts for new L0
       // (len+1) L2: ...
@@ -87,7 +87,7 @@ fn genQualifier(
         instr.incrPc(1, L0);
       }
       try expr.instrs.insert(allocr, L0, .{
-        .split = .{ .a = L1, .b = L2, },
+        .split = .{ .a = L2, .b = L1, },
       });
       return .{ .expr_shift = 1, };
     },

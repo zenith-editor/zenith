@@ -161,99 +161,16 @@ const Thread = struct {
   str_idx_repeats: u32 = 0,
 };
 
-const ThreadStack = struct {
-  const HEAP_THRESHOLD = 16;
-  
-  const Internal = union(enum) {
-    stackalloc: std.BoundedArray(Thread, HEAP_THRESHOLD),
-    heapalloc: std.ArrayListUnmanaged(Thread),
-  };
-  
-  internal: Internal = .{
-    .stackalloc = .{},
-  },
-  
-  fn deinit(self: *ThreadStack, allocr: std.mem.Allocator) void {
-    switch (self.internal) {
-      .heapalloc => |*heapalloc| { heapalloc.deinit(allocr); },
-      else => {},
-    }
-  }
-  
-  fn append(
-    self: *ThreadStack,
-    allocr: std.mem.Allocator,
-    str_idx: usize,
-    pc: usize,
-  ) error{ OutOfMemory }!void {
-    const thread: Thread = .{
-      .str_idx = str_idx,
-      .pc = pc,
-    };
-    var opt_new_heapalloc: ?std.ArrayListUnmanaged(Thread) = null;
-    switch (self.internal) {
-      .stackalloc => |*stackalloc| {
-        if (stackalloc.append(thread)) {
-          return;
-        } else |_| {
-          var heapalloc = try std.ArrayListUnmanaged(Thread)
-            .initCapacity(allocr, HEAP_THRESHOLD+1);
-          try heapalloc.appendSlice(allocr, stackalloc.constSlice());
-          opt_new_heapalloc = heapalloc;
-        }
-      },
-      else => {},
-    }
-    if (opt_new_heapalloc) |new_heapalloc| {
-      self.internal = .{ .heapalloc = new_heapalloc, };
-    }
-    try self.internal.heapalloc.append(allocr, thread);
-  }
-  
-  fn len(self: *ThreadStack) usize {
-    switch (self.internal) {
-      .stackalloc => |*stackalloc| { return stackalloc.len; },
-      .heapalloc => |*heapalloc| { return heapalloc.items.len; },
-    }
-  }
-  
-  fn top(self: *ThreadStack) ?*Thread {
-    switch (self.internal) {
-      .stackalloc => |*stackalloc| {
-        if (stackalloc.len > 0) {
-          return &stackalloc.buffer[stackalloc.len - 1];
-        }
-      },
-      .heapalloc => |*heapalloc| {
-        if (heapalloc.items.len > 0) {
-          return &heapalloc.items[heapalloc.items.len - 1];
-        }
-      },
-    }
-    return null;
-  }
-  
-  fn pop(self: *ThreadStack) Thread {
-    switch (self.internal) {
-      .stackalloc => |*stackalloc| {
-        return stackalloc.pop();
-      },
-      .heapalloc => |*heapalloc| {
-        return heapalloc.pop();
-      },
-    }
-  }
-};
-  
+const ThreadStack = std.ArrayList(Thread);
+
 const VM = struct {
   view: SrcView,
   instrs: []const Instr,
   flags: Flags,
   options: *const MatchOptions,
   arena: std.heap.ArenaAllocator,
-  thread_stack: ThreadStack = .{},
   fully_matched: bool = false,
-
+  
   fn deinit(self: *VM) void {
     self.arena.deinit();
   }
@@ -262,12 +179,15 @@ const VM = struct {
     return self.arena.allocator();
   }
   
-  fn nextInstr(self: *VM, thread: *const Thread)
-    error { InvalidUtf8, OutOfMemory }!void {
+  fn nextInstr(
+    self: *VM,
+    thread: *const Thread,
+    thread_stack: *ThreadStack
+  ) error { InvalidUtf8, OutOfMemory }!void {
     if (comptime build_config.dbg_patterns_vm) {
       std.debug.print("{s}\n", .{self.haystack[thread.str_idx..]});
       std.debug.print(">>> {} {}\n", .{thread.pc,self.instrs[thread.pc]});
-      std.debug.print("{any}\n", .{self.thread_stack.items});
+      std.debug.print("{any}\n", .{thread_stack.items});
     }
     switch (self.instrs[thread.pc]) {
       .abort => {
@@ -326,7 +246,7 @@ const VM = struct {
           },
           else => unreachable,
         }
-        try self.addThread(thread.str_idx + bytes.len, thread.pc + 1);
+        try VM.addThread(thread_stack, thread.str_idx + bytes.len, thread.pc + 1);
         return;
       },
       .string => {
@@ -334,50 +254,57 @@ const VM = struct {
         @panic("should be handled in exec");
       },
       .jmp => |target| {
-        try self.addThread(thread.str_idx, target);
+        try VM.addThread(thread_stack, thread.str_idx, target);
         return;
       },
       .split => |split| {
-        try self.addThread(thread.str_idx, split.a);
-        try self.addThread(thread.str_idx, split.b);
+        try VM.addThread(thread_stack, thread.str_idx, split.a);
+        try VM.addThread(thread_stack, thread.str_idx, split.b);
         return;
       },
       .group_start => |group_id| {
         if (self.options.group_out) |group_out| {
           group_out[group_id].start = thread.str_idx;
         }
-        try self.addThread(thread.str_idx, thread.pc + 1);
+        try VM.addThread(thread_stack, thread.str_idx, thread.pc + 1);
         return;
       },
       .group_end => |group_id| {
         if (self.options.group_out) |group_out| {
           group_out[group_id].end = thread.str_idx;
         }
-        try self.addThread(thread.str_idx, thread.pc + 1);
+        try VM.addThread(thread_stack, thread.str_idx, thread.pc + 1);
         return;
       },
       .anchor_start => {
         if (thread.str_idx == self.options.anchor_start_offset) {
-          try self.addThread(thread.str_idx, thread.pc + 1);
+          try VM.addThread(thread_stack, thread.str_idx, thread.pc + 1);
           return;
         }
       },
       .anchor_end => {
         const bytes = try self.view.codepointSliceAt(thread.str_idx);
         if (bytes == null) {
-          try self.addThread(thread.str_idx, thread.pc + 1);
+          try VM.addThread(thread_stack, thread.str_idx, thread.pc + 1);
           return;
         }
         if (self.flags.is_multiline and bytes.?[0] == '\n') {
-          try self.addThread(thread.str_idx, thread.pc + 1);
+          try VM.addThread(thread_stack, thread.str_idx, thread.pc + 1);
           return;
         }
       },
     }
   }
   
-  fn addThread(self: *VM, str_idx: usize, pc: usize) !void {
-    if (self.thread_stack.top()) |top| {
+  fn topThread(thread_stack: *ThreadStack) ?*Thread {
+    if (thread_stack.items.len > 0) {
+      return &thread_stack.items[thread_stack.items.len - 1];
+    }
+    return null;
+  }
+  
+  fn addThread(thread_stack: *ThreadStack, str_idx: usize, pc: usize) !void {
+    if (VM.topThread(thread_stack)) |top| {
       // run length encode the thread stack so that less memory is used
       // when greedy matching repetitive groups of characters
       if (top.pc == pc) {
@@ -394,25 +321,31 @@ const VM = struct {
         }
       }
     }
-    try self.thread_stack.append(self.allocr(), str_idx, pc);
+    try thread_stack.append(.{
+      .str_idx = str_idx,
+      .pc = pc,
+    });
   }
   
-  fn popThread(self: *VM) !Thread {
-    var top: *Thread = self.thread_stack.top().?;
-    if (top.str_idx_delta == 0) {
-      return self.thread_stack.pop();
+  fn popThread(thread_stack: *ThreadStack) !Thread {
+    if (VM.topThread(thread_stack).?.str_idx_delta == 0) {
+      return thread_stack.pop();
     }
+    const top: *Thread = VM.topThread(thread_stack).?;
     var ret_thread: Thread = top.*;
     ret_thread.str_idx = top.str_idx + top.str_idx_delta * top.str_idx_repeats;
     if (top.str_idx_repeats > 0) {
       top.str_idx_repeats -= 1;
     } else {
-      _ = self.thread_stack.pop();
+      _ = thread_stack.pop();
     }
     return ret_thread;
   }
   
   fn exec(self: *VM, init_offset: usize) !MatchResult {
+    var thread_stack_allocr = std.heap.stackFallback(512, self.arena.allocator());
+    var thread_stack = ThreadStack.init(thread_stack_allocr.get());
+    
     if (self.instrs[0].getString()) |string| {
       var iter = std.unicode.Utf8View.initUnchecked(string).iterator();
       var str_idx: usize = init_offset;
@@ -425,14 +358,21 @@ const VM = struct {
         }
         return .{ .pos = str_idx, .fully_matched = false };
       }
-      try self.thread_stack.append(self.allocr(), str_idx, 1);
+      try thread_stack.append(.{
+        .str_idx = str_idx,
+        .pc = 1,
+      });
     } else {
-      try self.thread_stack.append(self.allocr(), init_offset, 0);
+      try thread_stack.append(.{
+        .str_idx = init_offset,
+        .pc = 0,
+      });
     }
+    
     while (true) {
-      const thread = try self.popThread();
-      try self.nextInstr(&thread);
-      if (self.thread_stack.len() == 0 or self.fully_matched) {
+      const thread: Thread = try VM.popThread(&thread_stack);
+      try self.nextInstr(&thread, &thread_stack);
+      if (thread_stack.items.len == 0 or self.fully_matched) {
         return .{
           .pos = thread.str_idx,
           .fully_matched = self.fully_matched,
@@ -447,7 +387,6 @@ const VM = struct {
   fn execAndReset(self: *VM, init_offset: usize) !MatchResult {
     defer {
       _ = self.arena.reset(.retain_capacity);
-      self.thread_stack = .{};
       self.fully_matched = false;
     }
     return self.exec(init_offset);

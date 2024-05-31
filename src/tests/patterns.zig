@@ -142,7 +142,7 @@ test "group nested optional" {
   defer expr.deinit(allocr);
   try std.testing.expectEqual(3, (try expr.checkMatch("abc", &.{})).pos);
   try std.testing.expectEqual(5, (try expr.checkMatch("axybc", &.{})).pos);
-  try std.testing.expectEqual(2, (try expr.checkMatch("axbc", &.{})).pos);
+  try std.testing.expectEqual(0, (try expr.checkMatch("axbc", &.{})).pos);
   try std.testing.expectEqual(1, (try expr.checkMatch("c", &.{})).pos);
   try std.testing.expectEqual(0, (try expr.checkMatch("b", &.{})).pos);
 }
@@ -261,6 +261,23 @@ test "anchor start" {
   try std.testing.expectEqual(1, (try expr.checkMatch("aasdf", &.{})).pos);
 }
 
+test "alternate anchor start" {
+  var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+  const allocr = gpa.allocator();
+  var expr = try Expr.create(allocr, "(^|a)b", &.{}).asErr();
+  defer expr.deinit(allocr);
+  {
+    const match = try expr.checkMatch("b", &.{});
+    try std.testing.expectEqual(1, match.pos);
+    try std.testing.expectEqual(true, match.fully_matched);
+  }
+  {
+    const match = try expr.checkMatch("ab", &.{});
+    try std.testing.expectEqual(2, match.pos);
+    try std.testing.expectEqual(true, match.fully_matched);
+  }
+}
+
 test "anchor end" {
   var gpa = std.heap.GeneralPurposeAllocator(.{}){};
   const allocr = gpa.allocator();
@@ -268,6 +285,28 @@ test "anchor end" {
   defer expr.deinit(allocr);
   try std.testing.expectEqual(true, (try expr.checkMatch("asdf", &.{})).fully_matched);
   try std.testing.expectEqual(false, (try expr.checkMatch("asdfx", &.{})).fully_matched);
+}
+
+test "alternate anchor end" {
+  var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+  const allocr = gpa.allocator();
+  var expr = try Expr.create(allocr, "a(b|$)", &.{}).asErr();
+  defer expr.deinit(allocr);
+  {
+    const match = try expr.checkMatch("az", &.{});
+    try std.testing.expectEqual(1, match.pos);
+    try std.testing.expectEqual(false, match.fully_matched);
+  }
+  {
+    const match = try expr.checkMatch("ab", &.{});
+    try std.testing.expectEqual(2, match.pos);
+    try std.testing.expectEqual(true, match.fully_matched);
+  }
+  {
+    const match = try expr.checkMatch("a", &.{});
+    try std.testing.expectEqual(1, match.pos);
+    try std.testing.expectEqual(true, match.fully_matched);
+  }
 }
 
 test "integrate: string" {
@@ -286,6 +325,21 @@ test "integrate: string" {
   try std.testing.expectEqual(4, (try expr.checkMatch(\\"ab"
                                                       , &.{})).pos);
   try std.testing.expectEqual(6, (try expr.checkMatch(\\"\"\""
+                                                      , &.{})).pos);
+}
+
+test "integrate: float" {
+  var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+  const allocr = gpa.allocator();
+  var expr = try Expr.create(
+    allocr,
+    \\[0-9]+(\.[0-9]*)?
+    , &.{}
+  ).asErr();
+  defer expr.deinit(allocr);
+  try std.testing.expectEqual(5, (try expr.checkMatch(\\0.123abc
+                                                      , &.{})).pos);
+  try std.testing.expectEqual(3, (try expr.checkMatch(\\123abc
                                                       , &.{})).pos);
 }
 

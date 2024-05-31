@@ -73,6 +73,7 @@ fn findForwards(self: *editor.Editor, cmd_data: *editor.CommandData) !void {
     try text_handler.gotoPos(self, @intCast(pos));
     self.text_handler.markers = .{
       .start = @intCast(pos),
+      .orig_start = @intCast(pos),
       .end = @intCast(opt_end.?),
       .start_cur = self.text_handler.cursor,
     };
@@ -130,6 +131,7 @@ fn findBackwards(self: *editor.Editor, cmd_data: *editor.CommandData) !void {
     try text_handler.gotoPos(self, @intCast(pos));
     self.text_handler.markers = .{
       .start = @intCast(pos),
+      .orig_start = @intCast(pos),
       .end = @intCast(opt_end.?),
       .start_cur = self.text_handler.cursor,
     };
