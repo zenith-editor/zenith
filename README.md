@@ -6,6 +6,7 @@
  
    * ... that is easy to learn with familiar keyboard shortcuts
    * ... that is lightweight and requires no external dependencies
+   * ... that has most of the features in a regular text editor: syntax highlighting, word wrapping, pattern matching,...
    * ... that is written in Zig
  
  * **What it is not:** an IDE
@@ -15,6 +16,9 @@
  * An xterm-compatible terminal emulator
 
 ## Build
+
+<details>
+<summary>*Building from source*</summary>
 
 **Supported Zig version:** 0.12.0.
 
@@ -36,6 +40,10 @@ To install into a directory (i.e. `/opt`):
 make install PREFIX="/opt"
 ```
 
+</details>
+
+You can also obtain a release tarball.
+
 ## Usage
 
 Zenith is a modal editor. It supports the following modes:
@@ -50,10 +58,12 @@ Navigation is done with the arrow keys, page up/down, home/end keys. Editing wor
 
 For more help, press `^h` (ctrl-h) to show keyboard shortcuts. Press `^h` multiple times to scroll through the help pages.
 
+To enable syntax highlighting, copy the config directory to the appropriate location. See [documentation](docs/config.md) for details.
+
 See also:
   
-  * [**Config**](docs/config.md)
-  * [**Patterns**](docs/patterns.md)
+  * [Config](docs/config.md)
+  * [Patterns](docs/patterns.md)
 
 ## License
 
