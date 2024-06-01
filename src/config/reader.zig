@@ -234,14 +234,11 @@ const OpenWithoutParsingResult = struct {
 };
 
 fn openWithoutParsing(self: *Reader, allocr: std.mem.Allocator) ConfigError.Type!OpenWithoutParsingResult {
-  var config_dir: ?std.fs.Dir = try Reader.getConfigDir();
-  errdefer if (config_dir != null) config_dir.?.close();
+  if (self.config_dir == null) {
+    self.config_dir = try Reader.getConfigDir();
+  }
   
-  const config_filepath: []u8 =
-    try Reader.getConfigFile(allocr, config_dir.?, CONFIG_FILENAME);
-  
-  self.config_dir = config_dir;
-  config_dir = null;
+  const config_filepath: []u8 = try Reader.getConfigFile(allocr, self.config_dir.?, CONFIG_FILENAME);
   self.config_filepath = config_filepath;
   
   const file = try std.fs.openFileAbsolute(self.config_filepath.?, .{.mode = .read_only});

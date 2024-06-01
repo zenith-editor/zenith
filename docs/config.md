@@ -3,8 +3,10 @@
 Zenith looks up the main `zenith.conf` config file in the following directories:
 
   * **Linux, BSD:**
-    1. `$XDG_CONFIG_HOME/zenith/zenith.conf`
-    2. `$HOME/.config/zenith/zenith.conf`
+    1. `$XDG_CONFIG_HOME/zenith`
+    2. `$HOME/.config/zenith`
+
+An example configuration is provided in the *[sample-config](./sample-config)* directory.
 
 Zenith uses a custom dialect of [TOML](https://toml.io/en/v1.0.0) to store configuration data. This dialect only supports pairs of keys and values, table headers in square brackets, and array headers in double square brackets. Only strings, integers (signed 64-bit), booleans and arrays are supported. In addition, the following extensions are supported:
 
@@ -17,25 +19,7 @@ key=\\a
     \\b
 ```
 
-Paths are specified relative to the directory containing the `zenith.conf` file.
-
-## Example config
-
-```
-tab-size = 2
-use-tabs = false
-use-native-clipboard = true
-show-line-numbers = true
-wrap-text = true
-
-[[highlight.markdown]]
-path = "highlight/md.conf"
-extension = ".md"
-
-[[highlight.zig]]
-path = "highlight/zig.conf"
-extension = ".zig"
-```
+Paths are specified relative to the parent directory containing the `zenith.conf` file.
 
 ## Config keys
 
@@ -43,7 +27,7 @@ extension = ".zig"
 
   * `tab-size` (since *0.3.0*):
   
-  (int) Sets the number of space characters inserted when pressing the tab key or adjusting the indentation level of a text block (in mark mode). The tab size is the count of these space characters (ASCII code 32). Ignored if `use-tabs` is set to true.
+  (int) Sets the number of space characters inserted when pressing the tab key or adjusting the indentation level of a text block (in mark mode). The tab size is the number of space characters (ASCII code 32) to be inserted. Ignored if `use-tabs` is set to true.
 
   * `use-tabs` (since *0.3.0*):
   
@@ -63,7 +47,7 @@ extension = ".zig"
   
   * `undo-memory-limit` (since *0.3.0*):
   
-  (int) Specifies the maximum amount of memory (in bytes) allocated to the undo heap for managing text actions. When editing text, actions are recorded by allocating memory into the undo heap. If the editor attempts to record an action that causes the undo heap to exceed the limit specified by this configuration, the editor will display an error message. Default is *4 GiB*.
+  (int) Specifies the maximum amount of memory (in bytes) allocated to the undo heap for managing text actions. When editing text, actions are recorded by allocating memory into the undo heap. If the editor attempts to record an action that causes the undo heap to exceed the limit specified by this configuration, the editor will display an error message. Default is *4 MiB*.
 
   * `escape-time` (since *0.3.0*):
   
@@ -165,43 +149,4 @@ In this example, a "string" token type is defined, which matches any text with t
 
 ## Example
 
-Here is an example of a highlighting config file for Zig:
-
-```
-[[string]]
-pattern=\\".-"
-color="blue"
-
-[[char]]
-pattern=\\'(.|\\.)'
-color="blue"
-
-[[keyword]]
-color="cyan"
-bold=true
-
-[[value]]
-color="purple"
-
-[[number]]
-pattern=\\[0-9]+(\.[0-9]*)?
-color="purple"
-
-[[primitive-type]]
-color="blue"
-
-[[identifier]]
-pattern=\\[a-zA-Z_][a-zA-Z0-9_]*
-color="dark-yellow"
-promote:keyword=["addrspace","align","allowzero","and","anyframe","anytype","asm","async","await","break","callconv","catch","comptime","const","continue","defer","else","enum","errdefer","error","export","extern","fn","for","if","inline","linksection","noalias","noinline","nosuspend","opaque","or","orelse","packed","pub","resume","return","struct","suspend","switch","test","threadlocal","try","union","unreachable","usingnamespace","var","volatile","while"]
-promote:primitive-type=["i8","u8","i16","u16","i32","u32","i64","u64","i128","u128","isize","usize","c_char","c_short","c_ushort","c_int","c_uint","c_long","c_ulong","c_longlong","c_ulonglong","c_longdouble","f16","f32","f64","f80","f128","bool","anyopaque","void","noreturn","type","anyerror","comptime_int","comptime_float"]
-promote:value=["true","false","null","undefined"]
-
-[[builtin-func]]
-pattern=\\@[a-zA-Z_][a-zA-Z0-9_]*
-color="cyan"
-
-[[comment]]
-pattern=\\//.*
-color="dark-gray"
-```
+See *[sample-config/highlight](./sample-config/highlight)* for example highlight config files.

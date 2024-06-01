@@ -30,6 +30,12 @@ For release:
 make release
 ```
 
+To install into a directory (i.e. `/opt`):
+
+```
+make install PREFIX="/opt"
+```
+
 ## Usage
 
 Zenith is a modal editor. It supports the following modes:
@@ -42,7 +48,12 @@ You can switch from any other mode back to text mode by pressing escape.
 
 Navigation is done with the arrow keys, page up/down, home/end keys. Editing works as you would expect from a modern non-terminal based word processor.
 
-For more help, press `^h` (ctrl-h) to show keyboard shortcuts.
+For more help, press `^h` (ctrl-h) to show keyboard shortcuts. Press `^h` multiple times to scroll through the help pages.
+
+See also:
+  
+  * [**Config**](docs/config.md)
+  * [**Patterns**](docs/patterns.md)
 
 ## License
 

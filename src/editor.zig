@@ -274,12 +274,11 @@ pub const Editor = struct {
       .unprotected_state = State.INIT,
       .unprotected_cmd_data = null,
     };
-    try editor.loadConfig();
     try editor.updateWinSize();
     return editor;
   }
   
-  fn loadConfig(self: *Editor) !void {
+  pub fn loadConfig(self: *Editor) !void {
     var result = self.conf.open(self.allocr);
     
     switch (result) {
@@ -305,13 +304,18 @@ pub const Editor = struct {
                 .{ path, err.pos.?, err.type });
             },
           }
-          try writer.print("Press Enter to continue...\n",.{});
-          _ = self.inr.readByte() catch {};
+          try self.errorPromptBeforeLoaded();
         }
       },
     }
     
     self.text_handler.undo_mgr.setMemoryLimit(self.conf.undo_memory_limit);
+  }
+  
+  pub fn errorPromptBeforeLoaded(self: *const Editor) !void {
+    try self.outw.print("Press Enter to continue...\n",.{});
+    _ = self.inr.readByte() catch {};
+    try self.outw.writeByte('\r');
   }
   
   pub fn getState(self: *const Editor) State {

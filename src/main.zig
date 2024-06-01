@@ -13,13 +13,16 @@ const editor = @import("./editor.zig");
 const ArgAction = enum {
   none,
   exit,
+  err,
 };
 
 const ProgramArgs = struct {
+  args: std.process.ArgIterator,
   program_name: []const u8,
   writer: std.fs.File.Writer,
   
   opt_opened_file: ?[]const u8 = null,
+  opt_config_dir: ?[]const u8 = null,
   
   fn showHelp(self: *ProgramArgs) !ArgAction {
     try self.writer.print(
@@ -28,6 +31,7 @@ const ProgramArgs = struct {
       \\Options:
       \\  -h/--help: Show this help message
       \\  --version: Show version
+      \\  -c/--config [config_dir]: Set configuration directory
       \\
     , .{self.program_name});
     return .exit;
@@ -39,6 +43,17 @@ const ProgramArgs = struct {
       \\
     , .{build_config.version});
     return .exit;
+  }
+  
+  fn setConfigDir(self: *ProgramArgs) !ArgAction {
+    if (self.args.next()) |arg| {
+      self.opt_config_dir = arg;
+      return .none;
+    } else {
+      try self.writer.writeAll("Error: config directory not specified");
+      _ = try self.showHelp();
+      return .err;
+    }
   }
 };
 
@@ -65,18 +80,24 @@ const Arg = struct {
 const ARGS = [_]Arg {
   .{ .o = "-h", .l = "--help", .func = ProgramArgs.showHelp },
   .{ .l = "--version", .func = ProgramArgs.showVersion },
+  .{ .o ="-c", .l = "--config", .func = ProgramArgs.setConfigDir },
 };
 
 pub fn main() !void {
   // arguments
-  var args = std.process.args();
-  var prog_args: ProgramArgs = .{
-    .program_name = args.next() orelse @panic("args.next returned null"),
-    .writer = std.io.getStdOut().writer(),
+  var prog_args: ProgramArgs = blk: {
+    var args = std.process.args();
+    var prog_args_ret: ProgramArgs = .{
+      .args = undefined,
+      .program_name = args.next() orelse @panic("args.next returned null"),
+      .writer = std.io.getStdOut().writer(),
+    };
+    prog_args_ret.args = args;
+    break :blk prog_args_ret;
   };
   {
     var parsing_args = true;
-    parse_arguments: while (args.next()) |arg| {
+    parse_arguments: while (prog_args.args.next()) |arg| {
       if (std.mem.eql(u8, arg, "--")) {
         parsing_args = false;
         continue :parse_arguments;
@@ -87,6 +108,10 @@ pub fn main() !void {
             switch (try pargs.func(&prog_args)) {
               .none => {},
               .exit => { return; },
+              .err => {
+                std.process.exit(1);
+                return;
+              },
             }
             continue :parse_arguments;
           }
@@ -106,6 +131,17 @@ pub fn main() !void {
   const allocr = gpa.allocator();
   
   var E = try editor.Editor.create(allocr);
+  
+  if (prog_args.opt_config_dir) |config_dir| {
+    const cwd = std.fs.cwd();
+    E.conf.config_dir = cwd.openDir(config_dir, .{}) catch |err| blk: {
+      try E.outw.print("Error: failed to open config directory ({})", .{err});
+      try E.errorPromptBeforeLoaded();
+      break :blk null;
+    };
+  }
+  try E.loadConfig();
+  
   errdefer E.restoreTerminal() catch {};
   
   if (prog_args.opt_opened_file) |opened_file| {
