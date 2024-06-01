@@ -11,7 +11,6 @@ const conf = @import("./config.zig");
 const lineinfo = @import("./lineinfo.zig");
 const clipboard = @import("./clipboard.zig");
 const encoding = @import("./encoding.zig");
-const heap = @import("./ds/heap.zig");
 
 const Editor = @import("./editor.zig").Editor;
 const Expr = @import("./patterns.zig").Expr;
@@ -119,7 +118,7 @@ pub const TextHandler = struct {
   tail_start: u32 = 0,
   
   /// Gap buffer, allocated by PageAllocator
-  gap: str.String,
+  gap: str.StringUnmanaged,
   
   /// Line information
   lineinfo: lineinfo.LineInfoList,
@@ -149,7 +148,6 @@ pub const TextHandler = struct {
         // get the range 0..0 to set the length to zero
         .items = (try BufferAllocator.alloc(u8, std.mem.page_size))[0..0],
         .capacity = std.mem.page_size,
-        .allocator = heap.null_allocator,
       },
       .clipboard = str.String.init(BufferAllocator),
     };
