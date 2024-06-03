@@ -12,24 +12,20 @@ const kbd = @import("../kbd.zig");
 const editor = @import("../editor.zig");
 
 fn onUnset(self: *editor.Editor, _: editor.State) void {
-  self.text_handler.markers = null;
+    self.text_handler.markers = null;
 }
 
 fn onInputted(self: *editor.Editor) !void {
-  self.needs_update_cursor = true;
-  const cmd_data: *editor.CommandData = self.getCmdData();
-  try self.text_handler.replaceMarked(self, cmd_data.cmdinp.items);
+    self.needs_update_cursor = true;
+    const cmd_data: *editor.CommandData = self.getCmdData();
+    try self.text_handler.replaceMarked(self, cmd_data.cmdinp.items);
 }
 
 fn onInputtedRepAll(self: *editor.Editor) !void {
-  self.needs_update_cursor = true;
-  const cmd_data: *editor.CommandData = self.getCmdData();
-  const replacements = try self.text_handler.replaceAllMarked(
-    self,
-    cmd_data.args.?.replace_all.needle,
-    cmd_data.cmdinp.items
-  );
-  try cmd_data.replacePromptOverlayFmt(self, PROMPT_REPS_DONE, .{replacements});
+    self.needs_update_cursor = true;
+    const cmd_data: *editor.CommandData = self.getCmdData();
+    const replacements = try self.text_handler.replaceAllMarked(self, cmd_data.args.?.replace_all.needle, cmd_data.cmdinp.items);
+    try cmd_data.replacePromptOverlayFmt(self, PROMPT_REPS_DONE, .{replacements});
 }
 
 pub const PROMPT = "Replace with:";
@@ -37,11 +33,11 @@ pub const PROMPT_ALL = "Replace every instance with:";
 pub const PROMPT_REPS_DONE = "{} reps done";
 
 pub const Fns: editor.CommandData.FnTable = .{
-  .onInputted = Cmd.onInputted,
-  .onUnset = Cmd.onUnset,
+    .onInputted = Cmd.onInputted,
+    .onUnset = Cmd.onUnset,
 };
 
 pub const FnsAll: editor.CommandData.FnTable = .{
-  .onInputted = Cmd.onInputtedRepAll,
-  .onUnset = Cmd.onUnset,
+    .onInputted = Cmd.onInputtedRepAll,
+    .onUnset = Cmd.onUnset,
 };

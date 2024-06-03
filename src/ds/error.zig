@@ -5,17 +5,17 @@
 //
 
 pub fn Error(comptime T: type, comptime E: type) type {
-  return union(enum) {
-    const Self = @This();
-    
-    ok: T,
-    err: E,
-    
-    pub fn isErr(self: *const Self) bool {
-      return switch(self.*) {
-        .err => true,
-        else => false,
-      };
-    }
-  };
+    return union(enum) {
+        const Self = @This();
+
+        ok: T,
+        err: E,
+
+        pub fn isErr(self: *const Self) bool {
+            return switch (self.*) {
+                .err => true,
+                else => false,
+            };
+        }
+    };
 }

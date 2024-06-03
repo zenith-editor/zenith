@@ -9,27 +9,33 @@ pub const StringUnmanaged = std.ArrayListUnmanaged(u8);
 pub const String = std.ArrayList(u8);
 
 pub const MaybeOwnedSlice = union(enum) {
-  owned: []u8,
-  static: []const u8,
-  
-  pub fn isOwned(self: *const MaybeOwnedSlice) bool {
-    return switch(self.*) {
-      .owned => true,
-      .static => false,
-    };
-  }
-  
-  pub fn slice(self: *const MaybeOwnedSlice) []const u8 {
-    switch(self.*) {
-      .owned => |owned| { return owned; },
-      .static => |static| { return static; }
+    owned: []u8,
+    static: []const u8,
+
+    pub fn isOwned(self: *const MaybeOwnedSlice) bool {
+        return switch (self.*) {
+            .owned => true,
+            .static => false,
+        };
     }
-  }
-  
-  pub fn deinit(self: *MaybeOwnedSlice, allocator: std.mem.Allocator) void {
-    switch(self.*) {
-      .owned => |owned| { allocator.free(owned); },
-      else => {},
+
+    pub fn slice(self: *const MaybeOwnedSlice) []const u8 {
+        switch (self.*) {
+            .owned => |owned| {
+                return owned;
+            },
+            .static => |static| {
+                return static;
+            },
+        }
     }
-  }
+
+    pub fn deinit(self: *MaybeOwnedSlice, allocator: std.mem.Allocator) void {
+        switch (self.*) {
+            .owned => |owned| {
+                allocator.free(owned);
+            },
+            else => {},
+        }
+    }
 };
