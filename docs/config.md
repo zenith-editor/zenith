@@ -31,7 +31,11 @@ Paths are specified relative to the parent directory containing the `zenith.conf
 
   * `use-tabs` (since *0.3.0*):
   
-  (bool) If set to true, tabs (ASCII code 9) will be used for indentation instead of spaces.
+  (bool) If set to true, tabs (ASCII code 9) will be used for indentation instead of spaces. Default is false.
+  
+  * `detect-tab-size` (since *0.3.3*):
+  
+  (bool) If set to true, the `use-tabs` and `tab-size` keys will be set based on the contents of the opened file. Default is false.
   
   * `use-native-clipboard` (since *0.3.0*):
   

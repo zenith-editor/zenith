@@ -260,9 +260,6 @@ pub const TextHandler = struct {
     fn readLines(self: *TextHandler, E: *Editor, new_buffer: str.String) ReadLineError!void {
         self.buffer = new_buffer;
 
-        // first line already added
-
-        // tail lines
         var is_mb = false;
         for (self.buffer.items, 0..self.buffer.items.len) |byte, offset| {
             if (encoding.isMultibyte(byte)) {
@@ -287,6 +284,64 @@ pub const TextHandler = struct {
         if (self.isTextWrapped(E)) {
             // wrap text must be done after calcLineDigits
             try self.wrapText(E);
+        }
+
+        if (E.conf.detect_tab_size) {
+            self.detectTabSize(E);
+        }
+    }
+
+    fn detectTabSize(self: *TextHandler, E: *Editor) void {
+        const MAX_LINES = 1024;
+        var lines_to_consider: std.BoundedArray(u8, 4) = .{};
+        var use_tabs: ?bool = null;
+
+        next_line: for (0..@min(self.lineinfo.getLen(), MAX_LINES)) |row| {
+            const offset_start: u32 = self.lineinfo.getOffset(@intCast(row));
+            const offset_end: u32 = self.getRowOffsetEnd(@intCast(row));
+            const line = self.buffer.items[offset_start..offset_end];
+            if (use_tabs == null) {
+                if (std.mem.startsWith(u8, "\t", line)) {
+                    use_tabs = true;
+                } else {
+                    use_tabs = false;
+                }
+            }
+            const cmp_byte: u8 = if (use_tabs.?) '\t' else ' ';
+            var tab_size: u8 = 0;
+            for (line) |byte| {
+                if (byte == cmp_byte) {
+                    tab_size += 1;
+                } else {
+                    break;
+                }
+            }
+            if (tab_size == 0) {
+                continue :next_line;
+            }
+            for (lines_to_consider.slice()) |prev_tab_size| {
+                if (tab_size == prev_tab_size) {
+                    continue;
+                }
+                if (tab_size < prev_tab_size) {
+                    continue :next_line;
+                }
+            }
+            lines_to_consider.append(tab_size) catch unreachable;
+            if (lines_to_consider.len == lines_to_consider.buffer.len) {
+                break;
+            }
+        }
+
+        if (lines_to_consider.len < 1) {
+            return;
+        }
+
+        E.conf.use_tabs = use_tabs.?;
+        const slice = lines_to_consider.slice();
+        E.conf.tab_size = @intCast(slice[0]);
+        for (slice[1..]) |indent| {
+            E.conf.tab_size = @intCast(std.math.gcd(E.conf.tab_size, indent));
         }
     }
 

@@ -125,7 +125,8 @@ config_filepath: ?[]u8 = null,
 
 // config fields
 
-tab_size: i32 = 2,
+tab_size: u32 = 2,
+detect_tab_size: bool = true,
 use_tabs: bool = false,
 use_native_clipboard: bool = true,
 show_line_numbers: bool = true,
@@ -155,6 +156,7 @@ const ConfigField = struct {
 
 const REGULAR_CONFIG_FIELDS = [_]ConfigField{
     .{ .field = "use_tabs", .conf = "use-tabs" },
+    .{ .field = "detect_tab_size", .conf = "detect-tab-size" },
     .{ .field = "use_native_clipboard", .conf = "use-native-clipboard" },
     .{ .field = "show_line_numbers", .conf = "show-line-numbers" },
     .{ .field = "wrap_text", .conf = "wrap-text" },
