@@ -702,7 +702,7 @@ pub const TextHandler = struct {
         while (iter.nextCodepointSliceUntil(offset_end)) |bytes| {
             if (encoding.isSpace(bytes)) {
                 self.cursor.col += 1;
-                self.cursor.gfx_col += 1;
+                self.cursor.gfx_col += encoding.countCharCols(std.unicode.utf8Decode(bytes) catch unreachable);
             } else {
                 break;
             }
