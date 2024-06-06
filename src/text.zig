@@ -294,37 +294,44 @@ pub const TextHandler = struct {
     fn detectTabSize(self: *TextHandler, E: *Editor) void {
         const MAX_LINES = 1024;
         var lines_to_consider: std.BoundedArray(u8, 4) = .{};
-        var use_tabs: ?bool = null;
+        var indent_byte: ?u8 = null;
 
         next_line: for (0..@min(self.lineinfo.getLen(), MAX_LINES)) |row| {
             const offset_start: u32 = self.lineinfo.getOffset(@intCast(row));
             const offset_end: u32 = self.getRowOffsetEnd(@intCast(row));
             const line = self.buffer.items[offset_start..offset_end];
-            if (use_tabs == null) {
-                if (std.mem.startsWith(u8, "\t", line)) {
-                    use_tabs = true;
+            if (line.len == 0) {
+                continue;
+            }
+
+            const first_char_len = encoding.sequenceLen(line[0]) catch unreachable;
+            const first_bytes = line[0..first_char_len];
+            if (!encoding.isSpace(first_bytes)) {
+                continue;
+            }
+
+            if (indent_byte == null) {
+                if (std.mem.eql(u8, first_bytes, "\t")) {
+                    indent_byte = '\t';
                 } else {
-                    use_tabs = false;
+                    indent_byte = ' ';
                 }
             }
-            const cmp_byte: u8 = if (use_tabs.?) '\t' else ' ';
+
             var tab_size: u8 = 0;
             for (line) |byte| {
-                if (byte == cmp_byte) {
+                if (byte == indent_byte.?) {
                     tab_size += 1;
                 } else {
                     break;
                 }
             }
-            if (tab_size == 0) {
-                continue :next_line;
-            }
             for (lines_to_consider.slice()) |prev_tab_size| {
                 if (tab_size == prev_tab_size) {
-                    continue;
-                }
-                if (tab_size < prev_tab_size) {
                     continue :next_line;
+                }
+                if (tab_size > prev_tab_size) {
+                    break;
                 }
             }
             lines_to_consider.append(tab_size) catch unreachable;
@@ -337,7 +344,7 @@ pub const TextHandler = struct {
             return;
         }
 
-        E.conf.use_tabs = use_tabs.?;
+        E.conf.use_tabs = indent_byte.? == '\t';
         const slice = lines_to_consider.slice();
         E.conf.tab_size = @intCast(slice[0]);
         for (slice[1..]) |indent| {
