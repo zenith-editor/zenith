@@ -30,14 +30,11 @@ pub const Token = struct {
 pub const TokenType = struct {
     color: editor.Editor.ColorCode,
     pattern: ?patterns.Expr,
-    promote_types: ?config.Reader.PromoteTypesList = null,
+    promote_types: []const config.Reader.PromoteType,
 
     fn deinit(self: *TokenType, allocr: std.mem.Allocator) void {
         if (self.pattern) |*pattern| {
             pattern.deinit(allocr);
-        }
-        if (self.promote_types) |*promote_types| {
-            promote_types.deinit(allocr);
         }
     }
 };
@@ -76,6 +73,7 @@ pub const Iterator = struct {
 
 tokens: std.ArrayListUnmanaged(Token) = .{},
 token_types: std.ArrayListUnmanaged(TokenType) = .{},
+highlight: ?config.Reader.HighlightRc = null,
 
 pub fn clear(self: *Highlight, allocr: std.mem.Allocator) void {
     self.tokens.shrinkAndFree(allocr, 0);
@@ -104,7 +102,9 @@ pub fn loadTokenTypesForFile(
 
     // TODO: log parseHighlight error
     try cfg.parseHighlight(allocr, highlight_idx);
-    const highlight = &cfg.highlights.items[highlight_idx].?;
+
+    self.highlight = cfg.highlights.items[highlight_idx].?.clone();
+    const highlight: *const config.Reader.Highlight = self.highlight.?.get();
     for (highlight.tokens.items) |*tt| {
         // TODO: error
 
@@ -123,28 +123,22 @@ pub fn loadTokenTypesForFile(
 
                 break :blk expr;
             },
-            .promote_types = (if (tt.promote_types) |*promote_types|
-                promote_types.clone()
-            else
-                null),
+            .promote_types = tt.promote_types.items,
         });
     }
 }
 
 fn promoteTokenType(text_handler: *const text.TextHandler, allocr: std.mem.Allocator, token_start: u32, token_end: u32, tt: *const TokenType, typeid: usize) !usize {
-    if (tt.promote_types) |promote_types_rc| {
-        const promote_types = promote_types_rc.get();
-        for (promote_types.items) |*promote_type| {
-            var stackallocr = std.heap.stackFallback(128, allocr);
-            var token_str = std.ArrayList(u8).init(stackallocr.get());
-            defer token_str.deinit();
-            var iter = text_handler.iterate(token_start);
-            while (iter.nextCodepointSliceUntil(token_end)) |token_bytes| {
-                try token_str.appendSlice(token_bytes);
-            }
-            if (std.sort.binarySearch([]const u8, token_str.items, promote_type.matches, u8, std.mem.order) != null) {
-                return promote_type.to_typeid;
-            }
+    for (tt.promote_types) |*promote_type| {
+        var stackallocr = std.heap.stackFallback(128, allocr);
+        var token_str = std.ArrayList(u8).init(stackallocr.get());
+        defer token_str.deinit();
+        var iter = text_handler.iterate(token_start);
+        while (iter.nextCodepointSliceUntil(token_end)) |token_bytes| {
+            try token_str.appendSlice(token_bytes);
+        }
+        if (std.sort.binarySearch([]const u8, token_str.items, promote_type.matches, u8, std.mem.order) != null) {
+            return promote_type.to_typeid;
         }
     }
     return typeid;

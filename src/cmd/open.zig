@@ -118,7 +118,7 @@ fn runFileOpener(self: *editor.Editor, file_opener: []const []const u8, action: 
     try std.posix.dup2(pty_res.slave.handle, std.posix.STDIN_FILENO);
     try std.posix.dup2(pty_res.slave.handle, std.posix.STDERR_FILENO);
 
-    var child = std.ChildProcess.init(file_opener, self.allocr);
+    var child = std.process.Child.init(file_opener, self.allocr);
     child.stdin_behavior = .Inherit;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Inherit;

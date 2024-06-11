@@ -21,7 +21,7 @@ pub fn read(allocr: std.mem.Allocator) !?[]u8 {
 fn readX11OrWayland(allocr: std.mem.Allocator) !?[]u8 {
     const is_x11 = std.process.hasEnvVar(allocr, "DISPLAY") catch false;
     if (is_x11) {
-        const result = try std.ChildProcess.run(.{
+        const result = try std.process.Child.run(.{
             .allocator = allocr,
             .argv = &.{ "xclip", "-selection", "clipboard", "-o" },
         });
@@ -49,7 +49,7 @@ pub fn write(allocr: std.mem.Allocator, buf: []const u8) !void {
 fn writeX11OrWayland(allocr: std.mem.Allocator, buf: []const u8) !void {
     const is_x11 = std.process.hasEnvVar(allocr, "DISPLAY") catch false;
     if (is_x11) {
-        var proc = std.ChildProcess.init(
+        var proc = std.process.Child.init(
             &.{ "xclip", "-selection", "clipboard" },
             allocr,
         );

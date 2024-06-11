@@ -64,16 +64,14 @@ pub const HighlightType = struct {
     color: ?u32,
     deco: editor.Editor.ColorCode.Decoration,
     flags: patterns.Expr.Flags,
-    promote_types: ?PromoteTypesList = null,
+    promote_types: std.ArrayListUnmanaged(PromoteType),
 
-    fn deinit(self: *Highlight, allocr: std.mem.Allocator) void {
+    pub fn deinit(self: *Highlight, allocr: std.mem.Allocator) void {
         allocr.free(self.name);
         if (self.pattern) |pattern| {
             allocr.free(pattern);
         }
-        if (self.promote_types) |*promote_types| {
-            promote_types.deinit(allocr);
-        }
+        self.promote_types.deinit(allocr);
     }
 };
 
@@ -90,8 +88,6 @@ pub const PromoteType = struct {
     }
 };
 
-pub const PromoteTypesList = Rc(std.ArrayListUnmanaged(PromoteType));
-
 pub const Highlight = struct {
     tokens: std.ArrayListUnmanaged(HighlightType) = .{},
     name_to_token: std.StringHashMapUnmanaged(u32) = .{},
@@ -104,6 +100,8 @@ pub const Highlight = struct {
         self.name_to_token.deinit(allocr);
     }
 };
+
+pub const HighlightRc = Rc(Highlight);
 
 const HighlightDecl = struct {
     path: ?[]u8 = null,
@@ -143,7 +141,7 @@ force_alt_screen_buf: bool = true,
 force_alt_scroll_mode: bool = true,
 force_mouse_tracking: bool = true,
 
-highlights: std.ArrayListUnmanaged(?Highlight) = .{},
+highlights: std.ArrayListUnmanaged(?HighlightRc) = .{},
 highlights_decl: std.ArrayListUnmanaged(HighlightDecl) = .{},
 /// extension key strings owned highlights_decl
 highlights_ext_to_idx: std.StringHashMapUnmanaged(u32) = .{},
@@ -398,61 +396,58 @@ const HighlightWriter = struct {
     reader: *Reader,
     allocr: std.mem.Allocator,
 
-    name: ?[]u8 = null,
-    pattern: ?[]u8 = null,
-    flags: patterns.Expr.Flags = .{},
-    color: ?u32 = null,
-    deco: editor.Editor.ColorCode.Decoration = .{},
-    promote_types: std.ArrayListUnmanaged(PromoteType) = .{},
-
+    highlight_type: ?HighlightType = null,
     highlight: Highlight = .{},
 
     fn deinit(self: *HighlightWriter) void {
-        if (self.pattern) |pattern| {
-            self.allocr.free(pattern);
+        if (self.highlight_type != null) {
+            self.highlight_type.?.deinit(self.allocr);
         }
-        for (self.promote_types.items) |*match| {
-            match.deinit(self.allocr);
-        }
-        self.promote_types.deinit(self.allocr);
         self.highlight.deinit(self.allocr);
     }
 
+    fn beginHighlightType(self: *HighlightWriter, name_in: []const u8) !void {
+        if (self.highlight_type != null) {
+            @panic("highlight_type is not null");
+        }
+        const name = try self.allocr.dupe(u8, name_in);
+        self.highlight_type = .{
+            .name = name,
+            .pattern = null,
+            .color = null,
+            .deco = .{},
+            .flags = .{},
+            .promote_types = .{},
+        };
+    }
+
     fn setPattern(self: *HighlightWriter, pattern: []const u8) !void {
-        if (self.pattern != null) {
+        if (self.highlight_type.?.pattern != null) {
             return error.DuplicateKey;
         }
-        self.pattern = try self.allocr.dupe(u8, pattern);
+        self.highlight_type.?.pattern = try self.allocr.dupe(u8, pattern);
     }
 
     fn setFlags(self: *HighlightWriter, flags: []const u8) !void {
-        self.flags = patterns.Expr.Flags.fromShortCode(flags) catch {
+        self.highlight_type.?.flags = patterns.Expr.Flags.fromShortCode(flags) catch {
             return error.ExpectedRegexFlag;
         };
     }
 
     fn flush(self: *HighlightWriter) !void {
+        if (self.highlight_type == null) {
+            return;
+        }
+
+        const highlight_type = self.highlight_type.?;
+        self.highlight_type = null;
+
         const tt_idx = self.highlight.tokens.items.len;
-        try self.highlight.tokens.append(self.allocr, .{
-            .name = self.name.?,
-            .pattern = self.pattern,
-            .flags = self.flags,
-            .color = self.color,
-            .deco = self.deco,
-            .promote_types = (if (self.promote_types.items.len > 0)
-                try PromoteTypesList.create(self.allocr, &self.promote_types)
-            else
-                null),
-        });
-        if (try self.highlight.name_to_token.fetchPut(self.allocr, self.name.?, @intCast(tt_idx)) != null) {
+        if (try self.highlight.name_to_token.fetchPut(self.allocr, highlight_type.name, @intCast(tt_idx)) != null) {
             return error.DuplicateKey;
         }
-        self.name = null;
-        self.pattern = null;
-        self.flags = .{};
-        self.color = null;
-        self.deco = .{};
-        self.promote_types = .{};
+
+        try self.highlight.tokens.append(self.allocr, highlight_type);
     }
 };
 
@@ -503,20 +498,20 @@ pub fn parseHighlight(
                     try writer.setFlags(s);
                 } else if (std.mem.eql(u8, kv.key, "color")) {
                     if (kv.val.getOpt([]const u8)) |s| {
-                        writer.color = editor.Editor.ColorCode.idFromStr(s) orelse {
+                        writer.highlight_type.?.color = editor.Editor.ColorCode.idFromStr(s) orelse {
                             return error.ExpectedColorCode;
                         };
                     } else if (kv.val.getOpt(i64)) |int| {
-                        writer.color = @intCast(int);
+                        writer.highlight_type.?.color = @intCast(int);
                     } else {
                         return error.ExpectedColorCode;
                     }
                 } else if (try kv.get(bool, "bold")) |b| {
-                    writer.deco.is_bold = b;
+                    writer.highlight_type.?.deco.is_bold = b;
                 } else if (try kv.get(bool, "italic")) |b| {
-                    writer.deco.is_italic = b;
+                    writer.highlight_type.?.deco.is_italic = b;
                 } else if (try kv.get(bool, "underline")) |b| {
-                    writer.deco.is_underline = b;
+                    writer.highlight_type.?.deco.is_underline = b;
                 } else if (std.mem.startsWith(u8, kv.key, "promote:")) {
                     const promote_key = kv.key[("promote:".len)..];
                     if (promote_key.len == 0) {
@@ -541,7 +536,7 @@ pub fn parseHighlight(
                         }));
                     }
                     std.mem.sort([]const u8, promote_strs.items, {}, utils.lessThanStr);
-                    try writer.promote_types.append(allocr, .{
+                    try writer.highlight_type.?.promote_types.append(allocr, .{
                         .to_typeid = to_typeid,
                         .matches = try promote_strs.toOwnedSlice(),
                     });
@@ -550,10 +545,10 @@ pub fn parseHighlight(
                 }
             },
             .table_section => |table_section| {
-                if (writer.name != null) {
+                if (writer.highlight_type != null) {
                     try writer.flush();
                 }
-                writer.name = try allocr.dupe(u8, table_section);
+                try writer.beginHighlightType(table_section);
             },
             else => {
                 return error.HighlightParseError;
@@ -561,11 +556,11 @@ pub fn parseHighlight(
         }
     }
 
-    if (writer.name != null) {
+    if (writer.highlight_type != null) {
         try writer.flush();
     }
 
-    self.highlights.items[hl_id] = writer.highlight;
+    self.highlights.items[hl_id] = try HighlightRc.create(allocr, &writer.highlight);
     writer.highlight = .{};
 }
 

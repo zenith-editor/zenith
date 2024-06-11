@@ -23,7 +23,7 @@ pub fn Rc(comptime T: type) type {
                 .count = 1,
                 .data = data.*,
             };
-            data.* = .{};
+            data.* = undefined;
             return .{
                 .inner = inner,
             };
