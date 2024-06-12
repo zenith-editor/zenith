@@ -91,8 +91,8 @@ pub const PromoteType = struct {
 pub const Highlight = struct {
     tokens: std.ArrayListUnmanaged(HighlightType) = .{},
     name_to_token: std.StringHashMapUnmanaged(u32) = .{},
-    tab_size: u32 = 0,
-    use_tabs: bool = false,
+    tab_size: ?u32 = null,
+    use_tabs: ?bool = null,
 
     fn deinit(self: *Highlight, allocr: std.mem.Allocator) void {
         for (self.tokens.items) |*token| {
@@ -108,8 +108,8 @@ pub const HighlightRc = Rc(Highlight);
 const HighlightDecl = struct {
     path: ?[]u8 = null,
     extension: std.ArrayListUnmanaged([]u8) = .{},
-    tab_size: u32 = 0,
-    use_tabs: bool = false,
+    tab_size: ?u32 = null,
+    use_tabs: ?bool = null,
 
     fn deinit(self: *HighlightDecl, allocr: std.mem.Allocator) void {
         if (self.path) |s| {
