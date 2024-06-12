@@ -113,7 +113,7 @@ fn runFileOpener(self: *editor.Editor, argv: []const []const u8, action: enum { 
     }
 
     if (path.len == 0) {
-        return error.FileNotFound;
+        return;
     }
 
     const opened_file = try onInputtedGeneric(path);
