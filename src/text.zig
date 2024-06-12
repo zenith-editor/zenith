@@ -978,7 +978,6 @@ pub const TextHandler = struct {
                 if (gap_relidx == self.gap.items.len) {
                     self.gap.appendSliceAssumeCapacity(char);
                 } else {
-                    // TODO: there is no insertSliceAssumeCapacity?
                     self.gap.replaceRangeAssumeCapacity(gap_relidx, 0, char);
                 }
             }
@@ -1132,7 +1131,6 @@ pub const TextHandler = struct {
             // insertion within gap
             if ((self.gap.items.len + slice.len) < self.gap.capacity) {
                 const gap_relidx = insidx - self.head_end;
-                // TODO: there is no insertSliceAssumeCapacity?
                 self.gap.replaceRangeAssumeCapacity(gap_relidx, 0, slice);
             } else {
                 // overflow if inserted

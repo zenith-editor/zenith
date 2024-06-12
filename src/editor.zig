@@ -369,7 +369,7 @@ pub const Editor = struct {
                 if (self.unprotected_hideable_msg) |*msg| {
                     msg.deinit(self.allocr);
                 }
-                @panic("TODO");
+                @panic("TODO: copyHideableMsg for owned message");
             },
             .static => {
                 if (self.unprotected_hideable_msg) |*msg| {
