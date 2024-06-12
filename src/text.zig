@@ -175,7 +175,12 @@ pub const TextHandler = struct {
             }
             self.file_path.clearAndFree(E.allocr);
             try self.file_path.appendSlice(E.allocr, args.file_path);
-            try self.highlight.loadTokenTypesForFile(self, E.allocr, &E.conf);
+            switch (self.highlight.loadTokenTypesForFile(self, E.allocr, &E.conf)) {
+                .ok => {},
+                .err => |*err| {
+                    try E.showConfigError(err);
+                },
+            }
             return;
         }
 
@@ -209,7 +214,12 @@ pub const TextHandler = struct {
             };
 
             // Try to load highlighting first so that indentation is detected
-            try self.highlight.loadTokenTypesForFile(self, E.allocr, &E.conf);
+            switch (self.highlight.loadTokenTypesForFile(self, E.allocr, &E.conf)) {
+                .ok => {},
+                .err => |*err| {
+                    try E.showConfigError(err);
+                },
+            }
             self.readLines(E, new_buffer) catch |err| {
                 self.clearBuffersForFile(E.allocr);
                 return err;

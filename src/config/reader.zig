@@ -51,6 +51,22 @@ pub const ConfigError = struct {
             else => {},
         }
     }
+
+    pub fn toString(self: *const ConfigError, allocr: std.mem.Allocator, args: struct {
+        main_path: []const u8 = "",
+    }) ![]u8 {
+        switch (self.location) {
+            .not_loaded => {
+                return std.fmt.allocPrint(allocr, "Unable to read config file: {}", .{self.type});
+            },
+            .main => {
+                return std.fmt.allocPrint(allocr, "Unable to read config file <{s}:+{}>: {}", .{ args.main_path, self.pos orelse 0, self.type });
+            },
+            .highlight => |path| {
+                return std.fmt.allocPrint(allocr, "Unable to read config file <{s}:+{}>: {}", .{ path, self.pos.?, self.type });
+            },
+        }
+    }
 };
 
 pub const ConfigResult = Error(void, ConfigError);
@@ -466,23 +482,54 @@ fn parseTabSize(int: i64) u32 {
 pub fn parseHighlight(
     self: *Reader,
     allocr: std.mem.Allocator,
-    hl_id: usize,
-) !void {
-    if (self.highlights.items[hl_id] != null) {
-        return;
+    highlight_id: usize,
+) ConfigResult {
+    if (self.highlights.items[highlight_id] != null) {
+        return .{ .ok = {} };
     }
 
-    const decl = &self.highlights_decl.items[hl_id];
-    const highlight_filepath: []u8 =
-        try Reader.getConfigFile(allocr, self.config_dir.?, decl.path orelse {
-        return error.HighlightLoadError;
-    });
+    const decl = &self.highlights_decl.items[highlight_id];
+    const highlight_filepath: []u8 = Reader.getConfigFile(allocr, self.config_dir.?, decl.path orelse {
+        return .{
+            .err = .{
+                .type = error.HighlightLoadError,
+                .pos = 0,
+                .location = .not_loaded,
+            },
+        };
+    }) catch |err| {
+        return .{
+            .err = .{
+                .type = err,
+                .pos = 0,
+                .location = .{
+                    .highlight = decl.path.?,
+                },
+            },
+        };
+    };
     defer allocr.free(highlight_filepath);
 
-    const file = try std.fs.openFileAbsolute(highlight_filepath, .{ .mode = .read_only });
+    const file = std.fs.openFileAbsolute(highlight_filepath, .{ .mode = .read_only }) catch |err| {
+        return .{
+            .err = .{
+                .type = err,
+                .pos = 0,
+                .location = .not_loaded,
+            },
+        };
+    };
     defer file.close();
 
-    const source = try file.readToEndAlloc(allocr, 1 << 24);
+    const source = file.readToEndAlloc(allocr, 1 << 24) catch |err| {
+        return .{
+            .err = .{
+                .type = err,
+                .pos = 0,
+                .location = .not_loaded,
+            },
+        };
+    };
     defer allocr.free(source);
 
     var P = parser.Parser.init(source);
@@ -496,88 +543,120 @@ pub fn parseHighlight(
         },
     };
 
+    var expr_start: usize = 0;
+
     while (true) {
+        expr_start = P.pos;
         var expr = switch (P.nextExpr(allocr)) {
             .ok => |val| val,
-            .err => {
-                // TODO: propagate error code
-                return error.HighlightParseError;
+            .err => |err| {
+                return .{ .err = .{
+                    .type = err.type,
+                    .pos = err.pos,
+                    .location = .{ .highlight = decl.path.? },
+                } };
             },
         } orelse break;
-        errdefer expr.deinit(allocr);
+        defer expr.deinit(allocr);
 
-        switch (expr) {
-            .kv => |*kv| {
-                if (try kv.get([]const u8, "pattern")) |s| {
-                    try writer.setPattern(s);
-                } else if (try kv.get([]const u8, "flags")) |s| {
-                    try writer.setFlags(s);
-                } else if (std.mem.eql(u8, kv.key, "color")) {
-                    if (kv.val.getOpt([]const u8)) |s| {
-                        writer.highlight_type.?.color = editor.Editor.ColorCode.idFromStr(s) orelse {
-                            return error.ExpectedColorCode;
-                        };
-                    } else if (kv.val.getOpt(i64)) |int| {
-                        writer.highlight_type.?.color = @intCast(int);
-                    } else {
-                        return error.ExpectedColorCode;
-                    }
-                } else if (try kv.get(bool, "bold")) |b| {
-                    writer.highlight_type.?.deco.is_bold = b;
-                } else if (try kv.get(bool, "italic")) |b| {
-                    writer.highlight_type.?.deco.is_italic = b;
-                } else if (try kv.get(bool, "underline")) |b| {
-                    writer.highlight_type.?.deco.is_underline = b;
-                } else if (std.mem.startsWith(u8, kv.key, "promote:")) {
-                    const promote_key = kv.key[("promote:".len)..];
-                    if (promote_key.len == 0) {
-                        return error.InvalidKey;
-                    }
-                    const to_typeid = writer.highlight.name_to_token.get(promote_key) orelse {
-                        return error.InvalidKey;
-                    };
-                    var promote_strs = std.ArrayList([]u8).init(allocr);
-                    errdefer {
-                        for (promote_strs.items) |item| {
-                            allocr.free(item);
-                        }
-                        promote_strs.deinit();
-                    }
-                    const val_arr = (kv.val.getOpt([]parser.Value)) orelse {
-                        return error.InvalidKey;
-                    };
-                    for (val_arr) |val| {
-                        try promote_strs.append(try allocr.dupe(u8, val.getOpt([]const u8) orelse {
-                            return error.InvalidKey;
-                        }));
-                    }
-                    std.mem.sort([]const u8, promote_strs.items, {}, utils.lessThanStr);
-                    try writer.highlight_type.?.promote_types.append(allocr, .{
-                        .to_typeid = to_typeid,
-                        .matches = try promote_strs.toOwnedSlice(),
-                    });
-                } else {
-                    return error.InvalidKey;
-                }
-            },
-            .table_section => |table_section| {
-                if (writer.highlight_type != null) {
-                    try writer.flush();
-                }
-                try writer.beginHighlightType(table_section);
-            },
-            else => {
-                return error.HighlightParseError;
-            },
-        }
+        parseHighlightInner(&writer, &expr) catch |err| {
+            return .{ .err = .{
+                .type = err,
+                .pos = expr_start,
+                .location = .{ .highlight = decl.path.? },
+            } };
+        };
     }
 
     if (writer.highlight_type != null) {
-        try writer.flush();
+        writer.flush() catch |err| {
+            return .{ .err = .{
+                .type = err,
+                .pos = expr_start,
+                .location = .{ .highlight = decl.path.? },
+            } };
+        };
     }
 
-    self.highlights.items[hl_id] = try HighlightRc.create(allocr, &writer.highlight);
+    self.highlights.items[highlight_id] = HighlightRc.create(allocr, &writer.highlight) catch |err| {
+        return .{ .err = .{
+            .type = err,
+            .pos = 0,
+            .location = .{ .highlight = decl.path.? },
+        } };
+    };
     writer.highlight = .{};
+
+    return .{
+        .ok = {},
+    };
+}
+
+fn parseHighlightInner(writer: *HighlightWriter, expr: *const parser.Expr) !void {
+    switch (expr.*) {
+        .kv => |*kv| {
+            if (try kv.get([]const u8, "pattern")) |s| {
+                try writer.setPattern(s);
+            } else if (try kv.get([]const u8, "flags")) |s| {
+                try writer.setFlags(s);
+            } else if (std.mem.eql(u8, kv.key, "color")) {
+                if (kv.val.getOpt([]const u8)) |s| {
+                    writer.highlight_type.?.color = editor.Editor.ColorCode.idFromStr(s) orelse {
+                        return error.ExpectedColorCode;
+                    };
+                } else if (kv.val.getOpt(i64)) |int| {
+                    writer.highlight_type.?.color = @intCast(int);
+                } else {
+                    return error.ExpectedColorCode;
+                }
+            } else if (try kv.get(bool, "bold")) |b| {
+                writer.highlight_type.?.deco.is_bold = b;
+            } else if (try kv.get(bool, "italic")) |b| {
+                writer.highlight_type.?.deco.is_italic = b;
+            } else if (try kv.get(bool, "underline")) |b| {
+                writer.highlight_type.?.deco.is_underline = b;
+            } else if (std.mem.startsWith(u8, kv.key, "promote:")) {
+                const promote_key = kv.key[("promote:".len)..];
+                if (promote_key.len == 0) {
+                    return error.InvalidKey;
+                }
+                const to_typeid = writer.highlight.name_to_token.get(promote_key) orelse {
+                    return error.InvalidKey;
+                };
+                var promote_strs = std.ArrayList([]u8).init(writer.allocr);
+                errdefer {
+                    for (promote_strs.items) |item| {
+                        writer.allocr.free(item);
+                    }
+                    promote_strs.deinit();
+                }
+                const val_arr = (kv.val.getOpt([]parser.Value)) orelse {
+                    return error.InvalidKey;
+                };
+                for (val_arr) |val| {
+                    try promote_strs.append(try writer.allocr.dupe(u8, val.getOpt([]const u8) orelse {
+                        return error.InvalidKey;
+                    }));
+                }
+                std.mem.sort([]const u8, promote_strs.items, {}, utils.lessThanStr);
+                try writer.highlight_type.?.promote_types.append(writer.allocr, .{
+                    .to_typeid = to_typeid,
+                    .matches = try promote_strs.toOwnedSlice(),
+                });
+            } else {
+                return error.InvalidKey;
+            }
+        },
+        .table_section => |table_section| {
+            if (writer.highlight_type != null) {
+                try writer.flush();
+            }
+            try writer.beginHighlightType(table_section);
+        },
+        else => {
+            return error.HighlightParseError;
+        },
+    }
 }
 
 fn parse(self: *Reader, allocr: std.mem.Allocator, source: []const u8) ConfigResult {

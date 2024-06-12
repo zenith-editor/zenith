@@ -89,44 +89,76 @@ pub fn loadTokenTypesForFile(
     text_handler: *const text.TextHandler,
     allocr: std.mem.Allocator,
     cfg: *config.Reader,
-) !void {
+) config.Reader.ConfigResult {
     self.clear(allocr);
 
     const extension = std.fs.path.extension(text_handler.file_path.items);
     if (extension.len < 1) {
-        return;
+        return .{ .ok = {} };
     }
 
     const highlight_idx = cfg.highlights_ext_to_idx.get(extension) orelse {
-        return;
+        return .{ .ok = {} };
     };
 
-    // TODO: log parseHighlight error
-    try cfg.parseHighlight(allocr, highlight_idx);
+    return self.loadTokenTypesForFileInner(allocr, cfg, highlight_idx);
+}
+
+fn loadTokenTypesForFileInner(
+    self: *Highlight,
+    allocr: std.mem.Allocator,
+    cfg: *config.Reader,
+    highlight_idx: usize,
+) config.Reader.ConfigResult {
+    switch (cfg.parseHighlight(allocr, highlight_idx)) {
+        .ok => {},
+        .err => |err| {
+            return .{
+                .err = err,
+            };
+        },
+    }
 
     self.highlight = cfg.highlights.items[highlight_idx].?.clone();
     const highlight: *const config.Reader.Highlight = self.highlight.?.get();
     for (highlight.tokens.items) |*tt| {
-        // TODO: error
-
-        try self.token_types.append(allocr, .{
+        self.token_types.append(allocr, .{
             .color = editor.Editor.ColorCode.init(tt.color, null, tt.deco),
             .pattern = blk: {
                 if (tt.pattern == null) {
                     break :blk null;
                 }
 
-                const expr = try patterns.Expr.create(
+                const expr = patterns.Expr.create(
                     allocr,
                     tt.pattern.?,
                     &tt.flags,
-                ).asErr();
+                ).asErr() catch {
+                    // TODO: propagate error location if regex parsing fails
+                    return .{
+                        .err = .{
+                            .type = error.InvalidKey,
+                            .pos = 0,
+                            .location = .not_loaded,
+                        },
+                    };
+                };
 
                 break :blk expr;
             },
             .promote_types = tt.promote_types.items,
-        });
+        }) catch |err| {
+            return .{
+                .err = .{
+                    .type = err,
+                    .pos = 0,
+                    .location = .not_loaded,
+                },
+            };
+        };
     }
+
+    return .{ .ok = {} };
 }
 
 fn promoteTokenType(text_handler: *const text.TextHandler, allocr: std.mem.Allocator, token_start: u32, token_end: u32, tt: *const TokenType, typeid: usize) !usize {

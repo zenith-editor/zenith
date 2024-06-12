@@ -172,6 +172,24 @@ pub const HideableMessage = struct {
     offset: u32 = 0,
     offset_rows: u32 = 0,
 
+    fn fromAllocated(header: ?[]const u8, owned_text: []u8) HideableMessage {
+        return .{
+            .header = header,
+            .text = .{
+                .owned = owned_text,
+            },
+            .rows = blk: {
+                var n: u32 = 1;
+                for (owned_text) |byte| {
+                    if (byte == '\n') {
+                        n += 1;
+                    }
+                }
+                break :blk n;
+            },
+        };
+    }
+
     fn deinit(self: *HideableMessage, allocator: std.mem.Allocator) void {
         self.text.deinit(allocator);
     }
@@ -200,10 +218,6 @@ pub const HideableMessage = struct {
         }
         return self.offset == slice.len;
     }
-};
-
-pub const TextBoxDecorations = struct {
-    pub const BORDER = [_][]const u8{ "═", "╔", "╗", "╚", "╝" };
 };
 
 pub const Esc = struct {
@@ -290,24 +304,24 @@ pub const Editor = struct {
                 if (err.type == error.FileNotFound and err.location == .not_loaded) {
                     // ignored
                 } else {
-                    const writer = self.outw;
-                    switch (err.location) {
-                        .not_loaded => {
-                            try writer.print("Unable to read config file: {}\n", .{err.type});
-                        },
-                        .main => {
-                            try writer.print("Unable to read config file <{s}:+{}>: {}\n", .{ self.conf.config_filepath orelse "???", err.pos orelse 0, err.type });
-                        },
-                        .highlight => |path| {
-                            try writer.print("Unable to read config file <{s}:+{}>: {}\n", .{ path, err.pos.?, err.type });
-                        },
-                    }
+                    const error_string = try err.toString(self.allocr, .{
+                        .main_path = self.conf.config_filepath orelse "<main>",
+                    });
+                    defer self.allocr.free(error_string);
+                    try self.outw.writeAll(error_string);
                     try self.errorPromptBeforeLoaded();
                 }
             },
         }
 
         self.text_handler.undo_mgr.setMemoryLimit(self.conf.undo_memory_limit);
+    }
+
+    pub fn showConfigError(self: *Editor, err: *const config.Reader.ConfigError) !void {
+        const error_string = try err.toString(self.allocr, .{
+            .main_path = self.conf.config_filepath orelse "<main>",
+        });
+        self.copyHideableMsg(&HideableMessage.fromAllocated("config error", error_string));
     }
 
     pub fn errorPromptBeforeLoaded(self: *const Editor) !void {
@@ -367,9 +381,10 @@ pub const Editor = struct {
         switch (other.text) {
             .owned => {
                 if (self.unprotected_hideable_msg) |*msg| {
+                    // TODO: scrollable message for owned slices
                     msg.deinit(self.allocr);
                 }
-                @panic("TODO: copyHideableMsg for owned message");
+                self.unprotected_hideable_msg = other.*;
             },
             .static => {
                 if (self.unprotected_hideable_msg) |*msg| {
@@ -1153,7 +1168,7 @@ pub const Editor = struct {
             }
         }
 
-        try self.showUpperLayers();
+        try self.showHideableMessage();
 
         self.needs_update_cursor = true;
     }
@@ -1163,73 +1178,57 @@ pub const Editor = struct {
         return &token_type.color;
     }
 
-    fn showUpperLayers(self: *Editor) !void {
-        if (self.unprotected_hideable_msg) |*msg| {
-            const renderable_rows_inner: u32 = msg.calcRenderableRows();
-            const renderable_rows_outer: u32 = renderable_rows_inner + 2;
-            var row: u32 = 0;
-            var draw_row: u32 = 0;
-            if (self.getTextHeight() >= renderable_rows_outer) {
-                row = self.getTextHeight() - renderable_rows_outer;
+    fn showHideableMessage(self: *Editor) !void {
+        const msg: *const HideableMessage = blk: {
+            if (self.unprotected_hideable_msg != null) {
+                break :blk &self.unprotected_hideable_msg.?;
+            } else {
+                return;
             }
-            const start_row = row;
-            try self.moveCursor(row, 0);
-            try self.writeAll(Esc.CLEAR_LINE);
+        };
 
-            // top line
-            try self.writeAll(TextBoxDecorations.BORDER[1]);
-            if (msg.header) |header| {
-                const header_max_width = self.w_width - 2;
-                const header_col = blk: {
-                    if (header_max_width > header.len) {
-                        break :blk ((header_max_width - header.len) / 2);
-                    } else {
-                        break :blk 0;
-                    }
-                };
-                var i: u32 = 0;
-                while (i < header_max_width) {
-                    if (i == header_col) {
-                        try self.writeAll(header);
-                        i += @intCast(header.len);
-                    } else {
-                        try self.writeAll(TextBoxDecorations.BORDER[0]);
-                        i += 1;
-                    }
+        const renderable_rows_inner: u32 = msg.calcRenderableRows();
+        const renderable_rows_outer: u32 = renderable_rows_inner + 1;
+        var row: u32 = 0;
+        var draw_row: u32 = 0;
+        if (self.getTextHeight() >= renderable_rows_outer) {
+            row = self.getTextHeight() - renderable_rows_outer;
+        }
+        try self.moveCursor(row, 0);
+        try self.writeAll(Esc.CLEAR_LINE);
+
+        // header
+        if (msg.header) |header| {
+            const header_max_width: u32 = self.w_width;
+            const header_col: u32 = blk: {
+                if (header_max_width > header.len) {
+                    break :blk @intCast((header_max_width - header.len) / 2);
+                } else {
+                    break :blk 0;
+                }
+            };
+            try self.moveCursor(row, header_col);
+            try self.writeAll(Esc.COLOR_INVERT);
+            try self.writeAll(header);
+            try self.writeAll(Esc.COLOR_DEFAULT);
+        }
+
+        // body
+        row += 1;
+        try self.moveCursor(row, 0);
+        try self.writeAll(Esc.CLEAR_LINE);
+        for (msg.text.slice()[msg.offset..]) |byte| {
+            if (byte == '\n') {
+                row += 1;
+                draw_row += 1;
+                try self.moveCursor(row, 0);
+                try self.writeAll(Esc.CLEAR_LINE);
+                if (draw_row == renderable_rows_inner) {
+                    break;
                 }
             } else {
-                for (0..self.w_width - 2) |_| {
-                    try self.writeAll(TextBoxDecorations.BORDER[0]);
-                }
+                try self.writeByte(byte);
             }
-            try self.writeAll(TextBoxDecorations.BORDER[2]);
-            try self.writeAll("\n");
-
-            // inner
-            row += 1;
-            try self.moveCursor(row, 0);
-            try self.writeAll(Esc.CLEAR_LINE);
-            for (msg.text.slice()[msg.offset..]) |byte| {
-                if (byte == '\n') {
-                    row += 1;
-                    draw_row += 1;
-                    try self.moveCursor(row, 0);
-                    try self.writeAll(Esc.CLEAR_LINE);
-                    if (draw_row == renderable_rows_inner) {
-                        break;
-                    }
-                } else {
-                    try self.writeByte(byte);
-                }
-            }
-
-            // bottom line
-            try self.moveCursor(start_row + 1 + renderable_rows_inner, 0);
-            try self.writeAll(TextBoxDecorations.BORDER[3]);
-            for (0..self.w_width - 2) |_| {
-                try self.writeAll(TextBoxDecorations.BORDER[0]);
-            }
-            try self.writeAll(TextBoxDecorations.BORDER[4]);
         }
     }
 
