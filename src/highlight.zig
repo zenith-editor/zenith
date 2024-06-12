@@ -30,6 +30,7 @@ pub const Token = struct {
 pub const TokenType = struct {
     color: editor.Editor.ColorCode,
     pattern: ?patterns.Expr,
+    /// owned by Highlight
     promote_types: []const config.Reader.PromoteType,
 
     fn deinit(self: *TokenType, allocr: std.mem.Allocator) void {
@@ -337,4 +338,20 @@ pub fn iterate(self: *const Highlight, pos: u32, last_iter_idx: *usize) Iterator
         .pos = pos,
         .idx = idx,
     };
+}
+
+pub fn getTabSize(self: *const Highlight) ?u32 {
+    if (self.highlight) |hl| {
+        return hl.get().tab_size;
+    } else {
+        return null;
+    }
+}
+
+pub fn getUseTabs(self: *const Highlight) ?bool {
+    if (self.highlight) |hl| {
+        return hl.get().use_tabs;
+    } else {
+        return null;
+    }
 }

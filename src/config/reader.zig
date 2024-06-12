@@ -91,6 +91,8 @@ pub const PromoteType = struct {
 pub const Highlight = struct {
     tokens: std.ArrayListUnmanaged(HighlightType) = .{},
     name_to_token: std.StringHashMapUnmanaged(u32) = .{},
+    tab_size: u32 = 0,
+    use_tabs: bool = false,
 
     fn deinit(self: *Highlight, allocr: std.mem.Allocator) void {
         for (self.tokens.items) |*token| {
@@ -106,6 +108,8 @@ pub const HighlightRc = Rc(Highlight);
 const HighlightDecl = struct {
     path: ?[]u8 = null,
     extension: std.ArrayListUnmanaged([]u8) = .{},
+    tab_size: u32 = 0,
+    use_tabs: bool = false,
 
     fn deinit(self: *HighlightDecl, allocr: std.mem.Allocator) void {
         if (self.path) |s| {
@@ -295,13 +299,7 @@ fn parseInner(self: *Reader, state: *ParserState, expr: *parser.Expr) !void {
             switch (state.config_section) {
                 .global => {
                     if (try kv.get(i64, "tab-size")) |int| {
-                        if (int > conf.MAX_TAB_SIZE) {
-                            self.tab_size = conf.MAX_TAB_SIZE;
-                        } else if (int < 0) {
-                            self.tab_size = 2;
-                        } else {
-                            self.tab_size = @intCast(int);
-                        }
+                        self.tab_size = parseTabSize(int);
                     } else if (try kv.get(i64, "undo-memory-limit")) |int| {
                         self.undo_memory_limit =
                             if (int > std.math.maxInt(usize) or int < 0) std.math.maxInt(usize) else @intCast(int);
@@ -335,26 +333,26 @@ fn parseInner(self: *Reader, state: *ParserState, expr: *parser.Expr) !void {
                         return error.UnknownKey;
                     }
                 },
-                .highlight => |highlight_idx| {
-                    const highlight = &state.highlights_decl.items[highlight_idx];
+                .highlight => |decl_idx| {
+                    const decl: *HighlightDecl = &state.highlights_decl.items[decl_idx];
                     if (try kv.get([]const u8, "path")) |s| {
-                        if (highlight.path != null) {
+                        if (decl.path != null) {
                             return error.DuplicateKey;
                         }
-                        highlight.path = try state.allocr.dupe(u8, s);
+                        decl.path = try state.allocr.dupe(u8, s);
                     } else if (std.mem.eql(u8, kv.key, "extension")) {
                         if (kv.val.getOpt([]const u8)) |s| {
                             const ext = try state.allocr.dupe(u8, s);
-                            try highlight.extension.append(state.allocr, ext);
-                            const old = try self.highlights_ext_to_idx.fetchPut(state.allocr, ext, @intCast(highlight_idx));
+                            try decl.extension.append(state.allocr, ext);
+                            const old = try self.highlights_ext_to_idx.fetchPut(state.allocr, ext, @intCast(decl_idx));
                             if (old != null) {
                                 return error.DuplicateKey;
                             }
                         } else if (kv.val.getOpt([]parser.Value)) |array| {
                             for (array) |val| {
                                 const ext = try state.allocr.dupe(u8, try val.getErr([]const u8));
-                                try highlight.extension.append(state.allocr, ext);
-                                const old = try self.highlights_ext_to_idx.fetchPut(state.allocr, ext, @intCast(highlight_idx));
+                                try decl.extension.append(state.allocr, ext);
+                                const old = try self.highlights_ext_to_idx.fetchPut(state.allocr, ext, @intCast(decl_idx));
                                 if (old != null) {
                                     return error.DuplicateKey;
                                 }
@@ -362,6 +360,10 @@ fn parseInner(self: *Reader, state: *ParserState, expr: *parser.Expr) !void {
                         } else {
                             return error.UnknownKey;
                         }
+                    } else if (try kv.get(i64, "tab-size")) |int| {
+                        decl.tab_size = parseTabSize(int);
+                    } else if (try kv.get(bool, "use-tabs")) |b| {
+                        decl.use_tabs = b;
                     } else {
                         return error.UnknownKey;
                     }
@@ -451,6 +453,16 @@ const HighlightWriter = struct {
     }
 };
 
+fn parseTabSize(int: i64) u32 {
+    if (int > conf.MAX_TAB_SIZE) {
+        return conf.MAX_TAB_SIZE;
+    } else if (int < 0) {
+        return 2;
+    } else {
+        return @intCast(int);
+    }
+}
+
 pub fn parseHighlight(
     self: *Reader,
     allocr: std.mem.Allocator,
@@ -460,9 +472,9 @@ pub fn parseHighlight(
         return;
     }
 
-    const hl_parse = &self.highlights_decl.items[hl_id];
+    const decl = &self.highlights_decl.items[hl_id];
     const highlight_filepath: []u8 =
-        try Reader.getConfigFile(allocr, self.config_dir.?, hl_parse.path orelse {
+        try Reader.getConfigFile(allocr, self.config_dir.?, decl.path orelse {
         return error.HighlightLoadError;
     });
     defer allocr.free(highlight_filepath);
@@ -478,6 +490,10 @@ pub fn parseHighlight(
     var writer: HighlightWriter = .{
         .reader = self,
         .allocr = allocr,
+        .highlight = .{
+            .tab_size = decl.tab_size,
+            .use_tabs = decl.use_tabs,
+        },
     };
 
     while (true) {

@@ -208,11 +208,12 @@ pub const TextHandler = struct {
                 break :blk ret_buffer;
             };
 
+            // Try to load highlighting first so that indentation is detected
+            try self.highlight.loadTokenTypesForFile(self, E.allocr, &E.conf);
             self.readLines(E, new_buffer) catch |err| {
                 self.clearBuffersForFile(E.allocr);
                 return err;
             };
-            try self.highlight.loadTokenTypesForFile(self, E.allocr, &E.conf);
             try self.highlightText(E);
         }
     }
@@ -286,7 +287,16 @@ pub const TextHandler = struct {
             try self.wrapText(E);
         }
 
-        if (E.conf.detect_tab_size) {
+        var tab_size_detected = false;
+        if (self.highlight.getTabSize()) |tab_size| {
+            E.conf.tab_size = tab_size;
+            tab_size_detected = true;
+        }
+        if (self.highlight.getUseTabs()) |use_tabs| {
+            E.conf.use_tabs = use_tabs;
+            tab_size_detected = true;
+        }
+        if (!tab_size_detected and E.conf.detect_tab_size) {
             self.detectTabSize(E);
         }
     }
