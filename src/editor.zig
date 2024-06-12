@@ -428,33 +428,6 @@ pub const Editor = struct {
         try std.posix.tcsetattr(self.in.handle, std.posix.TCSA.FLUSH, termios);
     }
 
-    pub fn enableRawModeForSpawnedApplications(self: *Editor) !void {
-        // actual, real raw mode as seen in cfmakeraw
-        var termios: std.posix.termios = self.orig_termios.?;
-
-        termios.iflag.IGNBRK = false;
-        termios.iflag.BRKINT = false;
-        termios.iflag.PARMRK = false;
-        termios.iflag.ISTRIP = false;
-        termios.iflag.INLCR = false;
-        termios.iflag.IGNCR = false;
-        termios.iflag.ICRNL = false;
-        termios.iflag.IXON = false;
-
-        termios.oflag.OPOST = false;
-
-        termios.cflag.CSIZE = std.posix.CSIZE.CS8;
-        termios.cflag.PARENB = false;
-
-        termios.lflag.ECHO = false;
-        termios.lflag.ECHONL = false;
-        termios.lflag.ICANON = false;
-        termios.lflag.IEXTEN = false;
-        termios.lflag.ISIG = false;
-
-        try std.posix.tcsetattr(self.in.handle, std.posix.TCSA.FLUSH, termios);
-    }
-
     pub fn disableRawMode(self: *Editor) !void {
         if (self.orig_termios) |termios| {
             try std.posix.tcsetattr(self.in.handle, std.posix.TCSA.FLUSH, termios);

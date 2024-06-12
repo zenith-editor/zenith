@@ -12,7 +12,7 @@ const str = @import("../str.zig");
 const text = @import("../text.zig");
 const editor = @import("../editor.zig");
 const sig = @import("../platform/sig.zig");
-const pty = @import("../platform/pty.zig");
+const tty = @import("../platform/tty.zig");
 
 fn onInputtedGeneric(file_path: []const u8) !text.TextHandler.OpenFileArgs {
     const cwd = std.fs.cwd();
@@ -91,144 +91,25 @@ pub const FnsTryToSave: editor.CommandData.FnTable = .{
     .onInputted = Cmd.onInputtedTryToSave,
 };
 
-fn runFileOpener(self: *editor.Editor, file_opener: []const []const u8, action: enum { open, save }) !void {
-    try self.restoreTerminal();
-    try self.enableRawModeForSpawnedApplications();
+fn runFileOpener(self: *editor.Editor, argv: []const []const u8, action: enum { open, save }) !void {
     defer {
         self.setupTerminal() catch {};
     }
 
-    // force raw mode for termios
-    var wsz: std.posix.winsize = undefined;
-    {
-        const rc = std.os.linux.ioctl(self.in.handle, std.os.linux.T.IOCGWINSZ, @intFromPtr(&wsz));
-        if (std.posix.errno(rc) != .SUCCESS) {
-            return std.posix.unexpectedErrno(std.posix.errno(rc));
-        }
-    }
-    const termios = try std.posix.tcgetattr(self.in.handle);
-    var pty_res = try pty.open(termios, &wsz);
-    defer pty_res.close();
-    const pty_writer = pty_res.master.writer();
+    var path_buf = std.ArrayList(u8).init(self.allocr);
+    defer path_buf.deinit();
 
-    // setup process
+    try tty.run(.{
+        .argv = argv,
+        .captured_stdout = &path_buf,
+        .piped_stdin = self.in,
+        .piped_stdout = self.out,
+        .poll_timeout = editor.Editor.REFRESH_RATE_MS,
+    });
 
-    const old_stdin = try std.posix.dup(std.posix.STDIN_FILENO);
-    const old_stderr = try std.posix.dup(std.posix.STDERR_FILENO);
-    try std.posix.dup2(pty_res.slave.handle, std.posix.STDIN_FILENO);
-    try std.posix.dup2(pty_res.slave.handle, std.posix.STDERR_FILENO);
-
-    var child = std.process.Child.init(file_opener, self.allocr);
-    child.stdin_behavior = .Inherit;
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Inherit;
-
-    sig.sigchld_triggered = false;
-    try child.spawn();
-    try std.posix.dup2(old_stdin, std.posix.STDIN_FILENO);
-    try std.posix.dup2(old_stderr, std.posix.STDERR_FILENO);
-
-    // poll
-
-    var poll_fds = [_]std.posix.pollfd{
-        .{
-            .fd = self.in.handle,
-            .events = std.posix.POLL.IN,
-            .revents = 0,
-        },
-        .{
-            .fd = child.stdout.?.handle,
-            .events = std.posix.POLL.IN,
-            .revents = 0,
-        },
-        .{
-            .fd = pty_res.master.handle,
-            .events = std.posix.POLL.IN,
-            .revents = 0,
-        },
-    };
-    var stdout_pipe = std.fifo.LinearFifo(u8, .Dynamic).init(self.allocr);
-    defer stdout_pipe.deinit();
-    var is_termios_setup = false;
-
-    while (!sig.sigchld_triggered) {
-        const poll_res = std.posix.poll(&poll_fds, editor.Editor.REFRESH_RATE_MS) catch {
-            break;
-        };
-
-        if (sig.resized) {
-            const rc = std.os.linux.ioctl(self.in.handle, std.os.linux.T.IOCGWINSZ, @intFromPtr(&wsz));
-            if (std.posix.errno(rc) == .SUCCESS) {
-                const res = std.os.linux.ioctl(pty_res.slave.handle, std.os.linux.T.IOCSWINSZ, @intFromPtr(&wsz));
-                if (std.posix.errno(res) != .SUCCESS) {
-                    return std.posix.unexpectedErrno(std.posix.errno(res));
-                }
-            }
-            try std.posix.kill(child.id, std.posix.SIG.WINCH);
-            sig.resized = false;
-        }
-
-        if (poll_res == 0) {
-            continue;
-        }
-
-        const bump_amt = 512;
-
-        // stdin
-        {
-            const poll_fd = &poll_fds[0];
-            if (poll_fd.revents & std.posix.POLL.IN != 0) {
-                var buf: [bump_amt]u8 = undefined;
-                const amt = try std.posix.read(poll_fd.fd, &buf);
-                if (amt == 0) {
-                    break;
-                }
-                try pty_writer.writeAll(buf[0..amt]);
-            }
-        }
-
-        // stdout
-        {
-            const poll_fd = &poll_fds[1];
-            if (poll_fd.revents & std.posix.POLL.IN != 0) {
-                const buf = try stdout_pipe.writableWithSize(bump_amt);
-                const amt = try std.posix.read(poll_fd.fd, buf);
-                if (amt == 0) {
-                    break;
-                }
-                stdout_pipe.update(amt);
-            }
-        }
-
-        // stderr
-        {
-            const poll_fd = &poll_fds[2];
-            if (poll_fd.revents & std.posix.POLL.IN != 0) {
-                var buf: [bump_amt]u8 = undefined;
-                const amt = try std.posix.read(poll_fd.fd, &buf);
-                if (amt == 0) {
-                    break;
-                }
-                try self.writeAll(buf[0..amt]);
-                if (!is_termios_setup) {
-                    // termios
-                    const c_termios = try std.posix.tcgetattr(pty_res.master.handle);
-                    try std.posix.tcsetattr(self.in.handle, std.posix.TCSA.FLUSH, c_termios);
-                    is_termios_setup = true;
-                }
-            }
-        }
-    }
-
-    _ = child.wait() catch null;
-
-    // parse the path
-    var stdout: []u8 = try stdout_pipe.toOwnedSlice();
-    defer self.allocr.free(stdout);
-
-    var path = stdout;
-    if (std.mem.indexOfScalar(u8, stdout, '\n')) |end| {
-        path = stdout[0..end];
+    var path = path_buf.items;
+    if (std.mem.indexOfScalar(u8, path, '\n')) |end| {
+        path = path[0..end];
     }
 
     if (path.len == 0) {
