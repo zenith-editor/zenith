@@ -12,7 +12,7 @@ build: $(ZIG_CACHE)
 
 .PHONY: $(ZIG_CACHE)
 $(ZIG_CACHE):
-	@if [ -d "$(ZIG_CACHE)" ]; then \
+	@if [ -L "$(ZIG_CACHE)" ]; then \
 		(du -sb $(ZIG_CACHE_TMP) | awk '{size=$$1; if (size > 1000000000) { exit 1 }}'); \
 		if [ $$? -ne 0 ]; then \
 			echo "$(ZIG_CACHE) is too big! You should clean it up with make clean-cache"; \
