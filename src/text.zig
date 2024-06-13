@@ -1744,7 +1744,7 @@ pub const TextHandler = struct {
                     const match = regex.checkMatch(haystack, &.{}) catch {
                         return null;
                     };
-                    if (match.pos > 0) {
+                    if (match.fully_matched) {
                         return match.pos;
                     } else {
                         return null;
