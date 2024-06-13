@@ -7,10 +7,25 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+const LinuxProtocol = enum {
+    Unknown,
+    X11,
+    Wayland,
+};
+
+fn getWhichProtocolLinux() LinuxProtocol {
+    if (std.process.hasEnvVarConstant("WAYLAND_DISPLAY")) {
+        return .Wayland;
+    } else if (std.process.hasEnvVarConstant("DISPLAY")) {
+        return .X11;
+    }
+    return .Unknown;
+}
+
 pub fn read(allocr: std.mem.Allocator) !?[]u8 {
     switch (builtin.os.tag) {
-        .linux => {
-            return readX11OrWayland(allocr);
+        inline .linux => {
+            return readLinux(allocr);
         },
         else => {
             return null;
@@ -18,27 +33,33 @@ pub fn read(allocr: std.mem.Allocator) !?[]u8 {
     }
 }
 
-fn readX11OrWayland(allocr: std.mem.Allocator) !?[]u8 {
-    const is_x11 = std.process.hasEnvVar(allocr, "DISPLAY") catch false;
-    if (is_x11) {
-        const result = try std.process.Child.run(.{
-            .allocator = allocr,
-            .argv = &.{ "xclip", "-selection", "clipboard", "-o" },
-        });
-        defer allocr.free(result.stderr);
-        if (result.stdout.len == 0) {
-            defer allocr.free(result.stdout);
+fn readLinux(allocr: std.mem.Allocator) !?[]u8 {
+    const argv: []const []const u8 = switch (getWhichProtocolLinux()) {
+        .Wayland => &.{"wl-paste"},
+        .X11 => &.{ "xclip", "-selection", "clipboard", "-o" },
+        else => {
             return null;
-        }
-        return result.stdout;
+        },
+    };
+    const proc = try std.process.Child.run(.{
+        .allocator = allocr,
+        .argv = argv,
+    });
+    errdefer {
+        _ = proc.kill();
     }
-    return null;
+    defer allocr.free(proc.stderr);
+    if (proc.stdout.len == 0) {
+        defer allocr.free(proc.stdout);
+        return null;
+    }
+    return proc.stdout;
 }
 
 pub fn write(allocr: std.mem.Allocator, buf: []const u8) !void {
     switch (builtin.os.tag) {
-        .linux => {
-            return writeX11OrWayland(allocr, buf);
+        inline .linux => {
+            return writeLinux(allocr, buf);
         },
         else => {
             return;
@@ -46,21 +67,26 @@ pub fn write(allocr: std.mem.Allocator, buf: []const u8) !void {
     }
 }
 
-fn writeX11OrWayland(allocr: std.mem.Allocator, buf: []const u8) !void {
-    const is_x11 = std.process.hasEnvVar(allocr, "DISPLAY") catch false;
-    if (is_x11) {
-        var proc = std.process.Child.init(
-            &.{ "xclip", "-selection", "clipboard" },
-            allocr,
-        );
-        proc.stdin_behavior = .Pipe;
-        proc.stdout_behavior = .Close;
-        proc.stderr_behavior = .Close;
-        try proc.spawn();
-        errdefer if (proc.kill()) |_| {} else |_| {};
-        _ = try proc.stdin.?.writer().writeAll(buf);
-        proc.stdin.?.close();
-        return;
+fn writeLinux(allocr: std.mem.Allocator, buf: []const u8) !void {
+    const argv: []const []const u8 = switch (getWhichProtocolLinux()) {
+        .Wayland => &.{"wl-copy"},
+        .X11 => &.{ "xclip", "-selection", "clipboard" },
+        else => {
+            return;
+        },
+    };
+    var proc = std.process.Child.init(
+        argv,
+        allocr,
+    );
+    proc.stdin_behavior = .Pipe;
+    proc.stdout_behavior = .Close;
+    proc.stderr_behavior = .Close;
+    try proc.spawn();
+    errdefer {
+        _ = proc.kill() catch {};
     }
+    _ = try proc.stdin.?.writer().writeAll(buf);
+    proc.stdin.?.close();
     return;
 }
