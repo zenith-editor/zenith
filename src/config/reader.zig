@@ -138,6 +138,16 @@ const HighlightDecl = struct {
     }
 };
 
+const HighlightClass = struct {
+    name: []u8,
+    color: ?u32 = null,
+    deco: editor.Editor.ColorCode.Decoration = .{},
+
+    fn deinit(self: *HighlightClass, allocr: std.mem.Allocator) void {
+        allocr.free(self.name);
+    }
+};
+
 config_dir: ?std.fs.Dir = null,
 config_filepath: ?[]u8 = null,
 
@@ -162,9 +172,12 @@ force_alt_scroll_mode: bool = true,
 force_mouse_tracking: bool = true,
 
 highlights: std.ArrayListUnmanaged(?HighlightRc) = .{},
-highlights_decl: std.ArrayListUnmanaged(HighlightDecl) = .{},
-/// extension key strings owned highlights_decl
-highlights_ext_to_idx: std.StringHashMapUnmanaged(u32) = .{},
+highlight_decls: std.ArrayListUnmanaged(HighlightDecl) = .{},
+/// extension key strings owned highlight_decls
+highlights_ext_to_idx: std.StringHashMapUnmanaged(usize) = .{},
+
+hl_classes: std.ArrayListUnmanaged(HighlightClass) = .{},
+hl_classes_by_name: std.StringHashMapUnmanaged(usize) = .{},
 
 // regular config fields
 const ConfigField = struct {
@@ -292,22 +305,30 @@ pub fn open(self: *Reader, allocr: std.mem.Allocator) ConfigResult {
 
 const ParserState = struct {
     config_section: ConfigSection = .global,
-    highlights_decl: std.ArrayListUnmanaged(HighlightDecl) = .{},
+    highlight_decls: std.ArrayListUnmanaged(HighlightDecl) = .{},
     /// Must be E.allocr
     allocr: std.mem.Allocator,
 
     fn deinit(self: *ParserState) void {
-        for (self.highlights_decl.items) |*highlight| {
+        for (self.highlight_decls.items) |*highlight| {
             highlight.deinit(self.allocr);
         }
-        self.highlights_decl.deinit(self.allocr);
+        self.highlight_decls.deinit(self.allocr);
     }
 };
 
 const ConfigSection = union(enum) {
     global,
     highlight: usize,
+    hl_class: usize,
 };
+
+fn splitPrefix(key: []const u8, comptime prefix: []const u8) ?[]const u8 {
+    if (std.mem.startsWith(u8, key, prefix)) {
+        return key[prefix.len..];
+    }
+    return null;
+}
 
 fn parseInner(self: *Reader, state: *ParserState, expr: *parser.Expr) !void {
     switch (expr.*) {
@@ -350,7 +371,7 @@ fn parseInner(self: *Reader, state: *ParserState, expr: *parser.Expr) !void {
                     }
                 },
                 .highlight => |decl_idx| {
-                    const decl: *HighlightDecl = &state.highlights_decl.items[decl_idx];
+                    const decl: *HighlightDecl = &state.highlight_decls.items[decl_idx];
                     if (try kv.get([]const u8, "path")) |s| {
                         if (decl.path != null) {
                             return error.DuplicateKey;
@@ -360,7 +381,7 @@ fn parseInner(self: *Reader, state: *ParserState, expr: *parser.Expr) !void {
                         if (kv.val.getOpt([]const u8)) |s| {
                             const ext = try state.allocr.dupe(u8, s);
                             try decl.extension.append(state.allocr, ext);
-                            const old = try self.highlights_ext_to_idx.fetchPut(state.allocr, ext, @intCast(decl_idx));
+                            const old = try self.highlights_ext_to_idx.fetchPut(state.allocr, ext, decl_idx);
                             if (old != null) {
                                 return error.DuplicateKey;
                             }
@@ -368,7 +389,7 @@ fn parseInner(self: *Reader, state: *ParserState, expr: *parser.Expr) !void {
                             for (array) |val| {
                                 const ext = try state.allocr.dupe(u8, try val.getErr([]const u8));
                                 try decl.extension.append(state.allocr, ext);
-                                const old = try self.highlights_ext_to_idx.fetchPut(state.allocr, ext, @intCast(decl_idx));
+                                const old = try self.highlights_ext_to_idx.fetchPut(state.allocr, ext, decl_idx);
                                 if (old != null) {
                                     return error.DuplicateKey;
                                 }
@@ -380,6 +401,29 @@ fn parseInner(self: *Reader, state: *ParserState, expr: *parser.Expr) !void {
                         decl.tab_size = parseTabSize(int);
                     } else if (try kv.get(bool, "use-tabs")) |b| {
                         decl.use_tabs = b;
+                    } else if (try kv.get([]const u8, "inherit")) |s| {
+                        _ = s;
+                        @panic("TODO");
+                    } else {
+                        return error.UnknownKey;
+                    }
+                },
+                .hl_class => |hl_class_idx| {
+                    const hl_class: *HighlightClass = &self.hl_classes.items[hl_class_idx];
+                    if (std.mem.eql(u8, kv.key, "color")) {
+                        if (kv.val.getOpt([]const u8)) |s| {
+                            hl_class.color = editor.Editor.ColorCode.idFromStr(s);
+                        } else if (kv.val.getOpt(i64)) |int| {
+                            hl_class.color = @intCast(int);
+                        } else {
+                            return error.ExpectedColorCode;
+                        }
+                    } else if (try kv.get(bool, "bold")) |b| {
+                        hl_class.deco.is_bold = b;
+                    } else if (try kv.get(bool, "italic")) |b| {
+                        hl_class.deco.is_italic = b;
+                    } else if (try kv.get(bool, "underline")) |b| {
+                        hl_class.deco.is_underline = b;
                     } else {
                         return error.UnknownKey;
                     }
@@ -394,15 +438,30 @@ fn parseInner(self: *Reader, state: *ParserState, expr: *parser.Expr) !void {
             }
         },
         .table_section => |table_section| {
-            if (std.mem.startsWith(u8, table_section, "highlight.")) {
-                const highlight = table_section[("highlight.".len)..];
+            if (splitPrefix(table_section, "highlight.")) |highlight| {
                 if (highlight.len == 0) {
                     return error.InvalidSection;
                 }
                 state.config_section = .{
-                    .highlight = state.highlights_decl.items.len,
+                    .highlight = state.highlight_decls.items.len,
                 };
-                try state.highlights_decl.append(state.allocr, .{});
+                try state.highlight_decls.append(state.allocr, .{});
+            } else if (splitPrefix(table_section, "hl_class.")) |hl_class_name| {
+                if (hl_class_name.len == 0) {
+                    return error.InvalidSection;
+                }
+                const hl_class_id = self.hl_classes.items.len;
+                const hl_class: HighlightClass = .{
+                    .name = try state.allocr.dupe(u8, hl_class_name),
+                };
+                state.config_section = .{
+                    .hl_class = hl_class_id,
+                };
+                try self.hl_classes.append(state.allocr, hl_class);
+                const old = try self.hl_classes_by_name.fetchPut(state.allocr, hl_class.name, hl_class_id);
+                if (old != null) {
+                    return error.DuplicateKey;
+                }
             } else {
                 return error.InvalidSection;
             }
@@ -488,7 +547,7 @@ pub fn parseHighlight(
         return .{ .ok = {} };
     }
 
-    const decl = &self.highlights_decl.items[highlight_id];
+    const decl = &self.highlight_decls.items[highlight_id];
     const highlight_filepath: []u8 = Reader.getConfigFile(allocr, self.config_dir.?, decl.path orelse {
         return .{
             .err = .{
@@ -599,6 +658,13 @@ fn parseHighlightInner(writer: *HighlightWriter, expr: *const parser.Expr) !void
                 try writer.setPattern(s);
             } else if (try kv.get([]const u8, "flags")) |s| {
                 try writer.setFlags(s);
+            } else if (try kv.get([]const u8, "inherit")) |s| {
+                const hl_class_id = writer.reader.hl_classes_by_name.get(s) orelse {
+                    return error.InvalidKey;
+                };
+                const hl_class: *const HighlightClass = &writer.reader.hl_classes.items[hl_class_id];
+                writer.highlight_type.?.color = hl_class.color;
+                writer.highlight_type.?.deco = hl_class.deco;
             } else if (std.mem.eql(u8, kv.key, "color")) {
                 if (kv.val.getOpt([]const u8)) |s| {
                     writer.highlight_type.?.color = editor.Editor.ColorCode.idFromStr(s) orelse {
@@ -615,8 +681,7 @@ fn parseHighlightInner(writer: *HighlightWriter, expr: *const parser.Expr) !void
                 writer.highlight_type.?.deco.is_italic = b;
             } else if (try kv.get(bool, "underline")) |b| {
                 writer.highlight_type.?.deco.is_underline = b;
-            } else if (std.mem.startsWith(u8, kv.key, "promote:")) {
-                const promote_key = kv.key[("promote:".len)..];
+            } else if (splitPrefix(kv.key, "promote:")) |promote_key| {
                 if (promote_key.len == 0) {
                     return error.InvalidKey;
                 }
@@ -630,7 +695,7 @@ fn parseHighlightInner(writer: *HighlightWriter, expr: *const parser.Expr) !void
                     }
                     promote_strs.deinit();
                 }
-                const val_arr = (kv.val.getOpt([]parser.Value)) orelse {
+                const val_arr = kv.val.getOpt([]parser.Value) orelse {
                     return error.InvalidKey;
                 };
                 for (val_arr) |val| {
@@ -688,9 +753,9 @@ fn parse(self: *Reader, allocr: std.mem.Allocator, source: []const u8) ConfigRes
         };
     }
 
-    self.highlights_decl = state.highlights_decl;
-    state.highlights_decl = .{};
-    self.highlights.appendNTimes(allocr, null, self.highlights_decl.items.len) catch |err| {
+    self.highlight_decls = state.highlight_decls;
+    state.highlight_decls = .{};
+    self.highlights.appendNTimes(allocr, null, self.highlight_decls.items.len) catch |err| {
         return .{ .err = .{
             .type = err,
         } };
