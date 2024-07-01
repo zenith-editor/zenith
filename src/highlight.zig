@@ -188,7 +188,8 @@ pub fn runText(
         return;
     }
 
-    var src_view = text_handler.srcView();
+    var string_view: patterns.Expr.StringView = .{ .source = text_handler.buffer.items };
+    var src_view = if (text_handler.isGapBufferEmpty()) string_view.srcView() else text_handler.srcView();
     var anchor_start_offset: u32 = 0;
     var pos: u32 = 0;
     outer: while (try src_view.codepointSliceAt(pos)) |bytes| {

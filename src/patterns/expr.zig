@@ -148,12 +148,11 @@ pub const SrcView = struct {
     const VTable = struct {
         codepointSliceAt: *const fn (ctx: *const anyopaque, pos: usize) error{InvalidUtf8}!?[]const u8,
     };
-
     ptr: *const anyopaque,
-    vtable: *const VTable,
+    inline_vtable: VTable,
 
     pub fn codepointSliceAt(self: *const SrcView, pos: usize) error{InvalidUtf8}!?[]const u8 {
-        return self.vtable.codepointSliceAt(self.ptr, pos);
+        return self.inline_vtable.codepointSliceAt(self.ptr, pos);
     }
 };
 
@@ -200,7 +199,8 @@ const VM = struct {
                 const bytes = try self.view.codepointSliceAt(thread.str_idx) orelse {
                     return;
                 };
-                const char: u32 = std.unicode.utf8Decode(bytes) catch {
+                // utf8Decode is not automatically inlined in x86-64
+                const char: u32 = @call(.always_inline, std.unicode.utf8Decode, .{bytes}) catch {
                     return error.InvalidUtf8;
                 };
                 if (!self.flags.is_multiline and char == '\n') {
@@ -435,26 +435,26 @@ pub fn checkMatchGeneric(
 }
 
 pub const StringView = struct {
-    haystack: []const u8,
+    source: []const u8,
 
     fn codepointSliceAt(ctx: *const anyopaque, pos: usize) error{InvalidUtf8}!?[]const u8 {
         const self: *const StringView = @ptrCast(@alignCast(ctx));
-        if (pos >= self.haystack.len) {
+        if (pos >= self.source.len) {
             return null;
         }
-        const seqlen = std.unicode.utf8ByteSequenceLength(self.haystack[pos]) catch {
+        const seqlen = std.unicode.utf8ByteSequenceLength(self.source[pos]) catch {
             return error.InvalidUtf8;
         };
-        if ((pos + seqlen) > self.haystack.len) {
+        if ((pos + seqlen) > self.source.len) {
             return error.InvalidUtf8;
         }
-        return self.haystack[pos .. pos + seqlen];
+        return self.source[pos .. pos + seqlen];
     }
 
     pub fn srcView(self: *StringView) SrcView {
         return .{
             .ptr = @ptrCast(self),
-            .vtable = &.{
+            .inline_vtable = .{
                 .codepointSliceAt = StringView.codepointSliceAt,
             },
         };
@@ -467,11 +467,11 @@ pub fn checkMatch(
     options: *const MatchOptions,
 ) MatchError!MatchResult {
     var view: StringView = .{
-        .haystack = haystack,
+        .source = haystack,
     };
     return self.checkMatchGeneric(&.{
         .ptr = @ptrCast(&view),
-        .vtable = &.{
+        .inline_vtable = .{
             .codepointSliceAt = StringView.codepointSliceAt,
         },
     }, options);
@@ -484,7 +484,7 @@ pub const FindResult = struct {
 
 pub fn find(self: *const Expr, haystack: []const u8) !?FindResult {
     var view: StringView = .{
-        .haystack = haystack,
+        .source = haystack,
     };
     var vm: VM = .{
         .view = view.srcView(),
@@ -525,7 +525,7 @@ pub fn find(self: *const Expr, haystack: []const u8) !?FindResult {
 
 pub fn findBackwards(self: *const Expr, haystack: []const u8) !?FindResult {
     var view: StringView = .{
-        .haystack = haystack,
+        .source = haystack,
     };
     var vm: VM = .{
         .view = view.srcView(),

@@ -474,7 +474,7 @@ pub const TextHandler = struct {
         };
         return .{
             .ptr = self,
-            .vtable = &.{
+            .inline_vtable = .{
                 .codepointSliceAt = Funcs.codepointSliceAt,
             },
         };
@@ -506,6 +506,10 @@ pub const TextHandler = struct {
         self.head_end = 0;
         self.tail_start = 0;
         self.gap.shrinkRetainingCapacity(0);
+    }
+
+    pub fn isGapBufferEmpty(self: *const TextHandler) bool {
+        return self.head_end == 0 and self.tail_start == 0 and self.gap.items.len == 0;
     }
 
     // cursor
