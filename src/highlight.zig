@@ -33,9 +33,9 @@ pub const TokenType = struct {
     /// owned by Highlight
     promote_types: []const config.Reader.PromoteType,
 
-    fn deinit(self: *TokenType, allocr: std.mem.Allocator) void {
+    fn deinit(self: *TokenType, allocator: std.mem.Allocator) void {
         if (self.pattern) |*pattern| {
-            pattern.deinit(allocr);
+            pattern.deinit(allocator);
         }
     }
 };
@@ -76,21 +76,21 @@ tokens: std.ArrayListUnmanaged(Token) = .{},
 token_types: std.ArrayListUnmanaged(TokenType) = .{},
 highlight: ?config.Reader.HighlightRc = null,
 
-pub fn clear(self: *Highlight, allocr: std.mem.Allocator) void {
-    self.tokens.shrinkAndFree(allocr, 0);
+pub fn clear(self: *Highlight, allocator: std.mem.Allocator) void {
+    self.tokens.shrinkAndFree(allocator, 0);
     for (self.token_types.items) |*tt| {
-        tt.deinit(allocr);
+        tt.deinit(allocator);
     }
-    self.token_types.shrinkAndFree(allocr, 0);
+    self.token_types.shrinkAndFree(allocator, 0);
 }
 
 pub fn loadTokenTypesForFile(
     self: *Highlight,
     text_handler: *const text.TextHandler,
-    allocr: std.mem.Allocator,
+    allocator: std.mem.Allocator,
     cfg: *config.Reader,
 ) config.Reader.ConfigResult {
-    self.clear(allocr);
+    self.clear(allocator);
 
     const extension = std.fs.path.extension(text_handler.file_path.items);
     if (extension.len < 1) {
@@ -101,16 +101,16 @@ pub fn loadTokenTypesForFile(
         return .{ .ok = {} };
     };
 
-    return self.loadTokenTypesForFileInner(allocr, cfg, highlight_idx);
+    return self.loadTokenTypesForFileInner(allocator, cfg, highlight_idx);
 }
 
 fn loadTokenTypesForFileInner(
     self: *Highlight,
-    allocr: std.mem.Allocator,
+    allocator: std.mem.Allocator,
     cfg: *config.Reader,
     highlight_idx: usize,
 ) config.Reader.ConfigResult {
-    switch (cfg.parseHighlight(allocr, highlight_idx)) {
+    switch (cfg.parseHighlight(allocator, highlight_idx)) {
         .ok => {},
         .err => |err| {
             return .{
@@ -122,7 +122,7 @@ fn loadTokenTypesForFileInner(
     self.highlight = cfg.highlights.items[highlight_idx].?.clone();
     const highlight: *const config.Reader.Highlight = self.highlight.?.get();
     for (highlight.tokens.items) |*tt| {
-        self.token_types.append(allocr, .{
+        self.token_types.append(allocator, .{
             .color = editor.Editor.ColorCode.init(tt.color, null, tt.deco),
             .pattern = blk: {
                 if (tt.pattern == null) {
@@ -130,7 +130,7 @@ fn loadTokenTypesForFileInner(
                 }
 
                 const expr = patterns.Expr.create(
-                    allocr,
+                    allocator,
                     tt.pattern.?,
                     &tt.flags,
                 ).asErr() catch {
@@ -161,10 +161,10 @@ fn loadTokenTypesForFileInner(
     return .{ .ok = {} };
 }
 
-fn promoteTokenType(text_handler: *const text.TextHandler, allocr: std.mem.Allocator, token_start: u32, token_end: u32, tt: *const TokenType, typeid: usize) !usize {
+fn promoteTokenType(text_handler: *const text.TextHandler, allocator: std.mem.Allocator, token_start: u32, token_end: u32, tt: *const TokenType, typeid: usize) !usize {
     for (tt.promote_types) |*promote_type| {
-        var stackallocr = std.heap.stackFallback(128, allocr);
-        var token_str = std.ArrayList(u8).init(stackallocr.get());
+        var stackallocator = std.heap.stackFallback(128, allocator);
+        var token_str = std.ArrayList(u8).init(stackallocator.get());
         defer token_str.deinit();
         var iter = text_handler.iterate(token_start);
         while (iter.nextCodepointSliceUntil(token_end)) |token_bytes| {
@@ -180,9 +180,9 @@ fn promoteTokenType(text_handler: *const text.TextHandler, allocr: std.mem.Alloc
 pub fn runText(
     self: *Highlight,
     text_handler: *const text.TextHandler,
-    allocr: std.mem.Allocator,
+    allocator: std.mem.Allocator,
 ) !void {
-    self.tokens.shrinkAndFree(allocr, 0);
+    self.tokens.shrinkAndFree(allocator, 0);
 
     if (self.token_types.items.len == 0) {
         return;
@@ -206,9 +206,9 @@ pub fn runText(
                 const token: Token = .{
                     .pos_start = pos,
                     .pos_end = @intCast(result.pos),
-                    .typeid = try promoteTokenType(text_handler, allocr, pos, @intCast(result.pos), tt, typeid),
+                    .typeid = try promoteTokenType(text_handler, allocator, pos, @intCast(result.pos), tt, typeid),
                 };
-                try self.tokens.append(allocr, token);
+                try self.tokens.append(allocator, token);
                 pos = @intCast(result.pos);
                 continue :outer;
             }
@@ -226,7 +226,7 @@ pub fn runText(
 pub fn runFrom(
     self: *Highlight,
     text_handler: *const text.TextHandler,
-    allocr: std.mem.Allocator,
+    allocator: std.mem.Allocator,
     changed_region_start_in: u32,
     changed_region_end: u32,
     shift: u32,
@@ -238,7 +238,7 @@ pub fn runFrom(
     const opt_tok_idx_at_pos = self.findLastNearestToken(text_handler.lineinfo.getOffset(line_start), 0);
 
     if (opt_tok_idx_at_pos == null) {
-        return self.runText(text_handler, allocr);
+        return self.runText(text_handler, allocator);
     }
 
     const tok_idx_at_pos = opt_tok_idx_at_pos.?;
@@ -254,7 +254,7 @@ pub fn runFrom(
         const delete_end = changed_region_start_in + shift;
         const tok_idx_at_delete_end = self.findLastNearestToken(delete_end, tok_idx_at_pos).?;
         if (tok_idx_at_delete_end > (tok_idx_at_pos + 1)) {
-            try self.tokens.replaceRange(allocr, tok_idx_at_pos + 1, tok_idx_at_delete_end - (tok_idx_at_pos + 1), &[_]Token{});
+            try self.tokens.replaceRange(allocator, tok_idx_at_pos + 1, tok_idx_at_delete_end - (tok_idx_at_pos + 1), &[_]Token{});
         }
         for (self.tokens.items[(tok_idx_at_pos + 1)..]) |*token| {
             if (token.pos_start >= delete_end) {
@@ -273,7 +273,7 @@ pub fn runFrom(
         }
         break :blk text_handler.lineinfo.getOffset(anchor_start_line);
     };
-    var new_token_region = std.ArrayList(Token).init(allocr);
+    var new_token_region = std.ArrayList(Token).init(allocator);
     defer new_token_region.deinit();
     var shared_suffix = false;
 
@@ -291,7 +291,7 @@ pub fn runFrom(
                 const token: Token = .{
                     .pos_start = pos,
                     .pos_end = @intCast(result.pos),
-                    .typeid = try promoteTokenType(text_handler, allocr, pos, @intCast(result.pos), tt, typeid),
+                    .typeid = try promoteTokenType(text_handler, allocator, pos, @intCast(result.pos), tt, typeid),
                 };
 
                 existing_idx_catchup: while (existing_idx < self.tokens.items.len) {
@@ -334,13 +334,13 @@ pub fn runFrom(
         if (comptime build_config.dbg_highlighting) {
             std.debug.print("shared from {}..{}\n", .{ existing_start, existing_idx });
         }
-        try self.tokens.replaceRange(allocr, existing_start, existing_idx - existing_start, new_token_region.items);
+        try self.tokens.replaceRange(allocator, existing_start, existing_idx - existing_start, new_token_region.items);
     } else {
         if (comptime build_config.dbg_highlighting) {
             std.debug.print("new at {}\n", .{tok_idx_at_pos});
         }
         self.tokens.shrinkRetainingCapacity(existing_idx);
-        try self.tokens.replaceRange(allocr, tok_idx_at_pos, self.tokens.items.len - tok_idx_at_pos, new_token_region.items);
+        try self.tokens.replaceRange(allocator, tok_idx_at_pos, self.tokens.items.len - tok_idx_at_pos, new_token_region.items);
     }
     if (comptime build_config.dbg_highlighting) {
         std.debug.print("=> highlight: {any}\n", .{self.tokens.items});

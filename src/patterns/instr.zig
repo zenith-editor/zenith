@@ -51,10 +51,10 @@ pub const Instr = union(enum) {
     anchor_start: void,
     anchor_end: void,
 
-    pub fn deinit(self: *Instr, allocr: std.mem.Allocator) void {
+    pub fn deinit(self: *Instr, allocator: std.mem.Allocator) void {
         switch (self.*) {
-            .range, .range_inverse => |ptr| allocr.free(ptr),
-            .string => |ptr| allocr.free(ptr),
+            .range, .range_inverse => |ptr| allocator.free(ptr),
+            .string => |ptr| allocator.free(ptr),
             else => {},
         }
     }

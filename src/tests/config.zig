@@ -9,41 +9,41 @@ const Parser = @import("config").parser.Parser;
 
 test "parse empty section" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocr = gpa.allocator();
+    const allocator = gpa.allocator();
     var parser = Parser.init("[section]");
     {
-        var expr = parser.nextExpr(allocr).ok.?;
-        defer expr.deinit(allocr);
+        var expr = parser.nextExpr(allocator).ok.?;
+        defer expr.deinit(allocator);
         try std.testing.expectEqualSlices(u8, "section", expr.section);
     }
 }
 
 test "parse empty table section" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocr = gpa.allocator();
+    const allocator = gpa.allocator();
     var parser = Parser.init("[[section]]");
     {
-        var expr = parser.nextExpr(allocr).ok.?;
-        defer expr.deinit(allocr);
+        var expr = parser.nextExpr(allocator).ok.?;
+        defer expr.deinit(allocator);
         try std.testing.expectEqualSlices(u8, "section", expr.table_section);
     }
 }
 
 test "kv with int val" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocr = gpa.allocator();
+    const allocator = gpa.allocator();
     var parser = Parser.init(
         \\[section]
         \\key=1
     );
     {
-        var expr = parser.nextExpr(allocr).ok.?;
-        defer expr.deinit(allocr);
+        var expr = parser.nextExpr(allocator).ok.?;
+        defer expr.deinit(allocator);
         try std.testing.expectEqualSlices(u8, "section", expr.section);
     }
     {
-        var expr = parser.nextExpr(allocr).ok.?;
-        defer expr.deinit(allocr);
+        var expr = parser.nextExpr(allocator).ok.?;
+        defer expr.deinit(allocator);
         try std.testing.expectEqualSlices(u8, "key", expr.kv.key);
         try std.testing.expectEqual(1, expr.kv.val.i64);
     }
@@ -51,13 +51,13 @@ test "kv with int val" {
 
 test "kv with string val" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocr = gpa.allocator();
+    const allocator = gpa.allocator();
     var parser = Parser.init(
         \\key="val"
     );
     {
-        var expr = parser.nextExpr(allocr).ok.?;
-        defer expr.deinit(allocr);
+        var expr = parser.nextExpr(allocator).ok.?;
+        defer expr.deinit(allocator);
         try std.testing.expectEqualSlices(u8, "key", expr.kv.key);
         try std.testing.expectEqualSlices(u8, "val", expr.kv.val.string.items);
     }
@@ -65,20 +65,20 @@ test "kv with string val" {
 
 test "kv with bool val" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocr = gpa.allocator();
+    const allocator = gpa.allocator();
     var parser = Parser.init(
         \\truth=true
         \\faux=false
     );
     {
-        var expr = parser.nextExpr(allocr).ok.?;
-        defer expr.deinit(allocr);
+        var expr = parser.nextExpr(allocator).ok.?;
+        defer expr.deinit(allocator);
         try std.testing.expectEqualSlices(u8, "truth", expr.kv.key);
         try std.testing.expectEqual(true, expr.kv.val.bool);
     }
     {
-        var expr = parser.nextExpr(allocr).ok.?;
-        defer expr.deinit(allocr);
+        var expr = parser.nextExpr(allocator).ok.?;
+        defer expr.deinit(allocator);
         try std.testing.expectEqualSlices(u8, "faux", expr.kv.key);
         try std.testing.expectEqual(false, expr.kv.val.bool);
     }
@@ -88,7 +88,7 @@ test "kv with bool val" {
 
 test "kv with comments" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocr = gpa.allocator();
+    const allocator = gpa.allocator();
     var parser = Parser.init(
         \\
         \\ # comment
@@ -99,14 +99,14 @@ test "kv with comments" {
         \\faux=false #comment
     );
     {
-        var expr = parser.nextExpr(allocr).ok.?;
-        defer expr.deinit(allocr);
+        var expr = parser.nextExpr(allocator).ok.?;
+        defer expr.deinit(allocator);
         try std.testing.expectEqualSlices(u8, "truth", expr.kv.key);
         try std.testing.expectEqual(true, expr.kv.val.bool);
     }
     {
-        var expr = parser.nextExpr(allocr).ok.?;
-        defer expr.deinit(allocr);
+        var expr = parser.nextExpr(allocator).ok.?;
+        defer expr.deinit(allocator);
         try std.testing.expectEqualSlices(u8, "faux", expr.kv.key);
         try std.testing.expectEqual(false, expr.kv.val.bool);
     }
@@ -114,13 +114,13 @@ test "kv with comments" {
 
 test "kv with esc seq in string val" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocr = gpa.allocator();
+    const allocator = gpa.allocator();
     var parser = Parser.init(
         \\key="\"val\""
     );
     {
-        var expr = parser.nextExpr(allocr).ok.?;
-        defer expr.deinit(allocr);
+        var expr = parser.nextExpr(allocator).ok.?;
+        defer expr.deinit(allocator);
         try std.testing.expectEqualSlices(u8, "key", expr.kv.key);
         try std.testing.expectEqualSlices(u8, "\"val\"", expr.kv.val.string.items);
     }
@@ -128,13 +128,13 @@ test "kv with esc seq in string val" {
 
 test "kv with single-line multiline string" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocr = gpa.allocator();
+    const allocator = gpa.allocator();
     var parser = Parser.init(
         \\key=\\a
     );
     {
-        var expr = parser.nextExpr(allocr).ok.?;
-        defer expr.deinit(allocr);
+        var expr = parser.nextExpr(allocator).ok.?;
+        defer expr.deinit(allocator);
         try std.testing.expectEqualSlices(u8, "key", expr.kv.key);
         try std.testing.expectEqualSlices(u8, "a", expr.kv.val.string.items);
     }
@@ -142,14 +142,14 @@ test "kv with single-line multiline string" {
 
 test "kv with multiline string" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocr = gpa.allocator();
+    const allocator = gpa.allocator();
     var parser = Parser.init(
         \\key=\\a
         \\\\b
     );
     {
-        var expr = parser.nextExpr(allocr).ok.?;
-        defer expr.deinit(allocr);
+        var expr = parser.nextExpr(allocator).ok.?;
+        defer expr.deinit(allocator);
         try std.testing.expectEqualSlices(u8, "key", expr.kv.key);
         try std.testing.expectEqualSlices(u8, "a\nb", expr.kv.val.string.items);
     }

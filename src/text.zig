@@ -103,7 +103,7 @@ pub const TextHandler = struct {
 
     file: ?std.fs.File = null,
 
-    /// Allocated by E.allocr
+    /// Allocated by E.allocator
     file_path: str.StringUnmanaged = .{},
 
     /// Buffer of characters. Logical text buffer is then:
@@ -175,9 +175,9 @@ pub const TextHandler = struct {
             if (self.file != null) {
                 self.file.?.close();
             }
-            self.file_path.clearAndFree(E.allocr);
-            try self.file_path.appendSlice(E.allocr, args.file_path);
-            switch (self.highlight.loadTokenTypesForFile(self, E.allocr, &E.conf)) {
+            self.file_path.clearAndFree(E.allocator);
+            try self.file_path.appendSlice(E.allocator, args.file_path);
+            switch (self.highlight.loadTokenTypesForFile(self, E.allocator, &E.conf)) {
                 .ok => {},
                 .err => |*err| {
                     try E.showConfigError(err);
@@ -198,11 +198,11 @@ pub const TextHandler = struct {
         }
         self.file = file;
 
-        self.file_path.clearAndFree(E.allocr);
-        try self.file_path.appendSlice(E.allocr, args.file_path);
+        self.file_path.clearAndFree(E.allocator);
+        try self.file_path.appendSlice(E.allocator, args.file_path);
 
         if (flush_buffer) {
-            self.clearBuffersForFile(E.allocr);
+            self.clearBuffersForFile(E.allocator);
 
             const new_buffer = blk: {
                 var ret_buffer = str.String.init(BufferAllocator);
@@ -216,22 +216,22 @@ pub const TextHandler = struct {
             };
 
             // Try to load highlighting first so that indentation is detected
-            switch (self.highlight.loadTokenTypesForFile(self, E.allocr, &E.conf)) {
+            switch (self.highlight.loadTokenTypesForFile(self, E.allocator, &E.conf)) {
                 .ok => {},
                 .err => |*err| {
                     try E.showConfigError(err);
                 },
             }
             self.readLines(E, new_buffer) catch |err| {
-                self.clearBuffersForFile(E.allocr);
+                self.clearBuffersForFile(E.allocator);
                 return err;
             };
             try self.highlightText(E);
         }
     }
 
-    fn clearBuffersForFile(self: *TextHandler, allocr: std.mem.Allocator) void {
-        self.highlight.clear(allocr);
+    fn clearBuffersForFile(self: *TextHandler, allocator: std.mem.Allocator) void {
+        self.highlight.clear(allocator);
         self.cursor = .{};
         self.scroll = .{};
         self.markers = null;
@@ -1129,8 +1129,8 @@ pub const TextHandler = struct {
             self.lineinfo.increaseOffsets(first_row_after_insidx, @intCast(slice.len));
         }
 
-        var newlines_allocr = std.heap.stackFallback(16, E.allocr);
-        var newlines = std.ArrayList(u32).init(newlines_allocr.get());
+        var newlines_allocator = std.heap.stackFallback(16, E.allocator);
+        var newlines = std.ArrayList(u32).init(newlines_allocator.get());
         defer newlines.deinit();
 
         if (!is_slice_always_inline) {
@@ -1661,11 +1661,11 @@ pub const TextHandler = struct {
         );
 
         var newlines: std.ArrayListUnmanaged(u32) = .{};
-        defer newlines.deinit(E.allocr);
+        defer newlines.deinit(E.allocator);
 
         for (new_buffer, 0..new_buffer.len) |item, idx| {
             if (item == '\n') {
-                try newlines.append(E.allocr, @intCast(replace_start + idx + 1));
+                try newlines.append(E.allocator, @intCast(replace_start + idx + 1));
             }
         }
 
@@ -1726,13 +1726,13 @@ pub const TextHandler = struct {
         string: []const u8,
         regex: Expr,
 
-        pub fn deinit(self: *ReplaceNeedle, allocr: std.mem.Allocator) void {
+        pub fn deinit(self: *ReplaceNeedle, allocator: std.mem.Allocator) void {
             switch (self.*) {
                 .string => |needle| {
-                    allocr.free(needle);
+                    allocator.free(needle);
                 },
                 .regex => |*regex| {
-                    regex.deinit(allocr);
+                    regex.deinit(allocator);
                 },
             }
         }
@@ -1762,7 +1762,7 @@ pub const TextHandler = struct {
 
     pub fn replaceAllMarked(self: *TextHandler, E: *Editor, needle: ReplaceNeedle, replacement: []const u8) !usize {
         var markers = &self.markers.?;
-        var replaced = str.String.init(E.allocr);
+        var replaced = str.String.init(E.allocator);
         defer replaced.deinit();
 
         // TODO: replace all within gap buffer
@@ -1808,7 +1808,7 @@ pub const TextHandler = struct {
             markers.end = self.getRowOffsetEnd(markers.start_cur.row);
         }
 
-        var indented = str.String.init(E.allocr);
+        var indented = str.String.init(E.allocator);
         defer indented.deinit();
         for (0..@intCast(E.conf.tab_size)) |_| {
             try indented.append(' ');
@@ -1856,7 +1856,7 @@ pub const TextHandler = struct {
             markers.end = self.getRowOffsetEnd(markers.start_cur.row);
         }
 
-        var dedented = str.String.init(E.allocr);
+        var dedented = str.String.init(E.allocator);
         defer dedented.deinit();
 
         var iter = self.iterate(self.lineinfo.getOffset(markers.start_cur.row));
@@ -1981,7 +1981,7 @@ pub const TextHandler = struct {
         const n_copied = markers.end - markers.start;
         if (n_copied > 0) {
             if (E.conf.use_native_clipboard) {
-                if (clipboard.write(E.allocr, self.buffer.items[markers.start..markers.end])) |_| {
+                if (clipboard.write(E.allocator, self.buffer.items[markers.start..markers.end])) |_| {
                     return;
                 } else |_| {}
             }
@@ -1992,8 +1992,8 @@ pub const TextHandler = struct {
 
     pub fn paste(self: *TextHandler, E: *Editor) !void {
         if (E.conf.use_native_clipboard) {
-            if (try clipboard.read(E.allocr)) |native_clip| {
-                defer E.allocr.free(native_clip);
+            if (try clipboard.read(E.allocator)) |native_clip| {
+                defer E.allocator.free(native_clip);
                 try self.insertSlice(E, native_clip);
                 return;
             }
@@ -2004,7 +2004,7 @@ pub const TextHandler = struct {
     }
 
     pub fn duplicateLine(self: *TextHandler, E: *Editor) !void {
-        var line = str.String.init(E.allocr);
+        var line = str.String.init(E.allocator);
         defer line.deinit();
         try line.append('\n');
         const offset_start: u32 = self.lineinfo.getOffset(self.cursor.row);
@@ -2064,7 +2064,7 @@ pub const TextHandler = struct {
         if (self.getLogicalLen() >= E.conf.large_file_limit) {
             return;
         }
-        return self.highlight.runText(self, E.allocr);
+        return self.highlight.runText(self, E.allocator);
     }
 
     pub fn highlightFrom(
@@ -2079,7 +2079,7 @@ pub const TextHandler = struct {
         if (self.getLogicalLen() >= E.conf.large_file_limit) {
             return;
         }
-        return self.highlight.runFrom(self, E.allocr, changed_region_start, changed_region_end, shift, is_insert, line_start);
+        return self.highlight.runFrom(self, E.allocator, changed_region_start, changed_region_end, shift, is_insert, line_start);
     }
 
     // Undo

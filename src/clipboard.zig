@@ -22,10 +22,10 @@ fn getWhichProtocolLinux() LinuxProtocol {
     return .Unknown;
 }
 
-pub fn read(allocr: std.mem.Allocator) !?[]u8 {
+pub fn read(allocator: std.mem.Allocator) !?[]u8 {
     switch (builtin.os.tag) {
         inline .linux => {
-            return readLinux(allocr);
+            return readLinux(allocator);
         },
         else => {
             return null;
@@ -33,7 +33,7 @@ pub fn read(allocr: std.mem.Allocator) !?[]u8 {
     }
 }
 
-fn readLinux(allocr: std.mem.Allocator) !?[]u8 {
+fn readLinux(allocator: std.mem.Allocator) !?[]u8 {
     const argv: []const []const u8 = switch (getWhichProtocolLinux()) {
         .Wayland => &.{"wl-paste"},
         .X11 => &.{ "xclip", "-selection", "clipboard", "-o" },
@@ -42,24 +42,24 @@ fn readLinux(allocr: std.mem.Allocator) !?[]u8 {
         },
     };
     const proc = try std.process.Child.run(.{
-        .allocator = allocr,
+        .allocator = allocator,
         .argv = argv,
     });
     errdefer {
         _ = proc.kill();
     }
-    defer allocr.free(proc.stderr);
+    defer allocator.free(proc.stderr);
     if (proc.stdout.len == 0) {
-        defer allocr.free(proc.stdout);
+        defer allocator.free(proc.stdout);
         return null;
     }
     return proc.stdout;
 }
 
-pub fn write(allocr: std.mem.Allocator, buf: []const u8) !void {
+pub fn write(allocator: std.mem.Allocator, buf: []const u8) !void {
     switch (builtin.os.tag) {
         inline .linux => {
-            return writeLinux(allocr, buf);
+            return writeLinux(allocator, buf);
         },
         else => {
             return;
@@ -67,7 +67,7 @@ pub fn write(allocr: std.mem.Allocator, buf: []const u8) !void {
     }
 }
 
-fn writeLinux(allocr: std.mem.Allocator, buf: []const u8) !void {
+fn writeLinux(allocator: std.mem.Allocator, buf: []const u8) !void {
     const argv: []const []const u8 = switch (getWhichProtocolLinux()) {
         .Wayland => &.{"wl-copy"},
         .X11 => &.{ "xclip", "-selection", "clipboard" },
@@ -77,7 +77,7 @@ fn writeLinux(allocr: std.mem.Allocator, buf: []const u8) !void {
     };
     var proc = std.process.Child.init(
         argv,
-        allocr,
+        allocator,
     );
     proc.stdin_behavior = .Pipe;
     proc.stdout_behavior = .Close;

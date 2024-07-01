@@ -43,27 +43,27 @@ pub const ConfigError = struct {
     pos: ?usize = null,
     location: Location = .not_loaded,
 
-    pub fn deinit(self: *ConfigError, allocr: std.mem.Allocator) void {
+    pub fn deinit(self: *ConfigError, allocator: std.mem.Allocator) void {
         switch (self.location) {
             .highlight => |v| {
-                allocr.free(v);
+                allocator.free(v);
             },
             else => {},
         }
     }
 
-    pub fn toString(self: *const ConfigError, allocr: std.mem.Allocator, args: struct {
+    pub fn toString(self: *const ConfigError, allocator: std.mem.Allocator, args: struct {
         main_path: []const u8 = "",
     }) ![]u8 {
         switch (self.location) {
             .not_loaded => {
-                return std.fmt.allocPrint(allocr, "Unable to read config file: {}", .{self.type});
+                return std.fmt.allocPrint(allocator, "Unable to read config file: {}", .{self.type});
             },
             .main => {
-                return std.fmt.allocPrint(allocr, "Unable to read config file <{s}:+{}>: {}", .{ args.main_path, self.pos orelse 0, self.type });
+                return std.fmt.allocPrint(allocator, "Unable to read config file <{s}:+{}>: {}", .{ args.main_path, self.pos orelse 0, self.type });
             },
             .highlight => |path| {
-                return std.fmt.allocPrint(allocr, "Unable to read config file <{s}:+{}>: {}", .{ path, self.pos.?, self.type });
+                return std.fmt.allocPrint(allocator, "Unable to read config file <{s}:+{}>: {}", .{ path, self.pos.?, self.type });
             },
         }
     }
@@ -82,12 +82,12 @@ pub const HighlightType = struct {
     flags: patterns.Expr.Flags,
     promote_types: std.ArrayListUnmanaged(PromoteType),
 
-    pub fn deinit(self: *Highlight, allocr: std.mem.Allocator) void {
-        allocr.free(self.name);
+    pub fn deinit(self: *Highlight, allocator: std.mem.Allocator) void {
+        allocator.free(self.name);
         if (self.pattern) |pattern| {
-            allocr.free(pattern);
+            allocator.free(pattern);
         }
-        self.promote_types.deinit(allocr);
+        self.promote_types.deinit(allocator);
     }
 };
 
@@ -96,11 +96,11 @@ pub const PromoteType = struct {
     /// Must be sorted
     matches: [][]u8,
 
-    fn deinit(self: *PromoteType, allocr: std.mem.Allocator) void {
+    fn deinit(self: *PromoteType, allocator: std.mem.Allocator) void {
         for (self.matches) |match| {
-            allocr.free(match);
+            allocator.free(match);
         }
-        allocr.free(self.matches);
+        allocator.free(self.matches);
     }
 };
 
@@ -110,12 +110,12 @@ pub const Highlight = struct {
     tab_size: ?u32 = null,
     use_tabs: ?bool = null,
 
-    fn deinit(self: *Highlight, allocr: std.mem.Allocator) void {
+    fn deinit(self: *Highlight, allocator: std.mem.Allocator) void {
         for (self.tokens.items) |*token| {
-            token.deinit(allocr);
+            token.deinit(allocator);
         }
-        self.tokens.deinit(allocr);
-        self.name_to_token.deinit(allocr);
+        self.tokens.deinit(allocator);
+        self.name_to_token.deinit(allocator);
     }
 };
 
@@ -127,14 +127,14 @@ const HighlightDecl = struct {
     tab_size: ?u32 = null,
     use_tabs: ?bool = null,
 
-    fn deinit(self: *HighlightDecl, allocr: std.mem.Allocator) void {
+    fn deinit(self: *HighlightDecl, allocator: std.mem.Allocator) void {
         if (self.path) |s| {
-            allocr.free(s);
+            allocator.free(s);
         }
         for (self.extension.items) |ext| {
-            allocr.free(ext);
+            allocator.free(ext);
         }
-        self.extension.deinit(allocr);
+        self.extension.deinit(allocator);
     }
 };
 
@@ -143,8 +143,8 @@ const HighlightClass = struct {
     color: ?u32 = null,
     deco: editor.Editor.ColorCode.Decoration = .{},
 
-    fn deinit(self: *HighlightClass, allocr: std.mem.Allocator) void {
-        allocr.free(self.name);
+    fn deinit(self: *HighlightClass, allocator: std.mem.Allocator) void {
+        allocator.free(self.name);
     }
 };
 
@@ -203,12 +203,12 @@ const REGULAR_CONFIG_FIELDS = [_]ConfigField{
 
 // methods
 
-fn reset(self: *Reader, allocr: std.mem.Allocator) void {
+fn reset(self: *Reader, allocator: std.mem.Allocator) void {
     for (self.highlights.items) |*highlight| {
-        highlight.deinit(allocr);
+        highlight.deinit(allocator);
     }
-    self.highlights.clearAndFree(allocr);
-    self.highlights_ext_to_idx.clearAndFree(allocr);
+    self.highlights.clearAndFree(allocator);
+    self.highlights_ext_to_idx.clearAndFree(allocator);
     self.* = .{};
 }
 
@@ -255,43 +255,43 @@ fn getConfigDir() OpenDirError!std.fs.Dir {
 }
 
 fn getConfigFile(
-    allocr: std.mem.Allocator,
+    allocator: std.mem.Allocator,
     config_dir: std.fs.Dir,
     path: []const u8,
 ) std.fs.Dir.RealPathAllocError![]u8 {
-    return config_dir.realpathAlloc(allocr, path);
+    return config_dir.realpathAlloc(allocator, path);
 }
 
 const OpenWithoutParsingResult = struct {
     source: []u8,
 };
 
-fn openWithoutParsing(self: *Reader, allocr: std.mem.Allocator) ConfigError.Type!OpenWithoutParsingResult {
+fn openWithoutParsing(self: *Reader, allocator: std.mem.Allocator) ConfigError.Type!OpenWithoutParsingResult {
     if (self.config_dir == null) {
         self.config_dir = try Reader.getConfigDir();
     }
 
-    const config_filepath: []u8 = try Reader.getConfigFile(allocr, self.config_dir.?, CONFIG_FILENAME);
+    const config_filepath: []u8 = try Reader.getConfigFile(allocator, self.config_dir.?, CONFIG_FILENAME);
     self.config_filepath = config_filepath;
 
     const file = try std.fs.openFileAbsolute(self.config_filepath.?, .{ .mode = .read_only });
     defer file.close();
 
-    const source = try file.readToEndAlloc(allocr, 1 << 24);
+    const source = try file.readToEndAlloc(allocator, 1 << 24);
     return .{
         .source = source,
     };
 }
 
-pub fn open(self: *Reader, allocr: std.mem.Allocator) ConfigResult {
-    const res = self.openWithoutParsing(allocr) catch |err| {
+pub fn open(self: *Reader, allocator: std.mem.Allocator) ConfigResult {
+    const res = self.openWithoutParsing(allocator) catch |err| {
         return .{
             .err = .{
                 .type = err,
             },
         };
     };
-    switch (self.parse(allocr, res.source)) {
+    switch (self.parse(allocator, res.source)) {
         .ok => {
             return .{
                 .ok = {},
@@ -308,14 +308,14 @@ pub fn open(self: *Reader, allocr: std.mem.Allocator) ConfigResult {
 const ParserState = struct {
     config_section: ConfigSection = .global,
     highlight_decls: std.ArrayListUnmanaged(HighlightDecl) = .{},
-    /// Must be E.allocr
-    allocr: std.mem.Allocator,
+    /// Must be E.allocator
+    allocator: std.mem.Allocator,
 
     fn deinit(self: *ParserState) void {
         for (self.highlight_decls.items) |*highlight| {
-            highlight.deinit(self.allocr);
+            highlight.deinit(self.allocator);
         }
-        self.highlight_decls.deinit(self.allocr);
+        self.highlight_decls.deinit(self.allocator);
     }
 };
 
@@ -349,15 +349,15 @@ fn parseInner(self: *Reader, state: *ParserState, expr: *parser.Expr) !void {
                         if (self.use_file_opener != null) {
                             return error.DuplicateKey;
                         }
-                        var use_file_opener = std.ArrayList([]u8).init(state.allocr);
+                        var use_file_opener = std.ArrayList([]u8).init(state.allocator);
                         errdefer {
                             for (use_file_opener.items) |item| {
-                                state.allocr.free(item);
+                                state.allocator.free(item);
                             }
                             use_file_opener.deinit();
                         }
                         for (val_arr) |val| {
-                            try use_file_opener.append(try state.allocr.dupe(u8, val.getOpt([]const u8) orelse {
+                            try use_file_opener.append(try state.allocator.dupe(u8, val.getOpt([]const u8) orelse {
                                 return error.InvalidKey;
                             }));
                         }
@@ -378,20 +378,20 @@ fn parseInner(self: *Reader, state: *ParserState, expr: *parser.Expr) !void {
                         if (decl.path != null) {
                             return error.DuplicateKey;
                         }
-                        decl.path = try state.allocr.dupe(u8, s);
+                        decl.path = try state.allocator.dupe(u8, s);
                     } else if (std.mem.eql(u8, kv.key, "extension")) {
                         if (kv.val.getOpt([]const u8)) |s| {
-                            const ext = try state.allocr.dupe(u8, s);
-                            try decl.extension.append(state.allocr, ext);
-                            const old = try self.highlights_ext_to_idx.fetchPut(state.allocr, ext, decl_idx);
+                            const ext = try state.allocator.dupe(u8, s);
+                            try decl.extension.append(state.allocator, ext);
+                            const old = try self.highlights_ext_to_idx.fetchPut(state.allocator, ext, decl_idx);
                             if (old != null) {
                                 return error.DuplicateKey;
                             }
                         } else if (kv.val.getOpt([]parser.Value)) |array| {
                             for (array) |val| {
-                                const ext = try state.allocr.dupe(u8, try val.getErr([]const u8));
-                                try decl.extension.append(state.allocr, ext);
-                                const old = try self.highlights_ext_to_idx.fetchPut(state.allocr, ext, decl_idx);
+                                const ext = try state.allocator.dupe(u8, try val.getErr([]const u8));
+                                try decl.extension.append(state.allocator, ext);
+                                const old = try self.highlights_ext_to_idx.fetchPut(state.allocator, ext, decl_idx);
                                 if (old != null) {
                                     return error.DuplicateKey;
                                 }
@@ -444,20 +444,20 @@ fn parseInner(self: *Reader, state: *ParserState, expr: *parser.Expr) !void {
                 state.config_section = .{
                     .highlight = state.highlight_decls.items.len,
                 };
-                try state.highlight_decls.append(state.allocr, .{});
+                try state.highlight_decls.append(state.allocator, .{});
             } else if (splitPrefix(table_section, "hl_class.")) |hl_class_name| {
                 if (hl_class_name.len == 0) {
                     return error.InvalidSection;
                 }
                 const hl_class_id = self.hl_classes.items.len;
                 const hl_class: HighlightClass = .{
-                    .name = try state.allocr.dupe(u8, hl_class_name),
+                    .name = try state.allocator.dupe(u8, hl_class_name),
                 };
                 state.config_section = .{
                     .hl_class = hl_class_id,
                 };
-                try self.hl_classes.append(state.allocr, hl_class);
-                const old = try self.hl_classes_by_name.fetchPut(state.allocr, hl_class.name, hl_class_id);
+                try self.hl_classes.append(state.allocator, hl_class);
+                const old = try self.hl_classes_by_name.fetchPut(state.allocator, hl_class.name, hl_class_id);
                 if (old != null) {
                     return error.DuplicateKey;
                 }
@@ -470,23 +470,23 @@ fn parseInner(self: *Reader, state: *ParserState, expr: *parser.Expr) !void {
 
 const HighlightWriter = struct {
     reader: *Reader,
-    allocr: std.mem.Allocator,
+    allocator: std.mem.Allocator,
 
     highlight_type: ?HighlightType = null,
     highlight: Highlight = .{},
 
     fn deinit(self: *HighlightWriter) void {
         if (self.highlight_type != null) {
-            self.highlight_type.?.deinit(self.allocr);
+            self.highlight_type.?.deinit(self.allocator);
         }
-        self.highlight.deinit(self.allocr);
+        self.highlight.deinit(self.allocator);
     }
 
     fn beginHighlightType(self: *HighlightWriter, name_in: []const u8) !void {
         if (self.highlight_type != null) {
             @panic("highlight_type is not null");
         }
-        const name = try self.allocr.dupe(u8, name_in);
+        const name = try self.allocator.dupe(u8, name_in);
         self.highlight_type = .{
             .name = name,
             .pattern = null,
@@ -501,7 +501,7 @@ const HighlightWriter = struct {
         if (self.highlight_type.?.pattern != null) {
             return error.DuplicateKey;
         }
-        self.highlight_type.?.pattern = try self.allocr.dupe(u8, pattern);
+        self.highlight_type.?.pattern = try self.allocator.dupe(u8, pattern);
     }
 
     fn setFlags(self: *HighlightWriter, flags: []const u8) !void {
@@ -519,11 +519,11 @@ const HighlightWriter = struct {
         self.highlight_type = null;
 
         const tt_idx = self.highlight.tokens.items.len;
-        if (try self.highlight.name_to_token.fetchPut(self.allocr, highlight_type.name, @intCast(tt_idx)) != null) {
+        if (try self.highlight.name_to_token.fetchPut(self.allocator, highlight_type.name, @intCast(tt_idx)) != null) {
             return error.DuplicateKey;
         }
 
-        try self.highlight.tokens.append(self.allocr, highlight_type);
+        try self.highlight.tokens.append(self.allocator, highlight_type);
     }
 };
 
@@ -539,7 +539,7 @@ fn parseTabSize(int: i64) u32 {
 
 pub fn parseHighlight(
     self: *Reader,
-    allocr: std.mem.Allocator,
+    allocator: std.mem.Allocator,
     highlight_id: usize,
 ) ConfigResult {
     if (self.highlights.items[highlight_id] != null) {
@@ -547,7 +547,7 @@ pub fn parseHighlight(
     }
 
     const decl = &self.highlight_decls.items[highlight_id];
-    const highlight_filepath: []u8 = Reader.getConfigFile(allocr, self.config_dir.?, decl.path orelse {
+    const highlight_filepath: []u8 = Reader.getConfigFile(allocator, self.config_dir.?, decl.path orelse {
         return .{
             .err = .{
                 .type = error.HighlightLoadError,
@@ -566,7 +566,7 @@ pub fn parseHighlight(
             },
         };
     };
-    defer allocr.free(highlight_filepath);
+    defer allocator.free(highlight_filepath);
 
     const file = std.fs.openFileAbsolute(highlight_filepath, .{ .mode = .read_only }) catch |err| {
         return .{
@@ -579,7 +579,7 @@ pub fn parseHighlight(
     };
     defer file.close();
 
-    const source = file.readToEndAlloc(allocr, 1 << 24) catch |err| {
+    const source = file.readToEndAlloc(allocator, 1 << 24) catch |err| {
         return .{
             .err = .{
                 .type = err,
@@ -588,13 +588,13 @@ pub fn parseHighlight(
             },
         };
     };
-    defer allocr.free(source);
+    defer allocator.free(source);
 
     var P = parser.Parser.init(source);
 
     var writer: HighlightWriter = .{
         .reader = self,
-        .allocr = allocr,
+        .allocator = allocator,
         .highlight = .{
             .tab_size = decl.tab_size,
             .use_tabs = decl.use_tabs,
@@ -605,7 +605,7 @@ pub fn parseHighlight(
 
     while (true) {
         expr_start = P.pos;
-        var expr = switch (P.nextExpr(allocr)) {
+        var expr = switch (P.nextExpr(allocator)) {
             .ok => |val| val,
             .err => |err| {
                 return .{ .err = .{
@@ -615,7 +615,7 @@ pub fn parseHighlight(
                 } };
             },
         } orelse break;
-        defer expr.deinit(allocr);
+        defer expr.deinit(allocator);
 
         parseHighlightInner(&writer, &expr) catch |err| {
             return .{ .err = .{
@@ -636,7 +636,7 @@ pub fn parseHighlight(
         };
     }
 
-    self.highlights.items[highlight_id] = HighlightRc.create(allocr, &writer.highlight) catch |err| {
+    self.highlights.items[highlight_id] = HighlightRc.create(allocator, &writer.highlight) catch |err| {
         return .{ .err = .{
             .type = err,
             .pos = 0,
@@ -687,10 +687,10 @@ fn parseHighlightInner(writer: *HighlightWriter, expr: *const parser.Expr) !void
                 const to_typeid = writer.highlight.name_to_token.get(promote_key) orelse {
                     return error.InvalidKey;
                 };
-                var promote_strs = std.ArrayList([]u8).init(writer.allocr);
+                var promote_strs = std.ArrayList([]u8).init(writer.allocator);
                 errdefer {
                     for (promote_strs.items) |item| {
-                        writer.allocr.free(item);
+                        writer.allocator.free(item);
                     }
                     promote_strs.deinit();
                 }
@@ -698,12 +698,12 @@ fn parseHighlightInner(writer: *HighlightWriter, expr: *const parser.Expr) !void
                     return error.InvalidKey;
                 };
                 for (val_arr) |val| {
-                    try promote_strs.append(try writer.allocr.dupe(u8, val.getOpt([]const u8) orelse {
+                    try promote_strs.append(try writer.allocator.dupe(u8, val.getOpt([]const u8) orelse {
                         return error.InvalidKey;
                     }));
                 }
                 std.mem.sort([]const u8, promote_strs.items, {}, utils.lessThanStr);
-                try writer.highlight_type.?.promote_types.append(writer.allocr, .{
+                try writer.highlight_type.?.promote_types.append(writer.allocator, .{
                     .to_typeid = to_typeid,
                     .matches = try promote_strs.toOwnedSlice(),
                 });
@@ -723,16 +723,16 @@ fn parseHighlightInner(writer: *HighlightWriter, expr: *const parser.Expr) !void
     }
 }
 
-fn parse(self: *Reader, allocr: std.mem.Allocator, source: []const u8) ConfigResult {
+fn parse(self: *Reader, allocator: std.mem.Allocator, source: []const u8) ConfigResult {
     var P = parser.Parser.init(source);
     var state: ParserState = .{
-        .allocr = allocr,
+        .allocator = allocator,
     };
     defer state.deinit();
 
     while (true) {
         const expr_start = P.pos;
-        var expr = switch (P.nextExpr(allocr)) {
+        var expr = switch (P.nextExpr(allocator)) {
             .ok => |val| val,
             .err => |err| {
                 return .{ .err = .{
@@ -742,7 +742,7 @@ fn parse(self: *Reader, allocr: std.mem.Allocator, source: []const u8) ConfigRes
                 } };
             },
         } orelse break;
-        defer expr.deinit(allocr);
+        defer expr.deinit(allocator);
         self.parseInner(&state, &expr) catch |err| {
             return .{ .err = .{
                 .type = err,
@@ -754,7 +754,7 @@ fn parse(self: *Reader, allocr: std.mem.Allocator, source: []const u8) ConfigRes
 
     self.highlight_decls = state.highlight_decls;
     state.highlight_decls = .{};
-    self.highlights.appendNTimes(allocr, null, self.highlight_decls.items.len) catch |err| {
+    self.highlights.appendNTimes(allocator, null, self.highlight_decls.items.len) catch |err| {
         return .{ .err = .{
             .type = err,
         } };

@@ -16,16 +16,16 @@ pub const Value = union(enum) {
     bool: bool,
     array: []Value,
 
-    fn deinit(self: *Value, allocr: std.mem.Allocator) void {
+    fn deinit(self: *Value, allocator: std.mem.Allocator) void {
         switch (self.*) {
             .string => |*string| {
-                string.deinit(allocr);
+                string.deinit(allocator);
             },
             .array => |array| {
                 for (array) |*v| {
-                    v.deinit(allocr);
+                    v.deinit(allocator);
                 }
-                allocr.free(array);
+                allocator.free(array);
             },
             else => {},
         }
@@ -96,8 +96,8 @@ pub const KV = struct {
     key: []const u8,
     val: Value,
 
-    fn deinit(self: *KV, allocr: std.mem.Allocator) void {
-        self.val.deinit(allocr);
+    fn deinit(self: *KV, allocator: std.mem.Allocator) void {
+        self.val.deinit(allocator);
     }
 
     pub fn takeValue(self: *KV) Value {
@@ -126,10 +126,10 @@ pub const Expr = union(enum) {
     section: []const u8,
     table_section: []const u8,
 
-    pub fn deinit(self: *Expr, allocr: std.mem.Allocator) void {
+    pub fn deinit(self: *Expr, allocator: std.mem.Allocator) void {
         switch (self.*) {
             .kv => |*kv| {
-                kv.deinit(allocr);
+                kv.deinit(allocator);
             },
             .section => {},
             .table_section => {},
@@ -265,7 +265,7 @@ pub const Parser = struct {
         }
     }
 
-    pub fn nextExpr(self: *Parser, allocr: std.mem.Allocator) ExprOrNullResult {
+    pub fn nextExpr(self: *Parser, allocator: std.mem.Allocator) ExprOrNullResult {
         // expr = ws* (comment newline)* keyval ws* comment? newline+
         self.skipSpaceBeforeExpr();
         if (self.peek()) |char| {
@@ -353,7 +353,7 @@ pub const Parser = struct {
 
                 self.skipSpace();
 
-                var val = self.nextValue(allocr);
+                var val = self.nextValue(allocator);
                 if (val.isErr()) {
                     return .{
                         .err = val.err,
@@ -389,7 +389,7 @@ pub const Parser = struct {
         };
     }
 
-    fn nextValue(self: *Parser, allocr: std.mem.Allocator) ValueResult {
+    fn nextValue(self: *Parser, allocator: std.mem.Allocator) ValueResult {
         if (self.peek()) |char| {
             if (self.matchStr("true")) {
                 return .{
@@ -416,18 +416,18 @@ pub const Parser = struct {
                 },
                 '"' => {
                     self.pos += 1;
-                    return self.parseStr(allocr, start_pos);
+                    return self.parseStr(allocator, start_pos);
                 },
                 '\\' => {
                     self.pos += 1;
                     if (self.peek() == '\\') {
                         self.pos += 1;
-                        return self.parseMultilineStr(allocr, start_pos);
+                        return self.parseMultilineStr(allocator, start_pos);
                     }
                 },
                 '[' => {
                     self.pos += 1;
-                    return self.parseArray(allocr, start_pos);
+                    return self.parseArray(allocator, start_pos);
                 },
                 else => {},
             }
@@ -517,9 +517,9 @@ pub const Parser = struct {
         };
     }
 
-    fn parseStrInner(self: *Parser, allocr: std.mem.Allocator, start_pos: usize) !ValueResult {
+    fn parseStrInner(self: *Parser, allocator: std.mem.Allocator, start_pos: usize) !ValueResult {
         var string: str.StringUnmanaged = .{};
-        errdefer string.deinit(allocr);
+        errdefer string.deinit(allocator);
         while (self.peek()) |char| {
             switch (char) {
                 '"' => {
@@ -532,11 +532,11 @@ pub const Parser = struct {
                         switch (esc) {
                             '\\' => {
                                 self.pos += 1;
-                                try string.append(allocr, '\\');
+                                try string.append(allocator, '\\');
                             },
                             '"' => {
                                 self.pos += 1;
-                                try string.append(allocr, '"');
+                                try string.append(allocator, '"');
                             },
                             else => {
                                 return .{
@@ -558,7 +558,7 @@ pub const Parser = struct {
                 },
                 else => {
                     self.pos += 1;
-                    try string.append(allocr, char);
+                    try string.append(allocator, char);
                 },
             }
         }
@@ -569,8 +569,8 @@ pub const Parser = struct {
         };
     }
 
-    fn parseStr(self: *Parser, allocr: std.mem.Allocator, start_pos: usize) ValueResult {
-        if (self.parseStrInner(allocr, start_pos)) |result| {
+    fn parseStr(self: *Parser, allocator: std.mem.Allocator, start_pos: usize) ValueResult {
+        if (self.parseStrInner(allocator, start_pos)) |result| {
             return result;
         } else |err| {
             switch (err) {
@@ -586,9 +586,9 @@ pub const Parser = struct {
         }
     }
 
-    fn parseMultilineStrInner(self: *Parser, allocr: std.mem.Allocator) !ValueResult {
+    fn parseMultilineStrInner(self: *Parser, allocator: std.mem.Allocator) !ValueResult {
         var string: str.StringUnmanaged = .{};
-        errdefer string.deinit(allocr);
+        errdefer string.deinit(allocator);
         while (self.peek()) |char| {
             switch (char) {
                 '\n' => {
@@ -599,7 +599,7 @@ pub const Parser = struct {
                         self.pos += 1;
                         if (self.peek() == '\\') {
                             self.pos += 1;
-                            try string.append(allocr, '\n');
+                            try string.append(allocator, '\n');
                             continue;
                         }
                     }
@@ -608,7 +608,7 @@ pub const Parser = struct {
                 },
                 else => {
                     self.pos += 1;
-                    try string.append(allocr, char);
+                    try string.append(allocator, char);
                 },
             }
         }
@@ -619,8 +619,8 @@ pub const Parser = struct {
         };
     }
 
-    fn parseMultilineStr(self: *Parser, allocr: std.mem.Allocator, start_pos: usize) ValueResult {
-        if (self.parseMultilineStrInner(allocr)) |result| {
+    fn parseMultilineStr(self: *Parser, allocator: std.mem.Allocator, start_pos: usize) ValueResult {
+        if (self.parseMultilineStrInner(allocator)) |result| {
             return result;
         } else |err| {
             switch (err) {
@@ -636,15 +636,15 @@ pub const Parser = struct {
         }
     }
 
-    fn parseArrayInner(self: *Parser, allocr: std.mem.Allocator) !ValueResult {
-        var array = std.ArrayList(Value).init(allocr);
+    fn parseArrayInner(self: *Parser, allocator: std.mem.Allocator) !ValueResult {
+        var array = std.ArrayList(Value).init(allocator);
         errdefer array.deinit();
         self.skipSpaceBeforeExpr();
         while (self.peek()) |char| {
             if (char == ']') {
                 break;
             }
-            const value = self.nextValue(allocr);
+            const value = self.nextValue(allocator);
             if (value.isErr()) {
                 return value;
             }
@@ -671,8 +671,8 @@ pub const Parser = struct {
         return .{ .ok = .{ .array = try array.toOwnedSlice() } };
     }
 
-    fn parseArray(self: *Parser, allocr: std.mem.Allocator, start_pos: usize) ValueResult {
-        if (self.parseArrayInner(allocr)) |result| {
+    fn parseArray(self: *Parser, allocator: std.mem.Allocator, start_pos: usize) ValueResult {
+        if (self.parseArrayInner(allocator)) |result| {
             return result;
         } else |err| {
             switch (err) {

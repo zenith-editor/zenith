@@ -96,7 +96,7 @@ fn runFileOpener(self: *editor.Editor, argv: []const []const u8, action: enum { 
         self.setupTerminal() catch {};
     }
 
-    var path_buf = std.ArrayList(u8).init(self.allocr);
+    var path_buf = std.ArrayList(u8).init(self.allocator);
     defer path_buf.deinit();
 
     try tty.run(.{

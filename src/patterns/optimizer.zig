@@ -7,7 +7,7 @@ const std = @import("std");
 const Expr = @import("./expr.zig");
 const Instr = @import("./instr.zig").Instr;
 
-pub fn optimizePrefixString(self: *Expr, allocr: std.mem.Allocator) !void {
+pub fn optimizePrefixString(self: *Expr, allocator: std.mem.Allocator) !void {
     if (self.instrs.items.len < 2) {
         return;
     }
@@ -60,7 +60,7 @@ pub fn optimizePrefixString(self: *Expr, allocr: std.mem.Allocator) !void {
     }
 
     var bytes: std.ArrayListUnmanaged(u8) = .{};
-    errdefer bytes.deinit(allocr);
+    errdefer bytes.deinit(allocator);
 
     for (0..(last_char_instr + 1)) |idx| {
         const instr = &self.instrs.items[idx];
@@ -68,7 +68,7 @@ pub fn optimizePrefixString(self: *Expr, allocr: std.mem.Allocator) !void {
             .char => |char| {
                 var char_bytes: [4]u8 = undefined;
                 const n_bytes = std.unicode.utf8Encode(@intCast(char), &char_bytes) catch unreachable;
-                try bytes.appendSlice(allocr, char_bytes[0..n_bytes]);
+                try bytes.appendSlice(allocator, char_bytes[0..n_bytes]);
             },
             else => {
                 break;
@@ -78,7 +78,7 @@ pub fn optimizePrefixString(self: *Expr, allocr: std.mem.Allocator) !void {
 
     const removed = last_char_instr;
     self.instrs.items[0] = .{
-        .string = try bytes.toOwnedSlice(allocr),
+        .string = try bytes.toOwnedSlice(allocator),
     };
     self.instrs.replaceRangeAssumeCapacity(1, removed, &[_]Instr{});
     for (self.instrs.items[1..]) |*item| {

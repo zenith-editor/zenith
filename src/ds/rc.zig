@@ -17,8 +17,8 @@ pub fn Rc(comptime T: type) type {
 
         inner: *Inner,
 
-        pub fn create(allocr: std.mem.Allocator, data: *T) !Self {
-            const inner = try allocr.create(Inner);
+        pub fn create(allocator: std.mem.Allocator, data: *T) !Self {
+            const inner = try allocator.create(Inner);
             inner.* = .{
                 .count = 1,
                 .data = data.*,
@@ -29,11 +29,11 @@ pub fn Rc(comptime T: type) type {
             };
         }
 
-        pub fn deinit(self: *Self, allocr: std.mem.Allocator) void {
+        pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
             self.inner.count -= 1;
             if (self.inner.count == 0) {
-                self.inner.data.deinit(allocr);
-                allocr.destroy(self.inner);
+                self.inner.data.deinit(allocator);
+                allocator.destroy(self.inner);
             }
             self.* = undefined;
         }

@@ -130,9 +130,9 @@ pub fn main() !void {
 
     sig.registerSignals();
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocr = gpa.allocator();
+    const allocator = gpa.allocator();
 
-    var E = try editor.Editor.create(allocr);
+    var E = try editor.Editor.create(allocator);
 
     if (prog_args.opt_config_dir) |config_dir| {
         const cwd = std.fs.cwd();
@@ -148,7 +148,7 @@ pub fn main() !void {
 
     if (prog_args.opt_opened_file) |opened_file| {
         var opened_file_str: str.StringUnmanaged = .{};
-        try opened_file_str.appendSlice(E.allocr, opened_file);
+        try opened_file_str.appendSlice(E.allocator, opened_file);
         try E.openAtStart(opened_file_str);
     }
 

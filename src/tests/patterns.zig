@@ -9,36 +9,36 @@ const Expr = @import("patterns").Expr;
 
 test "simple one" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocr = gpa.allocator();
-    var expr = try Expr.create(allocr, "asdf", &.{}).asErr();
-    defer expr.deinit(allocr);
+    const allocator = gpa.allocator();
+    var expr = try Expr.create(allocator, "asdf", &.{}).asErr();
+    defer expr.deinit(allocator);
     try std.testing.expectEqual(4, (try expr.checkMatch("asdf", &.{})).pos);
     try std.testing.expectEqual(2, (try expr.checkMatch("as", &.{})).pos);
 }
 
 test "escape" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocr = gpa.allocator();
-    var expr = try Expr.create(allocr, "\\\\", &.{}).asErr();
-    defer expr.deinit(allocr);
+    const allocator = gpa.allocator();
+    var expr = try Expr.create(allocator, "\\\\", &.{}).asErr();
+    defer expr.deinit(allocator);
     try std.testing.expectEqual(1, (try expr.checkMatch("\\", &.{})).pos);
     try std.testing.expectEqual(0, (try expr.checkMatch("a", &.{})).pos);
 }
 
 test "any" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocr = gpa.allocator();
-    var expr = try Expr.create(allocr, "..", &.{}).asErr();
-    defer expr.deinit(allocr);
+    const allocator = gpa.allocator();
+    var expr = try Expr.create(allocator, "..", &.{}).asErr();
+    defer expr.deinit(allocator);
     try std.testing.expectEqual(1, (try expr.checkMatch("a", &.{})).pos);
     try std.testing.expectEqual(2, (try expr.checkMatch("as", &.{})).pos);
 }
 
 test "simple more than one" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocr = gpa.allocator();
-    var expr = try Expr.create(allocr, "a+", &.{}).asErr();
-    defer expr.deinit(allocr);
+    const allocator = gpa.allocator();
+    var expr = try Expr.create(allocator, "a+", &.{}).asErr();
+    defer expr.deinit(allocator);
     try std.testing.expectEqual(1, (try expr.checkMatch("a", &.{})).pos);
     try std.testing.expectEqual(2, (try expr.checkMatch("aa", &.{})).pos);
     try std.testing.expectEqual(1, (try expr.checkMatch("aba", &.{})).pos);
@@ -48,9 +48,9 @@ test "simple more than one" {
 
 test "group more than one" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocr = gpa.allocator();
-    var expr = try Expr.create(allocr, "(ab)+", &.{}).asErr();
-    defer expr.deinit(allocr);
+    const allocator = gpa.allocator();
+    var expr = try Expr.create(allocator, "(ab)+", &.{}).asErr();
+    defer expr.deinit(allocator);
     try std.testing.expectEqual(2, (try expr.checkMatch("ab", &.{})).pos);
     try std.testing.expectEqual(4, (try expr.checkMatch("abab", &.{})).pos);
     try std.testing.expectEqual(0, (try expr.checkMatch("dab", &.{})).pos);
@@ -58,9 +58,9 @@ test "group more than one" {
 
 test "group nested more than one" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocr = gpa.allocator();
-    var expr = try Expr.create(allocr, "(ax+b)+", &.{}).asErr();
-    defer expr.deinit(allocr);
+    const allocator = gpa.allocator();
+    var expr = try Expr.create(allocator, "(ax+b)+", &.{}).asErr();
+    defer expr.deinit(allocator);
     try std.testing.expectEqual(3, (try expr.checkMatch("axb", &.{})).pos);
     try std.testing.expectEqual(6, (try expr.checkMatch("axbaxb", &.{})).pos);
     try std.testing.expectEqual(7, (try expr.checkMatch("axxbaxb", &.{})).pos);
@@ -69,9 +69,9 @@ test "group nested more than one" {
 
 test "simple zero or more" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocr = gpa.allocator();
-    var expr = try Expr.create(allocr, "a*b", &.{}).asErr();
-    defer expr.deinit(allocr);
+    const allocator = gpa.allocator();
+    var expr = try Expr.create(allocator, "a*b", &.{}).asErr();
+    defer expr.deinit(allocator);
     try std.testing.expectEqual(2, (try expr.checkMatch("ab", &.{})).pos);
     try std.testing.expectEqual(3, (try expr.checkMatch("aab", &.{})).pos);
     try std.testing.expectEqual(2, (try expr.checkMatch("aba", &.{})).pos);
@@ -81,9 +81,9 @@ test "simple zero or more" {
 
 test "simple greedy zero or more" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocr = gpa.allocator();
-    var expr = try Expr.create(allocr, "x.*b", &.{}).asErr();
-    defer expr.deinit(allocr);
+    const allocator = gpa.allocator();
+    var expr = try Expr.create(allocator, "x.*b", &.{}).asErr();
+    defer expr.deinit(allocator);
     try std.testing.expectEqual(2, (try expr.checkMatch("xb", &.{})).pos);
     try std.testing.expectEqual(3, (try expr.checkMatch("xab", &.{})).pos);
     try std.testing.expectEqual(4, (try expr.checkMatch("xaab", &.{})).pos);
@@ -92,9 +92,9 @@ test "simple greedy zero or more" {
 
 test "group zero or more" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocr = gpa.allocator();
-    var expr = try Expr.create(allocr, "(ab)*c", &.{}).asErr();
-    defer expr.deinit(allocr);
+    const allocator = gpa.allocator();
+    var expr = try Expr.create(allocator, "(ab)*c", &.{}).asErr();
+    defer expr.deinit(allocator);
     try std.testing.expectEqual(1, (try expr.checkMatch("c", &.{})).pos);
     try std.testing.expectEqual(3, (try expr.checkMatch("abc", &.{})).pos);
     try std.testing.expectEqual(5, (try expr.checkMatch("ababc", &.{})).pos);
@@ -103,9 +103,9 @@ test "group zero or more" {
 
 test "group nested zero or more" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocr = gpa.allocator();
-    var expr = try Expr.create(allocr, "(a(xy)*b)*c", &.{}).asErr();
-    defer expr.deinit(allocr);
+    const allocator = gpa.allocator();
+    var expr = try Expr.create(allocator, "(a(xy)*b)*c", &.{}).asErr();
+    defer expr.deinit(allocator);
     try std.testing.expectEqual(1, (try expr.checkMatch("c", &.{})).pos);
     try std.testing.expectEqual(3, (try expr.checkMatch("abc", &.{})).pos);
     try std.testing.expectEqual(5, (try expr.checkMatch("ababc", &.{})).pos);
@@ -116,9 +116,9 @@ test "group nested zero or more" {
 
 test "simple optional" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocr = gpa.allocator();
-    var expr = try Expr.create(allocr, "a?b", &.{}).asErr();
-    defer expr.deinit(allocr);
+    const allocator = gpa.allocator();
+    var expr = try Expr.create(allocator, "a?b", &.{}).asErr();
+    defer expr.deinit(allocator);
     try std.testing.expectEqual(2, (try expr.checkMatch("ab", &.{})).pos);
     try std.testing.expectEqual(2, (try expr.checkMatch("aba", &.{})).pos);
     try std.testing.expectEqual(0, (try expr.checkMatch("db", &.{})).pos);
@@ -127,9 +127,9 @@ test "simple optional" {
 
 test "group optional" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocr = gpa.allocator();
-    var expr = try Expr.create(allocr, "(ab)?c", &.{}).asErr();
-    defer expr.deinit(allocr);
+    const allocator = gpa.allocator();
+    var expr = try Expr.create(allocator, "(ab)?c", &.{}).asErr();
+    defer expr.deinit(allocator);
     try std.testing.expectEqual(3, (try expr.checkMatch("abc", &.{})).pos);
     try std.testing.expectEqual(1, (try expr.checkMatch("c", &.{})).pos);
     try std.testing.expectEqual(0, (try expr.checkMatch("b", &.{})).pos);
@@ -137,9 +137,9 @@ test "group optional" {
 
 test "group nested optional" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocr = gpa.allocator();
-    var expr = try Expr.create(allocr, "(a(xy)?b)?c", &.{}).asErr();
-    defer expr.deinit(allocr);
+    const allocator = gpa.allocator();
+    var expr = try Expr.create(allocator, "(a(xy)?b)?c", &.{}).asErr();
+    defer expr.deinit(allocator);
     try std.testing.expectEqual(3, (try expr.checkMatch("abc", &.{})).pos);
     try std.testing.expectEqual(5, (try expr.checkMatch("axybc", &.{})).pos);
     try std.testing.expectEqual(0, (try expr.checkMatch("axbc", &.{})).pos);
@@ -149,9 +149,9 @@ test "group nested optional" {
 
 test "simple lazy zero or more" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocr = gpa.allocator();
-    var expr = try Expr.create(allocr, "x.-b", &.{}).asErr();
-    defer expr.deinit(allocr);
+    const allocator = gpa.allocator();
+    var expr = try Expr.create(allocator, "x.-b", &.{}).asErr();
+    defer expr.deinit(allocator);
     try std.testing.expectEqual(2, (try expr.checkMatch("xb", &.{})).pos);
     try std.testing.expectEqual(3, (try expr.checkMatch("xab", &.{})).pos);
     try std.testing.expectEqual(4, (try expr.checkMatch("xaab", &.{})).pos);
@@ -160,9 +160,9 @@ test "simple lazy zero or more" {
 
 test "simple range" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocr = gpa.allocator();
-    var expr = try Expr.create(allocr, "[a-z]+", &.{}).asErr();
-    defer expr.deinit(allocr);
+    const allocator = gpa.allocator();
+    var expr = try Expr.create(allocator, "[a-z]+", &.{}).asErr();
+    defer expr.deinit(allocator);
     try std.testing.expectEqual(2, (try expr.checkMatch("ab0", &.{})).pos);
     try std.testing.expectEqual(3, (try expr.checkMatch("aba0", &.{})).pos);
     try std.testing.expectEqual(2, (try expr.checkMatch("db0", &.{})).pos);
@@ -171,9 +171,9 @@ test "simple range" {
 
 test "simple range chars" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocr = gpa.allocator();
-    var expr = try Expr.create(allocr, "[az]", &.{}).asErr();
-    defer expr.deinit(allocr);
+    const allocator = gpa.allocator();
+    var expr = try Expr.create(allocator, "[az]", &.{}).asErr();
+    defer expr.deinit(allocator);
     try std.testing.expectEqual(1, (try expr.checkMatch("aaa", &.{})).pos);
     try std.testing.expectEqual(1, (try expr.checkMatch("zzz", &.{})).pos);
     try std.testing.expectEqual(0, (try expr.checkMatch("b", &.{})).pos);
@@ -182,11 +182,11 @@ test "simple range chars" {
 
 test "simple range escape" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocr = gpa.allocator();
-    var expr = try Expr.create(allocr, "[\\\\\\n]", &.{
+    const allocator = gpa.allocator();
+    var expr = try Expr.create(allocator, "[\\\\\\n]", &.{
         .is_multiline = true,
     }).asErr();
-    defer expr.deinit(allocr);
+    defer expr.deinit(allocator);
     try std.testing.expectEqual(1, (try expr.checkMatch("\\", &.{})).pos);
     try std.testing.expectEqual(1, (try expr.checkMatch("\n", &.{})).pos);
     try std.testing.expectEqual(0, (try expr.checkMatch("a", &.{})).pos);
@@ -195,18 +195,18 @@ test "simple range escape" {
 
 test "simple range inverse" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocr = gpa.allocator();
-    var expr = try Expr.create(allocr, "[^b]", &.{}).asErr();
-    defer expr.deinit(allocr);
+    const allocator = gpa.allocator();
+    var expr = try Expr.create(allocator, "[^b]", &.{}).asErr();
+    defer expr.deinit(allocator);
     try std.testing.expectEqual(1, (try expr.checkMatch("0", &.{})).pos);
     try std.testing.expectEqual(0, (try expr.checkMatch("b", &.{})).pos);
 }
 
 test "simple range escape inverse" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocr = gpa.allocator();
-    var expr = try Expr.create(allocr, "[^\\\\n]", &.{}).asErr();
-    defer expr.deinit(allocr);
+    const allocator = gpa.allocator();
+    var expr = try Expr.create(allocator, "[^\\\\n]", &.{}).asErr();
+    defer expr.deinit(allocator);
     try std.testing.expectEqual(0, (try expr.checkMatch("\\", &.{})).pos);
     try std.testing.expectEqual(0, (try expr.checkMatch("\n", &.{})).pos);
     try std.testing.expectEqual(1, (try expr.checkMatch("a", &.{})).pos);
@@ -215,9 +215,9 @@ test "simple range escape inverse" {
 
 test "group" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocr = gpa.allocator();
-    var expr = try Expr.create(allocr, "([a-z]*)([A-Z]+)", &.{}).asErr();
-    defer expr.deinit(allocr);
+    const allocator = gpa.allocator();
+    var expr = try Expr.create(allocator, "([a-z]*)([A-Z]+)", &.{}).asErr();
+    defer expr.deinit(allocator);
     var groups = [1]Expr.MatchGroup{.{}} ** 2;
     const opts: Expr.MatchOptions = .{
         .group_out = &groups,
@@ -236,9 +236,9 @@ test "group" {
 
 test "simple alternate" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocr = gpa.allocator();
-    var expr = try Expr.create(allocr, "[a-z]+|[A-Z]+", &.{}).asErr();
-    defer expr.deinit(allocr);
+    const allocator = gpa.allocator();
+    var expr = try Expr.create(allocator, "[a-z]+|[A-Z]+", &.{}).asErr();
+    defer expr.deinit(allocator);
     try std.testing.expectEqual(2, (try expr.checkMatch("ab", &.{})).pos);
     try std.testing.expectEqual(2, (try expr.checkMatch("AB", &.{})).pos);
     try std.testing.expectEqual(1, (try expr.checkMatch("aB", &.{})).pos);
@@ -247,9 +247,9 @@ test "simple alternate" {
 
 test "group alternate" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocr = gpa.allocator();
-    var expr = try Expr.create(allocr, "(a|z)(b|c)", &.{}).asErr();
-    defer expr.deinit(allocr);
+    const allocator = gpa.allocator();
+    var expr = try Expr.create(allocator, "(a|z)(b|c)", &.{}).asErr();
+    defer expr.deinit(allocator);
     try std.testing.expectEqual(2, (try expr.checkMatch("ab", &.{})).pos);
     try std.testing.expectEqual(1, (try expr.checkMatch("az", &.{})).pos);
     try std.testing.expectEqual(2, (try expr.checkMatch("zc", &.{})).pos);
@@ -258,18 +258,18 @@ test "group alternate" {
 
 test "anchor start" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocr = gpa.allocator();
-    var expr = try Expr.create(allocr, "^asdf", &.{}).asErr();
-    defer expr.deinit(allocr);
+    const allocator = gpa.allocator();
+    var expr = try Expr.create(allocator, "^asdf", &.{}).asErr();
+    defer expr.deinit(allocator);
     try std.testing.expectEqual(4, (try expr.checkMatch("asdf", &.{})).pos);
     try std.testing.expectEqual(1, (try expr.checkMatch("aasdf", &.{})).pos);
 }
 
 test "alternate anchor start" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocr = gpa.allocator();
-    var expr = try Expr.create(allocr, "(^|a)b", &.{}).asErr();
-    defer expr.deinit(allocr);
+    const allocator = gpa.allocator();
+    var expr = try Expr.create(allocator, "(^|a)b", &.{}).asErr();
+    defer expr.deinit(allocator);
     {
         const match = try expr.checkMatch("b", &.{});
         try std.testing.expectEqual(1, match.pos);
@@ -284,18 +284,18 @@ test "alternate anchor start" {
 
 test "anchor end" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocr = gpa.allocator();
-    var expr = try Expr.create(allocr, "asdf$", &.{}).asErr();
-    defer expr.deinit(allocr);
+    const allocator = gpa.allocator();
+    var expr = try Expr.create(allocator, "asdf$", &.{}).asErr();
+    defer expr.deinit(allocator);
     try std.testing.expectEqual(true, (try expr.checkMatch("asdf", &.{})).fully_matched);
     try std.testing.expectEqual(false, (try expr.checkMatch("asdfx", &.{})).fully_matched);
 }
 
 test "alternate anchor end" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocr = gpa.allocator();
-    var expr = try Expr.create(allocr, "a(b|$)", &.{}).asErr();
-    defer expr.deinit(allocr);
+    const allocator = gpa.allocator();
+    var expr = try Expr.create(allocator, "a(b|$)", &.{}).asErr();
+    defer expr.deinit(allocator);
     {
         const match = try expr.checkMatch("az", &.{});
         try std.testing.expectEqual(1, match.pos);
@@ -315,11 +315,11 @@ test "alternate anchor end" {
 
 test "integrate: string" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocr = gpa.allocator();
-    var expr = try Expr.create(allocr,
+    const allocator = gpa.allocator();
+    var expr = try Expr.create(allocator,
         \\"([^"]|\\.)*"
     , &.{}).asErr();
-    defer expr.deinit(allocr);
+    defer expr.deinit(allocator);
     try std.testing.expectEqual(3, (try expr.checkMatch(
         \\"a"
     , &.{})).pos);
@@ -336,11 +336,11 @@ test "integrate: string" {
 
 test "integrate: float" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocr = gpa.allocator();
-    var expr = try Expr.create(allocr,
+    const allocator = gpa.allocator();
+    var expr = try Expr.create(allocator,
         \\[0-9]+(\.[0-9]*)?
     , &.{}).asErr();
-    defer expr.deinit(allocr);
+    defer expr.deinit(allocator);
     try std.testing.expectEqual(5, (try expr.checkMatch(
         \\0.123abc
     , &.{})).pos);
@@ -351,25 +351,25 @@ test "integrate: float" {
 
 test "integrate: huge simple" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocr = gpa.allocator();
-    var expr = try Expr.create(allocr, "a+", &.{}).asErr();
-    defer expr.deinit(allocr);
+    const allocator = gpa.allocator();
+    var expr = try Expr.create(allocator, "a+", &.{}).asErr();
+    defer expr.deinit(allocator);
     try std.testing.expectEqual(1000, (try expr.checkMatch(&([_]u8{'a'} ** 1000), &.{})).pos);
 }
 
 test "integrate: huge group" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocr = gpa.allocator();
-    var expr = try Expr.create(allocr, "(ab)+", &.{}).asErr();
-    defer expr.deinit(allocr);
+    const allocator = gpa.allocator();
+    var expr = try Expr.create(allocator, "(ab)+", &.{}).asErr();
+    defer expr.deinit(allocator);
     try std.testing.expectEqual(1000, (try expr.checkMatch(&([_]u8{ 'a', 'b' } ** 500), &.{})).pos);
 }
 
 test "find (1st pat el is string)" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocr = gpa.allocator();
-    var expr = try Expr.create(allocr, "asdf?b", &.{}).asErr();
-    defer expr.deinit(allocr);
+    const allocator = gpa.allocator();
+    var expr = try Expr.create(allocator, "asdf?b", &.{}).asErr();
+    defer expr.deinit(allocator);
     {
         const res = (try expr.find("000asdfbasdfb")).?;
         try std.testing.expectEqual(3, res.start);
@@ -384,9 +384,9 @@ test "find (1st pat el is string)" {
 
 test "find (1st pat el is char, more than one)" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocr = gpa.allocator();
-    var expr = try Expr.create(allocr, "xab+", &.{}).asErr();
-    defer expr.deinit(allocr);
+    const allocator = gpa.allocator();
+    var expr = try Expr.create(allocator, "xab+", &.{}).asErr();
+    defer expr.deinit(allocator);
     {
         const res = (try expr.find("xabb")).?;
         try std.testing.expectEqual(0, res.start);
@@ -396,9 +396,9 @@ test "find (1st pat el is char, more than one)" {
 
 test "find (1st pat el is char)" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocr = gpa.allocator();
-    var expr = try Expr.create(allocr, "x+asdf?b", &.{}).asErr();
-    defer expr.deinit(allocr);
+    const allocator = gpa.allocator();
+    var expr = try Expr.create(allocator, "x+asdf?b", &.{}).asErr();
+    defer expr.deinit(allocator);
     {
         const res = (try expr.find("000xxxasdfbasdfb")).?;
         try std.testing.expectEqual(3, res.start);
@@ -413,9 +413,9 @@ test "find (1st pat el is char)" {
 
 test "find reverse (1st pat el is string)" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocr = gpa.allocator();
-    var expr = try Expr.create(allocr, "asdf?b", &.{}).asErr();
-    defer expr.deinit(allocr);
+    const allocator = gpa.allocator();
+    var expr = try Expr.create(allocator, "asdf?b", &.{}).asErr();
+    defer expr.deinit(allocator);
     {
         const res = (try expr.findBackwards("000asdfbasdfb")).?;
         try std.testing.expectEqual(8, res.start);
@@ -425,9 +425,9 @@ test "find reverse (1st pat el is string)" {
 
 test "find reverse (1st pat el is char)" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocr = gpa.allocator();
-    var expr = try Expr.create(allocr, "x+asdf?b", &.{}).asErr();
-    defer expr.deinit(allocr);
+    const allocator = gpa.allocator();
+    var expr = try Expr.create(allocator, "x+asdf?b", &.{}).asErr();
+    defer expr.deinit(allocator);
     {
         const res = (try expr.findBackwards("000xxxasdfbasdfbxxxasdfb")).?;
         try std.testing.expectEqual(18, res.start);

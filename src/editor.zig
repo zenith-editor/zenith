@@ -83,14 +83,14 @@ pub const CommandData = struct {
         find: Find,
         prompt: Prompt,
 
-        fn deinit(self: *Args, allocr: std.mem.Allocator) void {
+        fn deinit(self: *Args, allocator: std.mem.Allocator) void {
             switch (self.*) {
                 .replace_all => |*e| {
-                    e.needle.deinit(allocr);
+                    e.needle.deinit(allocator);
                 },
                 .find => |*e| {
                     if (e.regex) |*regex| {
-                        regex.deinit(allocr);
+                        regex.deinit(allocator);
                     }
                 },
                 else => {},
@@ -118,12 +118,12 @@ pub const CommandData = struct {
 
     fn deinit(self: *CommandData, E: *Editor) void {
         if (self.promptoverlay) |*promptoverlay| {
-            promptoverlay.deinit(E.allocr);
+            promptoverlay.deinit(E.allocator);
         }
         if (self.args) |*args| {
-            args.deinit(E.allocr);
+            args.deinit(E.allocator);
         }
-        self.cmdinp.deinit(E.allocr);
+        self.cmdinp.deinit(E.allocator);
     }
 
     pub fn replace(self: *CommandData, E: *Editor, new_cmd_data: *const CommandData) void {
@@ -133,14 +133,14 @@ pub const CommandData = struct {
 
     pub fn replaceArgs(self: *CommandData, E: *Editor, new_args: *const Args) void {
         if (self.args != null) {
-            self.args.?.deinit(E.allocr);
+            self.args.?.deinit(E.allocator);
         }
         self.args = new_args.*;
     }
 
     pub fn replacePromptOverlay(self: *CommandData, E: *Editor, static: []const u8) void {
         if (self.promptoverlay != null) {
-            self.promptoverlay.?.deinit(E.allocr);
+            self.promptoverlay.?.deinit(E.allocator);
         }
         self.promptoverlay = .{
             .static = static,
@@ -149,10 +149,10 @@ pub const CommandData = struct {
 
     pub fn replacePromptOverlayFmt(self: *CommandData, E: *Editor, comptime fmt: []const u8, args: anytype) !void {
         if (self.promptoverlay != null) {
-            self.promptoverlay.?.deinit(E.allocr);
+            self.promptoverlay.?.deinit(E.allocator);
         }
         self.promptoverlay = .{
-            .owned = try std.fmt.allocPrint(E.allocr, fmt, args),
+            .owned = try std.fmt.allocPrint(E.allocator, fmt, args),
         };
     }
 };
@@ -254,7 +254,7 @@ pub const Editor = struct {
 
     state_handler: *const StateHandler,
 
-    allocr: std.mem.Allocator,
+    allocator: std.mem.Allocator,
 
     w_width: u32 = 0,
     w_height: u32 = 0,
@@ -277,7 +277,7 @@ pub const Editor = struct {
     has_alt_scroll_mode: bool = false,
     has_mouse_tracking: bool = false,
 
-    pub fn create(allocr: std.mem.Allocator) !Editor {
+    pub fn create(allocator: std.mem.Allocator) !Editor {
         const stdin: std.fs.File = std.io.getStdIn();
         const stdout: std.fs.File = std.io.getStdOut();
         var editor = Editor{
@@ -285,9 +285,9 @@ pub const Editor = struct {
             .inr = stdin.reader(),
             .out = stdout,
             .out_raw = stdout.writer(),
-            .out_buffer = OutBuffer.init(allocr),
+            .out_buffer = OutBuffer.init(allocator),
             .state_handler = &StateHandler.Text,
-            .allocr = allocr,
+            .allocator = allocator,
             .text_handler = try text.TextHandler.create(),
             .conf = .{},
             .unprotected_state = State.INIT,
@@ -298,19 +298,19 @@ pub const Editor = struct {
     }
 
     pub fn loadConfig(self: *Editor) !void {
-        var result = self.conf.open(self.allocr);
+        var result = self.conf.open(self.allocator);
 
         switch (result) {
             .ok => {},
             .err => |*err| {
-                defer err.deinit(self.allocr);
+                defer err.deinit(self.allocator);
                 if (err.type == error.FileNotFound and err.location == .not_loaded) {
                     // ignored
                 } else {
-                    const error_string = try err.toString(self.allocr, .{
+                    const error_string = try err.toString(self.allocator, .{
                         .main_path = self.conf.config_filepath orelse "<main>",
                     });
-                    defer self.allocr.free(error_string);
+                    defer self.allocator.free(error_string);
                     try self.out_raw.writeAll(error_string);
                     try self.errorPromptBeforeLoaded();
                 }
@@ -321,7 +321,7 @@ pub const Editor = struct {
     }
 
     pub fn showConfigError(self: *Editor, err: *const config.Reader.ConfigError) !void {
-        const error_string = try err.toString(self.allocr, .{
+        const error_string = try err.toString(self.allocator, .{
             .main_path = self.conf.config_filepath orelse "<main>",
         });
         self.copyHideableMsg(&HideableMessage.fromAllocated("config error", error_string));
@@ -385,7 +385,7 @@ pub const Editor = struct {
             .owned => {
                 if (self.unprotected_hideable_msg) |*msg| {
                     // TODO: scrollable message for owned slices
-                    msg.deinit(self.allocr);
+                    msg.deinit(self.allocator);
                 }
                 self.unprotected_hideable_msg = other.*;
             },
@@ -393,12 +393,12 @@ pub const Editor = struct {
                 if (self.unprotected_hideable_msg) |*msg| {
                     if (!msg.text.isOwned() and msg.text.static.ptr == other.text.static.ptr) {
                         if (msg.scrollNext()) {
-                            msg.deinit(self.allocr);
+                            msg.deinit(self.allocator);
                             self.unprotected_hideable_msg = null;
                         }
                         return;
                     } else {
-                        msg.deinit(self.allocr);
+                        msg.deinit(self.allocator);
                     }
                 }
                 self.unprotected_hideable_msg = other.*;
@@ -408,7 +408,7 @@ pub const Editor = struct {
 
     pub fn unsetHideableMsg(self: *Editor) void {
         if (self.unprotected_hideable_msg != null) {
-            self.unprotected_hideable_msg.?.deinit(self.allocr);
+            self.unprotected_hideable_msg.?.deinit(self.allocator);
             self.unprotected_hideable_msg = null;
         }
     }
@@ -1352,7 +1352,7 @@ pub const Editor = struct {
         self.restoreTerminal() catch {};
     }
 
-    /// opened_file_str must be allocated by E.allocr
+    /// opened_file_str must be allocated by E.allocator
     pub fn openAtStart(self: *Editor, opened_file_str: str.StringUnmanaged) !void {
         _ = try Commands.Open.setupOpen(self, opened_file_str);
     }

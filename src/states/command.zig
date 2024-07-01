@@ -31,7 +31,7 @@ pub fn handleInput(self: *editor.Editor, keysym: *const kbd.Keysym, is_clipboard
     }
 
     if (cmd_data.promptoverlay != null) {
-        cmd_data.promptoverlay.?.deinit(self.allocr);
+        cmd_data.promptoverlay.?.deinit(self.allocator);
         cmd_data.promptoverlay = null;
     }
 
@@ -66,12 +66,12 @@ pub fn handleInput(self: *editor.Editor, keysym: *const kbd.Keysym, is_clipboard
         }
         self.needs_update_cursor = true;
     } else if (keysym.getPrint()) |key| {
-        try cmd_data.cmdinp.insert(self.allocr, cmd_data.cmdinp_pos.col, key);
+        try cmd_data.cmdinp.insert(self.allocator, cmd_data.cmdinp_pos.col, key);
         cmd_data.cmdinp_pos.col += 1;
         cmd_data.cmdinp_pos.gfx_col += 1;
         self.needs_update_cursor = true;
     } else if (keysym.getMultibyte()) |seq| {
-        try cmd_data.cmdinp.insertSlice(self.allocr, cmd_data.cmdinp_pos.col, seq);
+        try cmd_data.cmdinp.insertSlice(self.allocator, cmd_data.cmdinp_pos.col, seq);
         cmd_data.cmdinp_pos.col += @intCast(seq.len);
         cmd_data.cmdinp_pos.gfx_col += 1;
         self.needs_update_cursor = true;

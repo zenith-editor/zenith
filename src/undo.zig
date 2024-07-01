@@ -16,9 +16,9 @@ const Action = union(enum) {
         /// Original appended string, only set when action is moved to redo
         orig_buffer: ?[]const u8,
 
-        fn deinit(self: *Append, allocr: std.mem.Allocator) void {
+        fn deinit(self: *Append, allocator: std.mem.Allocator) void {
             if (self.orig_buffer) |orig_buffer| {
-                allocr.free(orig_buffer);
+                allocator.free(orig_buffer);
             }
         }
     };
@@ -27,8 +27,8 @@ const Action = union(enum) {
         pos: u32,
         orig_buffer: str.StringUnmanaged,
 
-        fn deinit(self: *Delete, allocr: std.mem.Allocator) void {
-            self.orig_buffer.deinit(allocr);
+        fn deinit(self: *Delete, allocator: std.mem.Allocator) void {
+            self.orig_buffer.deinit(allocator);
         }
     };
 
@@ -37,9 +37,9 @@ const Action = union(enum) {
         orig_buffer: []const u8,
         new_buffer: []const u8,
 
-        fn deinit(self: *Replace, allocr: std.mem.Allocator) void {
-            allocr.free(self.orig_buffer);
-            allocr.free(self.new_buffer);
+        fn deinit(self: *Replace, allocator: std.mem.Allocator) void {
+            allocator.free(self.orig_buffer);
+            allocator.free(self.new_buffer);
         }
     };
 
@@ -47,16 +47,16 @@ const Action = union(enum) {
     delete: Delete,
     replace: Replace,
 
-    fn deinit(self: *Action, allocr: std.mem.Allocator) void {
+    fn deinit(self: *Action, allocator: std.mem.Allocator) void {
         switch (self.*) {
             .append => |*e| {
-                e.deinit(allocr);
+                e.deinit(allocator);
             },
             .delete => |*e| {
-                e.deinit(allocr);
+                e.deinit(allocator);
             },
             .replace => |*e| {
-                e.deinit(allocr);
+                e.deinit(allocator);
             },
         }
     }
@@ -78,7 +78,7 @@ pub const UndoManager = struct {
         .requested_memory_limit = DEFAULT_MEM_LIMIT,
     },
 
-    fn allocr(self: *UndoManager) std.mem.Allocator {
+    fn allocator(self: *UndoManager) std.mem.Allocator {
         return self.gpa.allocator();
     }
 
@@ -99,14 +99,12 @@ pub const UndoManager = struct {
 
     fn clearRedoStack(self: *UndoManager) void {
         while (self.redo_stack.pop()) |node| {
-            node.data.deinit(self.allocr());
+            node.data.deinit(self.allocator());
         }
     }
 
     fn appendAction(self: *UndoManager, action: *const Action) !void {
         std.debug.assert(self.redo_stack.first == null);
-        var gpa = &self.gpa;
-        const allocator = gpa.allocator();
         while (!self.canAllocateMemory(@sizeOf(ActionStack.Node))) {
             if (self.undo_stack.popFirst()) |action_ptr| {
                 self.destroyActionNode(action_ptr);
@@ -114,7 +112,7 @@ pub const UndoManager = struct {
                 break;
             }
         }
-        const action_node: *ActionStack.Node = allocator.create(ActionStack.Node) catch {
+        const action_node: *ActionStack.Node = self.allocator().create(ActionStack.Node) catch {
             return error.OutOfMemoryUndo;
         };
         action_node.* = ActionStack.Node{
@@ -124,14 +122,14 @@ pub const UndoManager = struct {
     }
 
     fn destroyActionNode(self: *UndoManager, node: *ActionStack.Node) void {
-        node.data.deinit(self.allocr());
-        self.allocr().destroy(node);
+        node.data.deinit(self.allocator());
+        self.allocator().destroy(node);
     }
 
     // allocated objects within undo heap
 
     pub fn copySlice(self: *UndoManager, slice: []const u8) ![]const u8 {
-        const result = try self.allocr().alloc(u8, slice.len);
+        const result = try self.allocator().alloc(u8, slice.len);
         @memcpy(result, slice);
         return result;
     }
@@ -166,12 +164,12 @@ pub const UndoManager = struct {
             switch (node.data) {
                 .delete => |*delete| {
                     if (delete.pos + delete.orig_buffer.items.len == pos) {
-                        try delete.orig_buffer.appendSlice(self.allocr(), del_contents);
+                        try delete.orig_buffer.appendSlice(self.allocator(), del_contents);
                         errdefer self.clearUndoStack();
                         return;
                     } else if (pos + del_contents.len == delete.pos) {
                         delete.pos = pos;
-                        try delete.orig_buffer.insertSlice(self.allocr(), 0, del_contents);
+                        try delete.orig_buffer.insertSlice(self.allocator(), 0, del_contents);
                         errdefer self.clearUndoStack();
                         return;
                     }
@@ -182,10 +180,10 @@ pub const UndoManager = struct {
 
         var orig_buffer: str.StringUnmanaged = .{};
         try orig_buffer.appendSlice(
-            self.allocr(),
+            self.allocator(),
             del_contents,
         );
-        errdefer orig_buffer.deinit(self.allocr());
+        errdefer orig_buffer.deinit(self.allocator());
 
         try self.appendAction(&.{
             .delete = Action.Delete{
@@ -198,11 +196,11 @@ pub const UndoManager = struct {
     pub fn doReplace(self: *UndoManager, pos: u32, orig_buffer: []const u8, new_buffer: []const u8) !void {
         self.clearRedoStack();
 
-        const a_orig_buffer = try self.allocr().dupe(u8, orig_buffer);
-        errdefer self.allocr().free(a_orig_buffer);
+        const a_orig_buffer = try self.allocator().dupe(u8, orig_buffer);
+        errdefer self.allocator().free(a_orig_buffer);
 
-        const a_new_buffer = try self.allocr().dupe(u8, new_buffer);
-        errdefer self.allocr().free(a_new_buffer);
+        const a_new_buffer = try self.allocator().dupe(u8, new_buffer);
+        errdefer self.allocator().free(a_new_buffer);
 
         try self.appendAction(&.{
             .replace = Action.Replace{

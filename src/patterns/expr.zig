@@ -67,11 +67,11 @@ pub fn debugPrint(self: *const Expr) void {
     }
 }
 
-pub fn deinit(self: *Expr, allocr: std.mem.Allocator) void {
+pub fn deinit(self: *Expr, allocator: std.mem.Allocator) void {
     for (self.instrs.items) |*instr| {
-        instr.deinit(allocr);
+        instr.deinit(allocator);
     }
-    self.instrs.deinit(allocr);
+    self.instrs.deinit(allocator);
 }
 
 pub const Flags = struct {
@@ -94,7 +94,7 @@ pub const Flags = struct {
 };
 
 pub fn create(
-    allocr: std.mem.Allocator,
+    allocator: std.mem.Allocator,
     in_pattern: []const u8,
     flags: *const Flags,
 ) CreateResult {
@@ -110,7 +110,7 @@ pub fn create(
         .in_pattern = in_pattern,
         .flags = flags.*,
     };
-    if (parser.parse(allocr)) |expr| {
+    if (parser.parse(allocator)) |expr| {
         return .{
             .ok = expr,
         };
@@ -177,7 +177,7 @@ const VM = struct {
         self.arena.deinit();
     }
 
-    fn allocr(self: *VM) std.mem.Allocator {
+    fn allocator(self: *VM) std.mem.Allocator {
         return self.arena.allocator();
     }
 
@@ -341,8 +341,8 @@ const VM = struct {
     }
 
     fn exec(self: *VM, init_offset: usize) !MatchResult {
-        var thread_stack_allocr = std.heap.stackFallback(512, self.arena.allocator());
-        var thread_stack = ThreadStack.init(thread_stack_allocr.get());
+        var thread_stack_allocator = std.heap.stackFallback(512, self.arena.allocator());
+        var thread_stack = ThreadStack.init(thread_stack_allocator.get());
 
         if (self.instrs[0].getString()) |string| {
             var iter = std.unicode.Utf8View.initUnchecked(string).iterator();

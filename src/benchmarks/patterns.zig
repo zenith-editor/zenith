@@ -4,7 +4,7 @@ const benchmark = @import("bench").benchmark;
 
 pub fn main() !void {
     var arena_shared = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    const allocr_shared = arena_shared.allocator();
+    const allocator_shared = arena_shared.allocator();
 
     const Benchmark = struct {
         pattern: Expr,
@@ -13,7 +13,7 @@ pub fn main() !void {
 
     const benches = [_]Benchmark{
         .{
-            .pattern = Expr.create(allocr_shared,
+            .pattern = Expr.create(allocator_shared,
                 \\"([^"]|\\.)*"
             , &.{}).asErr() catch @panic("create"),
             .source = [_]u8{'b'} ** 1000 ++ "\"aaa\\\"a\""[0..],
@@ -28,8 +28,8 @@ pub fn main() !void {
         pub fn run(bench: Benchmark) ?Expr.FindResult {
             var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
             defer arena.deinit();
-            const allocr = arena.allocator();
-            return (bench.pattern.find(allocr, bench.source) catch @panic("checkMatch"));
+            const allocator = arena.allocator();
+            return (bench.pattern.find(allocator, bench.source) catch @panic("checkMatch"));
         }
     }, .{
         .args = benches,

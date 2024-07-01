@@ -177,7 +177,7 @@ fn toReplaceAll(self: *editor.Editor, cmd_data: *editor.CommandData) !void {
         cmd_data.args.?.find.regex = null;
     } else {
         needle = .{
-            .string = try cmd_data.cmdinp.toOwnedSlice(self.allocr),
+            .string = try cmd_data.cmdinp.toOwnedSlice(self.allocator),
         };
     }
 
@@ -194,7 +194,7 @@ fn toReplaceAll(self: *editor.Editor, cmd_data: *editor.CommandData) !void {
 
 fn buildRegex(self: *editor.Editor) !bool {
     const cmd_data: *editor.CommandData = self.getCmdData();
-    switch (Expr.create(self.allocr, cmd_data.cmdinp.items, &.{})) {
+    switch (Expr.create(self.allocator, cmd_data.cmdinp.items, &.{})) {
         .ok => |expr| {
             cmd_data.replaceArgs(self, &.{
                 .find = .{

@@ -19,7 +19,7 @@ const QualifierCodegenInfo = struct {
 };
 
 fn genQualifier(
-    allocr: std.mem.Allocator,
+    allocator: std.mem.Allocator,
     char: u32,
     expr: *Expr,
     L0: usize,
@@ -30,7 +30,7 @@ fn genQualifier(
             // (len+0) split L2, L0
             // (len+1) L2: ...
             const L2 = expr.instrs.items.len + 1;
-            try expr.instrs.append(allocr, .{
+            try expr.instrs.append(allocator, .{
                 // order of a and b matters here,
                 // having L0 execute first means that '+' performs a greedy match
                 .split = .{
@@ -53,14 +53,14 @@ fn genQualifier(
             for (expr.instrs.items) |*instr| {
                 instr.incrPc(1, L0);
             }
-            try expr.instrs.insert(allocr, L0, .{
+            try expr.instrs.insert(allocator, L0, .{
                 // again, greedy match
                 .split = .{
                     .a = L2,
                     .b = L1,
                 },
             });
-            try expr.instrs.append(allocr, .{
+            try expr.instrs.append(allocator, .{
                 .jmp = L0,
             });
             return .{
@@ -78,13 +78,13 @@ fn genQualifier(
             for (expr.instrs.items) |*instr| {
                 instr.incrPc(1, L0);
             }
-            try expr.instrs.insert(allocr, L0, .{
+            try expr.instrs.insert(allocator, L0, .{
                 .split = .{
                     .a = L1,
                     .b = L2,
                 },
             });
-            try expr.instrs.append(allocr, .{
+            try expr.instrs.append(allocator, .{
                 .jmp = L0,
             });
             return .{
@@ -101,7 +101,7 @@ fn genQualifier(
             for (expr.instrs.items) |*instr| {
                 instr.incrPc(1, L0);
             }
-            try expr.instrs.insert(allocr, L0, .{
+            try expr.instrs.insert(allocator, L0, .{
                 .split = .{
                     .a = L2,
                     .b = L1,
@@ -168,12 +168,12 @@ fn parseEscapeChar(self: *Self) !ParseEscapeResult {
 
 fn parseGroup(
     self: *Self,
-    allocr: std.mem.Allocator,
+    allocator: std.mem.Allocator,
     expr: *Expr,
     parse_stack: *std.ArrayListUnmanaged(GroupOrRoot),
 ) !void {
     var jmp_to_end_targets: std.ArrayListUnmanaged(usize) = .{};
-    defer jmp_to_end_targets.deinit(allocr);
+    defer jmp_to_end_targets.deinit(allocator);
 
     const group_or_root: GroupOrRoot = parse_stack.items[parse_stack.items.len - 1];
 
@@ -190,7 +190,7 @@ fn parseGroup(
             '+', '-', '*', '?' => |qualifier| {
                 if (is_last_simple_matcher) {
                     const L0 = expr.instrs.items.len - 1;
-                    _ = try genQualifier(allocr, qualifier, expr, L0);
+                    _ = try genQualifier(allocator, qualifier, expr, L0);
                     is_last_simple_matcher = false;
                 } else {
                     return error.ExpectedSimpleExpr;
@@ -245,7 +245,7 @@ fn parseGroup(
 
                     if (state == .specify_to) {
                         self.str_idx += range_seqlen;
-                        try ranges.append(allocr, .{
+                        try ranges.append(allocator, .{
                             .from = from.?,
                             .to = range_char,
                         });
@@ -258,7 +258,7 @@ fn parseGroup(
                     if (from == null) {
                         from = range_char;
                     } else {
-                        try ranges.append(allocr, .{
+                        try ranges.append(allocator, .{
                             .from = from.?,
                             .to = from.?,
                         });
@@ -267,7 +267,7 @@ fn parseGroup(
                 }
 
                 if (from != null) {
-                    try ranges.append(allocr, .{
+                    try ranges.append(allocator, .{
                         .from = from.?,
                         .to = from.?,
                     });
@@ -277,46 +277,46 @@ fn parseGroup(
 
                 if (range_inverse) {
                     if (ranges.items.len == 1 and ranges.items[0].from == ranges.items[0].to) {
-                        try expr.instrs.append(allocr, .{
+                        try expr.instrs.append(allocator, .{
                             .char_inverse = ranges.items[0].from,
                         });
-                        ranges.deinit(allocr);
+                        ranges.deinit(allocator);
                         ranges = undefined;
                     } else if (ranges.items.len == 1) {
-                        try expr.instrs.append(allocr, .{
+                        try expr.instrs.append(allocator, .{
                             .range_opt = .{
                                 .from = ranges.items[0].from,
                                 .to = ranges.items[0].to,
                                 .inverse = true,
                             },
                         });
-                        ranges.deinit(allocr);
+                        ranges.deinit(allocator);
                         ranges = undefined;
                     } else {
-                        try expr.instrs.append(allocr, .{
-                            .range_inverse = try ranges.toOwnedSlice(allocr),
+                        try expr.instrs.append(allocator, .{
+                            .range_inverse = try ranges.toOwnedSlice(allocator),
                         });
                     }
                 } else {
                     if (ranges.items.len == 1 and ranges.items[0].from == ranges.items[0].to) {
-                        try expr.instrs.append(allocr, .{
+                        try expr.instrs.append(allocator, .{
                             .char = ranges.items[0].from,
                         });
-                        ranges.deinit(allocr);
+                        ranges.deinit(allocator);
                         ranges = undefined;
                     } else if (ranges.items.len == 1) {
-                        try expr.instrs.append(allocr, .{
+                        try expr.instrs.append(allocator, .{
                             .range_opt = .{
                                 .from = ranges.items[0].from,
                                 .to = ranges.items[0].to,
                                 .inverse = false,
                             },
                         });
-                        ranges.deinit(allocr);
+                        ranges.deinit(allocator);
                         ranges = undefined;
                     } else {
-                        try expr.instrs.append(allocr, .{
-                            .range = try ranges.toOwnedSlice(allocr),
+                        try expr.instrs.append(allocator, .{
+                            .range = try ranges.toOwnedSlice(allocator),
                         });
                     }
                 }
@@ -330,11 +330,11 @@ fn parseGroup(
                 const group_id = expr.num_groups;
                 expr.num_groups += 1;
 
-                try expr.instrs.append(allocr, .{
+                try expr.instrs.append(allocator, .{
                     .group_start = group_id,
                 });
 
-                try parse_stack.append(allocr, .{
+                try parse_stack.append(allocator, .{
                     .instr_start = expr.instrs.items.len,
                     .group_id = group_id,
                 });
@@ -352,7 +352,7 @@ fn parseGroup(
                 _ = parse_stack.pop();
 
                 const group_end_instr = expr.instrs.items.len;
-                try expr.instrs.append(allocr, .{
+                try expr.instrs.append(allocator, .{
                     .group_end = group_or_root.group_id.?,
                 });
 
@@ -362,7 +362,7 @@ fn parseGroup(
                             self.str_idx += 1;
 
                             const L0 = group_or_root.instr_start;
-                            const cg = try genQualifier(allocr, qualifier, expr, L0);
+                            const cg = try genQualifier(allocator, qualifier, expr, L0);
 
                             for (jmp_to_end_targets.items) |jmp_instr| {
                                 switch (expr.instrs.items[jmp_instr + cg.expr_shift]) {
@@ -405,7 +405,7 @@ fn parseGroup(
                 for (expr.instrs.items) |*instr| {
                     instr.incrPc(1, L0);
                 }
-                try expr.instrs.insert(allocr, L0, .{
+                try expr.instrs.insert(allocator, L0, .{
                     .split = .{
                         .a = L1,
                         .b = L2,
@@ -413,12 +413,12 @@ fn parseGroup(
                 });
                 if (group_or_root.group_id != null) {
                     const jmp_instr = expr.instrs.items.len;
-                    try expr.instrs.append(allocr, .{
+                    try expr.instrs.append(allocator, .{
                         .abort = {},
                     });
-                    try jmp_to_end_targets.append(allocr, jmp_instr);
+                    try jmp_to_end_targets.append(allocator, jmp_instr);
                 } else {
-                    try expr.instrs.append(allocr, .{
+                    try expr.instrs.append(allocator, .{
                         .matched = {},
                     });
                 }
@@ -426,7 +426,7 @@ fn parseGroup(
             '\\' => {
                 self.str_idx += seqlen;
                 const res = try self.parseEscapeChar();
-                try expr.instrs.append(allocr, .{
+                try expr.instrs.append(allocator, .{
                     .char = res.char,
                 });
                 self.str_idx += res.seqlen;
@@ -434,25 +434,25 @@ fn parseGroup(
             },
             '.' => {
                 is_last_simple_matcher = true;
-                try expr.instrs.append(allocr, .{
+                try expr.instrs.append(allocator, .{
                     .any = {},
                 });
             },
             '^' => {
                 is_last_simple_matcher = false;
-                try expr.instrs.append(allocr, .{
+                try expr.instrs.append(allocator, .{
                     .anchor_start = {},
                 });
             },
             '$' => {
                 is_last_simple_matcher = false;
-                try expr.instrs.append(allocr, .{
+                try expr.instrs.append(allocator, .{
                     .anchor_end = {},
                 });
             },
             else => {
                 is_last_simple_matcher = true;
-                try expr.instrs.append(allocr, .{
+                try expr.instrs.append(allocator, .{
                     .char = char,
                 });
             },
@@ -463,7 +463,7 @@ fn parseGroup(
 
 pub fn parse(
     self: *Self,
-    allocr: std.mem.Allocator,
+    allocator: std.mem.Allocator,
 ) !Expr {
     var expr: Expr = .{
         .instrs = .{},
@@ -472,21 +472,21 @@ pub fn parse(
     };
 
     var parse_stack: std.ArrayListUnmanaged(GroupOrRoot) = .{};
-    defer parse_stack.deinit(allocr);
-    try parse_stack.append(allocr, .{
+    defer parse_stack.deinit(allocator);
+    try parse_stack.append(allocator, .{
         .instr_start = 0,
         .group_id = null,
     });
     while (self.str_idx < self.in_pattern.len) {
-        try self.parseGroup(allocr, &expr, &parse_stack);
+        try self.parseGroup(allocator, &expr, &parse_stack);
     }
     if (parse_stack.items.len != 1) {
         return error.UnbalancedGroupBrackets;
     }
 
-    try expr.instrs.append(allocr, .{
+    try expr.instrs.append(allocator, .{
         .matched = {},
     });
-    try optimizer.optimizePrefixString(&expr, allocr);
+    try optimizer.optimizePrefixString(&expr, allocator);
     return expr;
 }

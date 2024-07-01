@@ -45,7 +45,7 @@ pub const LineInfoList = struct {
 
     line_data: std.ArrayListUnmanaged(LineData) = .{},
 
-    fn allocr(self: *LineInfoList) std.mem.Allocator {
+    fn allocator(self: *LineInfoList) std.mem.Allocator {
         return self.arena.allocator();
     }
 
@@ -100,7 +100,7 @@ pub const LineInfoList = struct {
         } else {
             line_no = self.line_data.items[self.line_data.items.len - 1].line_no + 1;
         }
-        try self.line_data.append(self.allocr(), .{
+        try self.line_data.append(self.allocator(), .{
             .offset = offset,
             .line_no = line_no,
             .flags = .{},
@@ -111,7 +111,7 @@ pub const LineInfoList = struct {
         if (cap > MAX_LINES) {
             return error.OutOfMemory;
         }
-        return self.line_data.ensureTotalCapacity(self.allocr(), @intCast(cap));
+        return self.line_data.ensureTotalCapacity(self.allocator(), @intCast(cap));
     }
 
     /// Returns true if a new line has actually been added
@@ -136,7 +136,7 @@ pub const LineInfoList = struct {
         };
 
         if (idx == self.line_data.items.len) {
-            try self.line_data.append(self.allocr(), line_data);
+            try self.line_data.append(self.allocator(), line_data);
             return true;
         }
 
@@ -154,7 +154,7 @@ pub const LineInfoList = struct {
             self.line_data.items[idx] = line_data;
             self.recalcLineNosFrom(idx + 1);
         } else {
-            try self.line_data.insert(self.allocr(), idx, line_data);
+            try self.line_data.insert(self.allocator(), idx, line_data);
             self.recalcLineNosFrom(idx + 1);
         }
 
@@ -177,7 +177,7 @@ pub const LineInfoList = struct {
             line_no = self.line_data.items[idx - 1].line_no + 1;
         }
         const new_line_data: []LineData =
-            try self.line_data.addManyAt(self.allocr(), idx, offsets.len);
+            try self.line_data.addManyAt(self.allocator(), idx, offsets.len);
         for (new_line_data, offsets) |*line_data, offset| {
             line_data.* = .{
                 .offset = offset,
@@ -317,8 +317,8 @@ pub const LineInfoList = struct {
         const start_line_is_mb =
             self.line_data.items[start_line_idx].flags.is_multibyte;
 
-        var stack_allocr = std.heap.stackFallback(16, std.heap.page_allocator);
-        var new_cont_lines = std.ArrayList(u32).init(stack_allocr.get());
+        var stack_allocator = std.heap.stackFallback(16, std.heap.page_allocator);
+        var new_cont_lines = std.ArrayList(u32).init(stack_allocator.get());
         defer new_cont_lines.deinit();
 
         if (start_line_is_mb) {
@@ -358,7 +358,7 @@ pub const LineInfoList = struct {
         } else if (next_line_idx_new > next_line_idx) {
             const old_len = self.line_data.items.len;
             const new_len = self.line_data.items.len + (next_line_idx_new - next_line_idx);
-            try self.line_data.resize(self.allocr(), new_len);
+            try self.line_data.resize(self.allocator(), new_len);
             std.mem.copyBackwards(LineData, self.line_data.items[next_line_idx_new..], self.line_data.items[next_line_idx..old_len]);
         }
 
