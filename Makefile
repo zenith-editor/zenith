@@ -20,6 +20,7 @@ $(ZIG_CACHE):
 	else \
 		mkdir -p $(ZIG_CACHE_TMP); \
 		[ ! -L "$(ZIG_CACHE)" ] && ln -sf $(ZIG_CACHE_TMP) $(ZIG_CACHE); \
+		exit 0; \
 	fi
 
 .PHONY: release
