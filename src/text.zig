@@ -156,9 +156,11 @@ pub const TextHandler = struct {
     // events
 
     pub fn onResize(self: *TextHandler, E: *Editor) !void {
+        const pos = self.calcOffsetFromCursor();
         if (self.isTextWrapped(E)) {
             try self.wrapText(E);
         }
+        try self.gotoPos(E, pos);
     }
 
     // io
@@ -825,7 +827,7 @@ pub const TextHandler = struct {
     }
 
     pub fn gotoPos(self: *TextHandler, E: *Editor, pos: u32) error{Overflow}!void {
-        if (pos >= self.getLogicalLen()) {
+        if (pos > self.getLogicalLen()) {
             return error.Overflow;
         }
         self.cursor.row = self.lineinfo.findMaxLineBeforeOffset(pos, 0);
@@ -892,7 +894,7 @@ pub const TextHandler = struct {
         var target_gfx_col: u32 = self.scroll.gfx_col;
 
         if (self.lineinfo.isContLine(self.cursor.row)) {
-            std.debug.assert(self.cursor.gfx_col < text_width);
+            std.debug.assert(self.cursor.gfx_col <= text_width);
             target_gfx_col = 0;
         } else if (target_gfx_col > self.cursor.gfx_col) {
             if (text_width < self.cursor.gfx_col) {
