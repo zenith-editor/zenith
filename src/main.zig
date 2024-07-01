@@ -133,6 +133,7 @@ pub fn main() !void {
     const allocator = gpa.allocator();
 
     var E = try editor.Editor.create(allocator);
+    try E.updateWinSize();
 
     if (prog_args.opt_config_dir) |config_dir| {
         const cwd = std.fs.cwd();

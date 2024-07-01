@@ -280,7 +280,7 @@ pub const Editor = struct {
     pub fn create(allocator: std.mem.Allocator) !Editor {
         const stdin: std.fs.File = std.io.getStdIn();
         const stdout: std.fs.File = std.io.getStdOut();
-        var editor = Editor{
+        return .{
             .in = stdin,
             .inr = stdin.reader(),
             .out = stdout,
@@ -293,8 +293,6 @@ pub const Editor = struct {
             .unprotected_state = State.INIT,
             .unprotected_cmd_data = null,
         };
-        try editor.updateWinSize();
-        return editor;
     }
 
     pub fn loadConfig(self: *Editor) !void {
@@ -820,7 +818,7 @@ pub const Editor = struct {
 
     // console dims
 
-    fn updateWinSize(self: *Editor) !void {
+    pub fn updateWinSize(self: *Editor) !void {
         if (builtin.target.os.tag == .linux) {
             const oldw = self.w_width;
             const oldh = self.w_height;
@@ -1312,7 +1310,6 @@ pub const Editor = struct {
     }
 
     pub fn restoreTerminal(self: *Editor) !void {
-        //     try self.resetTerminal();
         try self.disableTermExts();
         try self.refreshScreen();
         try self.disableRawMode();
