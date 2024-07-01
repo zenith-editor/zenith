@@ -164,6 +164,7 @@ escape_time: i64 = 20, // ms
 large_file_limit: u32 = 10 * 1024 * 1024, // bytes
 update_mark_on_nav: bool = false,
 use_file_opener: ?[][]u8 = null,
+buffered_output: bool = true,
 
 //terminal feature flags
 force_bracketed_paste: bool = true,
@@ -192,6 +193,7 @@ const REGULAR_CONFIG_FIELDS = [_]ConfigField{
     .{ .field = "show_line_numbers", .conf = "show-line-numbers" },
     .{ .field = "wrap_text", .conf = "wrap-text" },
     .{ .field = "escape_time", .conf = "escape-time" },
+    .{ .field = "buffered_output", .conf = "buffered-output" },
     .{ .field = "update_mark_on_nav", .conf = "update-mark-on-navigate" },
     .{ .field = "force_bracketed_paste", .conf = "force-bracketed-paste" },
     .{ .field = "force_alt_screen_buf", .conf = "force-alt-screen-buf" },
@@ -401,9 +403,6 @@ fn parseInner(self: *Reader, state: *ParserState, expr: *parser.Expr) !void {
                         decl.tab_size = parseTabSize(int);
                     } else if (try kv.get(bool, "use-tabs")) |b| {
                         decl.use_tabs = b;
-                    } else if (try kv.get([]const u8, "inherit")) |s| {
-                        _ = s;
-                        @panic("TODO");
                     } else {
                         return error.UnknownKey;
                     }

@@ -137,7 +137,7 @@ pub fn main() !void {
     if (prog_args.opt_config_dir) |config_dir| {
         const cwd = std.fs.cwd();
         E.conf.config_dir = cwd.openDir(config_dir, .{}) catch |err| blk: {
-            try E.outw.print("Error: failed to open config directory ({})", .{err});
+            try E.out_raw.print("Error: failed to open config directory ({})", .{err});
             try E.errorPromptBeforeLoaded();
             break :blk null;
         };

@@ -236,6 +236,7 @@ pub const Esc = struct {
 pub const Editor = struct {
     const STATUS_BAR_HEIGHT = 2;
     const INPUT_BUFFER_SIZE = 64;
+    const OutBuffer = std.fifo.LinearFifo(u8, .Dynamic);
 
     in: std.fs.File,
     inr: std.fs.File.Reader,
@@ -243,7 +244,8 @@ pub const Editor = struct {
     in_read: usize = 0,
 
     out: std.fs.File,
-    outw: std.fs.File.Writer,
+    out_raw: std.fs.File.Writer,
+    out_buffer: OutBuffer,
 
     orig_termios: ?std.posix.termios = null,
 
@@ -282,7 +284,8 @@ pub const Editor = struct {
             .in = stdin,
             .inr = stdin.reader(),
             .out = stdout,
-            .outw = stdout.writer(),
+            .out_raw = stdout.writer(),
+            .out_buffer = OutBuffer.init(allocr),
             .state_handler = &StateHandler.Text,
             .allocr = allocr,
             .text_handler = try text.TextHandler.create(),
@@ -308,7 +311,7 @@ pub const Editor = struct {
                         .main_path = self.conf.config_filepath orelse "<main>",
                     });
                     defer self.allocr.free(error_string);
-                    try self.outw.writeAll(error_string);
+                    try self.out_raw.writeAll(error_string);
                     try self.errorPromptBeforeLoaded();
                 }
             },
@@ -325,9 +328,9 @@ pub const Editor = struct {
     }
 
     pub fn errorPromptBeforeLoaded(self: *const Editor) !void {
-        try self.outw.print("Press Enter to continue...\n", .{});
+        try self.out_raw.print("Press Enter to continue...\n", .{});
         _ = self.inr.readByte() catch {};
-        try self.outw.writeByte('\r');
+        try self.out_raw.writeByte('\r');
     }
 
     pub fn getState(self: *const Editor) State {
@@ -755,12 +758,26 @@ pub const Editor = struct {
         }
     };
 
+    pub fn flushOutput(self: *Editor) !void {
+        if (self.conf.buffered_output) {
+            return self.out_raw.writeAll(self.out_buffer.readableSlice(0));
+        }
+    }
+
     pub fn writeAll(self: *Editor, bytes: []const u8) !void {
-        return self.outw.writeAll(bytes);
+        if (self.conf.buffered_output) {
+            return self.out_buffer.write(bytes);
+        } else {
+            return self.out_raw.writeAll(bytes);
+        }
     }
 
     pub fn writeByte(self: *Editor, byte: u8) !void {
-        return self.outw.writeByte(byte);
+        if (self.conf.buffered_output) {
+            return self.out_buffer.writeItem(byte);
+        } else {
+            return self.out_raw.writeByte(byte);
+        }
     }
 
     pub fn writeFmt(
@@ -768,7 +785,11 @@ pub const Editor = struct {
         comptime fmt: []const u8,
         args: anytype,
     ) !void {
-        return std.fmt.format(self.outw, fmt, args);
+        if (self.conf.buffered_output) {
+            return std.fmt.format(self.out_buffer.writer(), fmt, args);
+        } else {
+            return std.fmt.format(self.out_raw, fmt, args);
+        }
     }
 
     pub fn moveCursor(self: *Editor, p_row: u32, p_col: u32) !void {
@@ -1234,6 +1255,7 @@ pub const Editor = struct {
 
     fn handleOutput(self: *Editor) !void {
         try self.state_handler.handleOutput(self);
+        try self.flushOutput();
     }
 
     // terminal extensions
@@ -1284,6 +1306,7 @@ pub const Editor = struct {
         try self.resetTerminal();
         try self.enableRawMode();
         try self.enableTermExts();
+        try self.flushOutput();
         self.needs_redraw = true;
         self.needs_update_cursor = true;
     }
@@ -1293,6 +1316,7 @@ pub const Editor = struct {
         try self.disableTermExts();
         try self.refreshScreen();
         try self.disableRawMode();
+        try self.flushOutput();
     }
 
     // tick
