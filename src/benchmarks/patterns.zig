@@ -26,10 +26,7 @@ pub fn main() !void {
 
     try benchmark(struct {
         pub fn run(bench: Benchmark) ?Expr.FindResult {
-            var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-            defer arena.deinit();
-            const allocator = arena.allocator();
-            return (bench.pattern.find(allocator, bench.source) catch @panic("checkMatch"));
+            return bench.pattern.find(bench.source) catch @panic("checkMatch");
         }
     }, .{
         .args = benches,
