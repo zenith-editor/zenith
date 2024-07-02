@@ -3,8 +3,6 @@
 //
 // This work is licensed under the BSD 3-Clause License.
 //
-const Cmd = @This();
-
 const std = @import("std");
 const builtin = @import("builtin");
 
@@ -43,7 +41,7 @@ fn onInputtedGeneric(file_path: []const u8) !text.TextHandler.OpenFileArgs {
 pub fn onInputted(self: *editor.Editor) !void {
     self.needs_update_cursor = true;
     if (onInputtedGeneric(self.getCmdData().cmdinp.items)) |opened_file| {
-        self.text_handler.open(self, opened_file, true) catch |err| {
+        tryOpen(self, opened_file, true) catch |err| {
             try self.getCmdData().replacePromptOverlayFmt(self, PROMPT_ERR_OPEN_FILE, .{err});
             return;
         };
@@ -58,11 +56,11 @@ pub fn onInputted(self: *editor.Editor) !void {
 pub fn onInputtedTryToSave(self: *editor.Editor) !void {
     self.needs_update_cursor = true;
     if (onInputtedGeneric(self.getCmdData().cmdinp.items)) |opened_file| {
-        self.text_handler.open(self, opened_file, false) catch |err| {
+        tryOpen(self, opened_file, false) catch |err| {
             try self.getCmdData().replacePromptOverlayFmt(self, PROMPT_ERR_SAVE_FILE, .{err});
             return;
         };
-        self.text_handler.save(self) catch |err| {
+        self.text_handler.save() catch |err| {
             try self.getCmdData().replacePromptOverlayFmt(self, PROMPT_ERR_SAVE_FILE, .{err});
             return;
         };
@@ -84,11 +82,11 @@ pub const PROMPT_ERR_SAVE_FILE =
 pub const PROMPT_ERR_SPAWN_FM = "Unable to run file manager! (ERR: {})";
 
 pub const Fns: editor.CommandData.FnTable = .{
-    .onInputted = Cmd.onInputted,
+    .onInputted = onInputted,
 };
 
 pub const FnsTryToSave: editor.CommandData.FnTable = .{
-    .onInputted = Cmd.onInputtedTryToSave,
+    .onInputted = onInputtedTryToSave,
 };
 
 fn runFileOpener(self: *editor.Editor, argv: []const []const u8, action: enum { open, save }) !void {
@@ -120,11 +118,21 @@ fn runFileOpener(self: *editor.Editor, argv: []const []const u8, action: enum { 
 
     switch (action) {
         .open => {
-            try self.text_handler.open(self, opened_file, true);
+            try tryOpen(self, opened_file, true);
         },
         .save => {
-            try self.text_handler.open(self, opened_file, false);
-            try self.text_handler.save(self);
+            try tryOpen(self, opened_file, false);
+            try self.text_handler.save();
+        },
+    }
+}
+
+fn tryOpen(self: *editor.Editor, args: text.TextHandler.OpenFileArgs, flush_buffer: bool) !void {
+    const result = try self.text_handler.open(args, flush_buffer);
+    switch (result) {
+        .ok => {},
+        .warn_highlight => |*warn_highlight| {
+            self.showConfigError(warn_highlight) catch {};
         },
     }
 }
@@ -137,7 +145,7 @@ pub fn setupOpen(self: *editor.Editor, opt_opened_file_str: ?str.StringUnmanaged
             .cmdinp = opened_file_str,
         };
         if (onInputtedGeneric(opened_file_str.items)) |opened_file| {
-            self.text_handler.open(self, opened_file, true) catch |err| {
+            tryOpen(self, opened_file, true) catch |err| {
                 self.setState(.command);
                 self.setCmdData(&new_cmd_data);
                 try self.getCmdData().replacePromptOverlayFmt(self, PROMPT_ERR_OPEN_FILE, .{err});

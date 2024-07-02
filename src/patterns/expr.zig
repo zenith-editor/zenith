@@ -17,7 +17,7 @@
 //   * The thread stack can either be stored on the hardware stack, or the heap
 //     depending on the number of threads being ran.
 
-const Expr = @This();
+const Self = @This();
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -42,10 +42,10 @@ pub const CreateError = struct {
 };
 
 pub const CreateResult = union(enum) {
-    ok: Expr,
+    ok: Self,
     err: CreateError,
 
-    pub fn asErr(self: CreateResult) !Expr {
+    pub fn asErr(self: CreateResult) !Self {
         switch (self) {
             .ok => |expr| {
                 return expr;
@@ -61,13 +61,13 @@ instrs: std.ArrayListUnmanaged(Instr),
 flags: Flags,
 num_groups: usize,
 
-pub fn debugPrint(self: *const Expr) void {
+pub fn debugPrint(self: *const Self) void {
     for (0..self.instrs.items.len) |i| {
         std.debug.print("{} {}\n", .{ i, self.instrs.items[i] });
     }
 }
 
-pub fn deinit(self: *Expr, allocator: std.mem.Allocator) void {
+pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
     for (self.instrs.items) |*instr| {
         instr.deinit(allocator);
     }
@@ -414,7 +414,7 @@ pub const MatchError = error{
 };
 
 pub fn checkMatchGeneric(
-    self: *const Expr,
+    self: *const Self,
     view: *const SrcView,
     options: *const MatchOptions,
 ) MatchError!MatchResult {
@@ -462,7 +462,7 @@ pub const StringView = struct {
 };
 
 pub fn checkMatch(
-    self: *const Expr,
+    self: *const Self,
     haystack: []const u8,
     options: *const MatchOptions,
 ) MatchError!MatchResult {
@@ -482,7 +482,7 @@ pub const FindResult = struct {
     end: usize,
 };
 
-pub fn find(self: *const Expr, haystack: []const u8) !?FindResult {
+pub fn find(self: *const Self, haystack: []const u8) !?FindResult {
     var view: StringView = .{
         .source = haystack,
     };
@@ -523,7 +523,7 @@ pub fn find(self: *const Expr, haystack: []const u8) !?FindResult {
     return null;
 }
 
-pub fn findBackwards(self: *const Expr, haystack: []const u8) !?FindResult {
+pub fn findBackwards(self: *const Self, haystack: []const u8) !?FindResult {
     var view: StringView = .{
         .source = haystack,
     };

@@ -39,23 +39,18 @@ const LineData = packed struct {
 };
 
 pub const LineInfoList = struct {
+    const Self = @This();
     const MAX_LINES = std.math.maxInt(u32);
 
     arena: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(std.heap.page_allocator),
 
     line_data: std.ArrayListUnmanaged(LineData) = .{},
 
-    fn allocator(self: *LineInfoList) std.mem.Allocator {
+    fn allocator(self: *Self) std.mem.Allocator {
         return self.arena.allocator();
     }
 
-    pub fn create() !LineInfoList {
-        var list = LineInfoList{};
-        try list.append(0);
-        return list;
-    }
-
-    pub fn debugPrint(self: *const LineInfoList) void {
+    pub fn debugPrint(self: *const Self) void {
         for (self.line_data.items) |*line_data| {
             line_data.debugPrint();
         }
@@ -63,11 +58,11 @@ pub const LineInfoList = struct {
 
     // General manipiulation
 
-    pub fn getLen(self: *const LineInfoList) u32 {
+    pub fn getLen(self: *const Self) u32 {
         return @intCast(self.line_data.items.len);
     }
 
-    pub fn reset(self: *LineInfoList) void {
+    pub fn reset(self: *Self) void {
         const len = self.line_data.items.len;
         self.line_data.replaceRangeAssumeCapacity(
             0,
@@ -82,14 +77,14 @@ pub const LineInfoList = struct {
         );
     }
 
-    pub fn remove(self: *LineInfoList, idx: u32) void {
+    pub fn remove(self: *Self, idx: u32) void {
         const line_data = self.line_data.orderedRemove(idx);
         if (!line_data.flags.is_cont_line) {
             self.recalcLineNosFrom(idx);
         }
     }
 
-    pub fn append(self: *LineInfoList, offset: u32) !void {
+    pub fn append(self: *Self, offset: u32) !void {
         if (self.line_data.items.len + 1 >= MAX_LINES) {
             return error.OutOfMemory;
         }
@@ -107,7 +102,7 @@ pub const LineInfoList = struct {
         });
     }
 
-    pub fn ensureTotalCapacity(self: *LineInfoList, cap: u32) !void {
+    pub fn ensureTotalCapacity(self: *Self, cap: u32) !void {
         if (cap > MAX_LINES) {
             return error.OutOfMemory;
         }
@@ -115,7 +110,7 @@ pub const LineInfoList = struct {
     }
 
     /// Returns true if a new line has actually been added
-    pub fn insert(self: *LineInfoList, idx: u32, offset: u32, is_multibyte: bool) !bool {
+    pub fn insert(self: *Self, idx: u32, offset: u32, is_multibyte: bool) !bool {
         if (self.line_data.items.len + 1 >= MAX_LINES) {
             return error.OutOfMemory;
         }
@@ -162,7 +157,7 @@ pub const LineInfoList = struct {
     }
 
     pub fn insertSlice(
-        self: *LineInfoList,
+        self: *Self,
         idx: u32,
         offsets: []const u32,
     ) !void {
@@ -191,15 +186,15 @@ pub const LineInfoList = struct {
 
     // Offsets
 
-    pub fn findMaxLineBeforeOffset(self: *const LineInfoList, offset: u32, from_line: u32) u32 {
+    pub fn findMaxLineBeforeOffset(self: *const Self, offset: u32, from_line: u32) u32 {
         return @intCast(utils.findLastNearestElement(LineData, "offset", self.line_data.items, offset, @intCast(from_line)).?);
     }
 
-    pub fn findMinLineAfterOffset(self: *const LineInfoList, offset: u32, from_line: u32) u32 {
+    pub fn findMinLineAfterOffset(self: *const Self, offset: u32, from_line: u32) u32 {
         return @intCast(utils.findNextNearestElement(LineData, "offset", self.line_data.items, offset, @intCast(from_line)));
     }
 
-    pub fn findLineWithLineNo(self: *const LineInfoList, line_no: u32) ?u32 {
+    pub fn findLineWithLineNo(self: *const Self, line_no: u32) ?u32 {
         var left: u32 = 0;
         var right: u32 = @intCast(self.line_data.items.len);
 
@@ -222,11 +217,11 @@ pub const LineInfoList = struct {
         return null;
     }
 
-    pub fn getOffset(self: *const LineInfoList, idx: u32) u32 {
+    pub fn getOffset(self: *const Self, idx: u32) u32 {
         return self.line_data.items[idx].offset;
     }
 
-    fn modifyOffsets(self: *LineInfoList, from: u32, delta: u32, comptime increase: bool) void {
+    fn modifyOffsets(self: *Self, from: u32, delta: u32, comptime increase: bool) void {
         for (self.line_data.items[from..]) |*line_data| {
             if (comptime increase) {
                 line_data.offset += delta;
@@ -236,17 +231,17 @@ pub const LineInfoList = struct {
         }
     }
 
-    pub fn increaseOffsets(self: *LineInfoList, from: u32, delta: u32) void {
+    pub fn increaseOffsets(self: *Self, from: u32, delta: u32) void {
         return self.modifyOffsets(from, delta, true);
     }
 
-    pub fn decreaseOffsets(self: *LineInfoList, from: u32, delta: u32) void {
+    pub fn decreaseOffsets(self: *Self, from: u32, delta: u32) void {
         return self.modifyOffsets(from, delta, false);
     }
 
     // Line numbers
 
-    fn recalcLineNosFrom(self: *LineInfoList, from: u32) void {
+    fn recalcLineNosFrom(self: *Self, from: u32) void {
         // std.debug.print("recalc line from {}\n", .{from});
         var i = from;
         while (i < self.line_data.items.len) {
@@ -261,33 +256,33 @@ pub const LineInfoList = struct {
         }
     }
 
-    pub fn getLineNo(self: *const LineInfoList, idx: u32) u32 {
+    pub fn getLineNo(self: *const Self, idx: u32) u32 {
         return self.line_data.items[idx].line_no;
     }
 
-    pub fn getMaxLineNo(self: *const LineInfoList) u32 {
+    pub fn getMaxLineNo(self: *const Self) u32 {
         return self.line_data.items[self.line_data.items.len - 1].line_no;
     }
 
     // Multibyte
 
-    pub fn isMultibyte(self: *const LineInfoList, idx: u32) bool {
+    pub fn isMultibyte(self: *const Self, idx: u32) bool {
         return self.line_data.items[idx].flags.is_multibyte;
     }
 
-    pub fn setMultibyte(self: *LineInfoList, idx: u32, is_multibyte: bool) void {
+    pub fn setMultibyte(self: *Self, idx: u32, is_multibyte: bool) void {
         self.line_data.items[idx].flags.is_multibyte = is_multibyte;
     }
 
     // Cont line
 
-    pub fn isContLine(self: *const LineInfoList, idx: u32) bool {
+    pub fn isContLine(self: *const Self, idx: u32) bool {
         return self.line_data.items[idx].flags.is_cont_line;
     }
 
     pub const UpdateLineWrapResult = struct { len_change: i64, next_line: u32 };
 
-    pub fn findNextNonContLine(self: *const LineInfoList, line: u32) ?u32 {
+    pub fn findNextNonContLine(self: *const Self, line: u32) ?u32 {
         for ((line + 1)..self.line_data.items.len) |cur_line| {
             const line_data = &self.line_data.items[cur_line];
             if (!line_data.flags.is_cont_line) {
@@ -299,12 +294,11 @@ pub const LineInfoList = struct {
     }
 
     pub fn updateLineWrap(
-        self: *LineInfoList,
+        self: *Self,
         text_handler: *const text.TextHandler,
-        E: *const Editor,
         start_line_idx: u32,
     ) !UpdateLineWrapResult {
-        const columns = E.getTextWidth() - 1;
+        const columns = text_handler.dims.width - 1;
         var next_line_offset: u32 = text_handler.getLogicalLen();
         var next_line_idx: u32 = self.getLen();
         if (self.findNextNonContLine(start_line_idx)) |idx| {
@@ -385,7 +379,7 @@ pub const LineInfoList = struct {
     }
 
     /// Remove the lines specified in range
-    pub fn removeLinesInRange(self: *LineInfoList, delete_start: u32, delete_end: u32) u32 {
+    pub fn removeLinesInRange(self: *Self, delete_start: u32, delete_end: u32) u32 {
         std.debug.assert(delete_end > delete_start);
 
         const line_start = self.findMinLineAfterOffset(delete_start, 0);

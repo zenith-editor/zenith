@@ -3,8 +3,6 @@
 //
 // This work is licensed under the BSD 3-Clause License.
 //
-const Cmd = @This();
-
 const std = @import("std");
 const builtin = @import("builtin");
 
@@ -70,7 +68,7 @@ fn findForwards(self: *editor.Editor, cmd_data: *editor.CommandData) !void {
     }
 
     if (opt_pos) |pos| {
-        try text_handler.gotoPos(self, @intCast(pos));
+        try text_handler.gotoPos(@intCast(pos));
         self.text_handler.markers = .{
             .start = @intCast(pos),
             .orig_start = @intCast(pos),
@@ -128,7 +126,7 @@ fn findBackwards(self: *editor.Editor, cmd_data: *editor.CommandData) !void {
     }
 
     if (opt_pos) |pos| {
-        try text_handler.gotoPos(self, @intCast(pos));
+        try text_handler.gotoPos(@intCast(pos));
         self.text_handler.markers = .{
             .start = @intCast(pos),
             .orig_start = @intCast(pos),
@@ -143,7 +141,7 @@ fn findBackwards(self: *editor.Editor, cmd_data: *editor.CommandData) !void {
 pub fn onInputted(self: *editor.Editor) !void {
     self.needs_update_cursor = true;
     const cmd_data: *editor.CommandData = self.getCmdData();
-    try Cmd.findForwards(self, cmd_data);
+    try findForwards(self, cmd_data);
 }
 
 fn toBlockMode(self: *editor.Editor, cmd_data: *editor.CommandData) !void {
@@ -168,7 +166,7 @@ fn toReplace(self: *editor.Editor, cmd_data: *editor.CommandData) void {
 
 fn toReplaceAll(self: *editor.Editor, cmd_data: *editor.CommandData) !void {
     if (self.text_handler.markers == null) {
-        self.text_handler.markAll(self);
+        self.text_handler.markAll();
     }
 
     var needle: text.TextHandler.ReplaceNeedle = undefined;
@@ -214,41 +212,41 @@ fn buildRegex(self: *editor.Editor) !bool {
 pub fn onKey(self: *editor.Editor, keysym: *const kbd.Keysym) !bool {
     const cmd_data: *editor.CommandData = self.getCmdData();
     if (keysym.key == kbd.Keysym.Key.up) {
-        try Cmd.findBackwards(self, cmd_data);
+        try findBackwards(self, cmd_data);
         return true;
     } else if (keysym.key == kbd.Keysym.Key.down) {
-        try Cmd.findForwards(self, cmd_data);
+        try findForwards(self, cmd_data);
         return true;
     } else if (this_shortcuts.key("help", keysym)) {
         self.copyHideableMsg(&this_shortcuts_help);
         self.needs_redraw = true;
         return true;
     } else if (this_shortcuts.key("block", keysym)) {
-        try Cmd.toBlockMode(self, cmd_data);
+        try toBlockMode(self, cmd_data);
         return true;
     } else if (this_shortcuts.key("rep", keysym)) {
-        Cmd.toReplace(self, cmd_data);
+        toReplace(self, cmd_data);
         self.needs_update_cursor = true;
         return true;
     } else if (this_shortcuts.key("allrep", keysym)) {
-        try Cmd.toReplaceAll(self, cmd_data);
+        try toReplaceAll(self, cmd_data);
         self.needs_update_cursor = true;
         return true;
     } else if (this_shortcuts.key("resub", keysym)) {
         if (try buildRegex(self)) {
-            try Cmd.toReplaceAll(self, cmd_data);
+            try toReplaceAll(self, cmd_data);
             self.needs_update_cursor = true;
         }
         return true;
     } else if (this_shortcuts.key("refind", keysym)) {
         if (try buildRegex(self)) {
-            try Cmd.findForwards(self, cmd_data);
+            try findForwards(self, cmd_data);
             self.needs_update_cursor = true;
         }
         return true;
     } else if (this_shortcuts.key("refindb", keysym)) {
         if (try buildRegex(self)) {
-            try Cmd.findBackwards(self, cmd_data);
+            try findBackwards(self, cmd_data);
             self.needs_update_cursor = true;
         }
         return true;
@@ -267,7 +265,7 @@ pub const PROMPT_ERR_REGEX = "Error using regex (ERR: {})";
 pub const PROMPT_ERR_REGEX_INVALID = "Invalid regex (ERR: {})";
 
 pub const Fns: editor.CommandData.FnTable = .{
-    .onInputted = Cmd.onInputted,
-    .onKey = Cmd.onKey,
-    .onUnset = Cmd.onUnset,
+    .onInputted = onInputted,
+    .onKey = onKey,
+    .onUnset = onUnset,
 };

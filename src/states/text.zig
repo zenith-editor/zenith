@@ -3,8 +3,6 @@
 //
 // This work is licensed under the BSD 3-Clause License.
 //
-const Impl = @This();
-
 const std = @import("std");
 
 const kbd = @import("../kbd.zig");
@@ -16,44 +14,44 @@ const this_shortcuts_help = @import("../shortcuts.zig").STATE_TEXT_HELP;
 
 pub fn handleTextNavigation(self: *editor.Editor, keysym: *const kbd.Keysym) !bool {
     if (!keysym.ctrl_key and keysym.key == kbd.Keysym.Key.up) {
-        self.text_handler.goUp(self);
+        self.text_handler.goUp();
         return true;
     } else if (!keysym.ctrl_key and keysym.key == kbd.Keysym.Key.down) {
-        self.text_handler.goDown(self);
+        self.text_handler.goDown();
         return true;
     } else if (!keysym.ctrl_key and keysym.key == kbd.Keysym.Key.left) {
-        self.text_handler.goLeft(self);
+        self.text_handler.goLeft();
         return true;
     } else if (!keysym.ctrl_key and keysym.key == kbd.Keysym.Key.right) {
-        self.text_handler.goRight(self);
+        self.text_handler.goRight();
         return true;
     } else if (keysym.ctrl_key and keysym.key == kbd.Keysym.Key.left) {
-        self.text_handler.goLeftWord(self);
+        self.text_handler.goLeftWord();
         return true;
     } else if (keysym.ctrl_key and keysym.key == kbd.Keysym.Key.right) {
-        self.text_handler.goRightWord(self);
+        self.text_handler.goRightWord();
         return true;
     } else if (keysym.key == kbd.Keysym.Key.pgup) {
-        self.text_handler.goPgUp(self, false);
+        self.text_handler.goPgUp(false);
         return true;
     } else if (keysym.key == kbd.Keysym.Key.pgdown) {
-        self.text_handler.goPgDown(self, false);
+        self.text_handler.goPgDown(false);
         return true;
     } else if (keysym.key == kbd.Keysym.Key.scroll_up) {
-        self.text_handler.goPgUp(self, true);
+        self.text_handler.goPgUp(true);
         return true;
     } else if (keysym.key == kbd.Keysym.Key.scroll_down) {
-        self.text_handler.goPgDown(self, true);
+        self.text_handler.goPgDown(true);
         return true;
     } else if (keysym.key == kbd.Keysym.Key.home) {
-        self.text_handler.goHeadOrContentStart(self);
+        self.text_handler.goHeadOrContentStart();
         return true;
     } else if (keysym.key == kbd.Keysym.Key.end) {
-        self.text_handler.goTail(self);
+        self.text_handler.goTail();
         return true;
     } else if (keysym.isMouse()) {
         if (!keysym.key.mouse.is_release) {
-            self.text_handler.gotoCursor(self, keysym.key.mouse.x - 1, keysym.key.mouse.y - 1);
+            self.text_handler.gotoCursor(keysym.key.mouse.x - 1, keysym.key.mouse.y - 1);
             return true;
         }
     }
@@ -88,7 +86,7 @@ pub fn handleInput(self: *editor.Editor, keysym: *const kbd.Keysym, is_clipboard
         {
             _ = try editor.Commands.Open.setupTryToSave(self, false);
         } else {
-            self.text_handler.save(self) catch |err| {
+            self.text_handler.save() catch |err| {
                 if (try editor.Commands.Open.setupTryToSave(self, true)) {
                     try self.getCmdData().replacePromptOverlayFmt(self, editor.Commands.Open.PROMPT_ERR_SAVE_FILE, .{err});
                 }
@@ -106,18 +104,18 @@ pub fn handleInput(self: *editor.Editor, keysym: *const kbd.Keysym, is_clipboard
         self.setState(editor.State.mark);
     } else if (this_shortcuts.key("all", keysym)) {
         self.setState(editor.State.mark);
-        self.text_handler.markAll(self);
+        self.text_handler.markAll();
     } else if (this_shortcuts.key("line", keysym)) {
         self.setState(editor.State.mark);
-        self.text_handler.markLine(self);
+        self.text_handler.markLine();
     } else if (this_shortcuts.key("dup", keysym)) {
-        try self.text_handler.duplicateLine(self);
+        try self.text_handler.duplicateLine();
     } else if (this_shortcuts.key("delword", keysym)) {
-        try self.text_handler.deleteWord(self);
+        try self.text_handler.deleteWord();
     } else if (this_shortcuts.key("delline", keysym)) {
-        try self.text_handler.deleteLine(self);
+        try self.text_handler.deleteLine();
     } else if (this_shortcuts.key("paste", keysym)) {
-        try self.text_handler.paste(self);
+        try self.text_handler.paste();
     } else if (this_shortcuts.key("find", keysym)) {
         self.setState(.command);
         self.setCmdData(&.{
@@ -125,53 +123,53 @@ pub fn handleInput(self: *editor.Editor, keysym: *const kbd.Keysym, is_clipboard
             .fns = editor.Commands.Find.Fns,
         });
     } else if (this_shortcuts.key("undo", keysym)) {
-        self.text_handler.undo_mgr.undo(self) catch |err| {
+        self.text_handler.undo_mgr.undo() catch |err| {
             if (err == error.OutOfMemoryUndo) {
-                try self.text_handler.handleUndoOOM(self);
+                try self.text_handler.handleUndoOOM();
             } else {
                 return err;
             }
         };
     } else if (this_shortcuts.key("redo", keysym)) {
-        self.text_handler.undo_mgr.redo(self) catch |err| {
+        self.text_handler.undo_mgr.redo() catch |err| {
             if (err == error.OutOfMemoryUndo) {
-                try self.text_handler.handleUndoOOM(self);
+                try self.text_handler.handleUndoOOM();
             } else {
                 return err;
             }
         };
     } else if (keysym.raw == kbd.Keysym.BACKSPACE) {
-        try self.text_handler.deleteChar(self, false);
+        try self.text_handler.deleteChar(false);
     } else if (keysym.key == kbd.Keysym.Key.del) {
-        try self.text_handler.deleteChar(self, true);
+        try self.text_handler.deleteChar(true);
     } else if (keysym.raw == kbd.Keysym.NEWLINE) {
         if (is_clipboard) {
-            try self.text_handler.insertChar(self, "\n", true);
+            try self.text_handler.insertChar("\n", true);
         } else {
-            try self.text_handler.insertNewline(self);
+            try self.text_handler.insertNewline();
         }
     } else if (!is_clipboard and keysym.raw == kbd.Keysym.TAB) {
-        try self.text_handler.insertTab(self);
+        try self.text_handler.insertTab();
     } else if (!is_clipboard and keysym.isChar('{')) {
-        try self.text_handler.insertCharPair(self, "{", "}");
+        try self.text_handler.insertCharPair("{", "}");
     } else if (!is_clipboard and keysym.isChar('}')) {
-        try self.text_handler.insertCharUnlessOverwrite(self, "}");
+        try self.text_handler.insertCharUnlessOverwrite("}");
     } else if (!is_clipboard and keysym.isChar('(')) {
-        try self.text_handler.insertCharPair(self, "(", ")");
+        try self.text_handler.insertCharPair("(", ")");
     } else if (!is_clipboard and keysym.isChar(')')) {
-        try self.text_handler.insertCharUnlessOverwrite(self, ")");
+        try self.text_handler.insertCharUnlessOverwrite(")");
     } else if (!is_clipboard and keysym.isChar('[')) {
-        try self.text_handler.insertCharPair(self, "[", "]");
+        try self.text_handler.insertCharPair("[", "]");
     } else if (!is_clipboard and keysym.isChar(']')) {
-        try self.text_handler.insertCharUnlessOverwrite(self, "]");
+        try self.text_handler.insertCharUnlessOverwrite("]");
     } else if (!is_clipboard and keysym.isChar('\'')) {
-        try self.text_handler.insertCharPair(self, "'", "'");
+        try self.text_handler.insertCharPair("'", "'");
     } else if (!is_clipboard and keysym.isChar('"')) {
-        try self.text_handler.insertCharPair(self, "\"", "\"");
+        try self.text_handler.insertCharPair("\"", "\"");
     } else if (keysym.getPrint()) |key| {
-        try self.text_handler.insertChar(self, &[_]u8{key}, true);
+        try self.text_handler.insertChar(&[_]u8{key}, true);
     } else if (keysym.getMultibyte()) |seq| {
-        try self.text_handler.insertChar(self, seq, true);
+        try self.text_handler.insertChar(seq, true);
     }
 }
 
@@ -182,14 +180,14 @@ pub fn handleOutput(self: *editor.Editor) !void {
         self.needs_redraw = false;
     }
     if (self.needs_update_cursor) {
-        try Impl.renderStatus(self);
+        try renderStatus(self);
         try self.updateCursorPos();
         self.needs_update_cursor = false;
     }
 }
 
 pub fn renderStatus(self: *editor.Editor) !void {
-    try self.moveCursor(self.getTextHeight(), 0);
+    try self.moveCursor(self.text_handler.dims.height, 0);
     const text_handler: *const text.TextHandler = &self.text_handler;
     try self.writeAll(editor.Esc.CLEAR_LINE);
     if (text_handler.buffer_changed) {
@@ -209,8 +207,8 @@ pub fn renderStatus(self: *editor.Editor) !void {
         .{ self.text_handler.lineinfo.getLineNo(self.text_handler.cursor.row), self.text_handler.cursor.gfx_col + 1 },
     );
     try self.moveCursor(
-        self.getTextHeight(),
-        @intCast(self.w_width - status_slice.len),
+        self.text_handler.dims.height,
+        @intCast(self.ws.width - status_slice.len),
     );
     try self.writeAll(status_slice);
 }
@@ -219,7 +217,7 @@ pub const PROMPT_QUIT_CONFIRM = "Save before quitting?";
 
 const QuitPrompt = struct {
     fn handleYes(self: *editor.Editor) !void {
-        self.text_handler.save(self) catch |err| {
+        self.text_handler.save() catch |err| {
             if (try editor.Commands.Open.setupTryToSave(self, true)) {
                 try self.getCmdData().replacePromptOverlayFmt(self, editor.Commands.Open.PROMPT_ERR_SAVE_FILE, .{err});
             }

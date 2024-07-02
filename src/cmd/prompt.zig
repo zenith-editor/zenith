@@ -3,8 +3,6 @@
 //
 // This work is licensed under the BSD 3-Clause License.
 //
-const Cmd = @This();
-
 const std = @import("std");
 
 const editor = @import("../editor.zig");
@@ -37,6 +35,6 @@ pub fn onKey(self: *editor.Editor, keysym: *const kbd.Keysym) !bool {
 pub const PROMPT_ERR_ENTER_YES_OR_NO = "Please enter 'y' or 'n'";
 
 pub const Fns: editor.CommandData.FnTable = .{
-    .onInputted = Cmd.onInputted,
-    .onKey = Cmd.onKey,
+    .onInputted = onInputted,
+    .onKey = onKey,
 };

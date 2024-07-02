@@ -3,8 +3,6 @@
 //
 // This work is licensed under the BSD 3-Clause License.
 //
-const Cmd = @This();
-
 const std = @import("std");
 const builtin = @import("builtin");
 
@@ -27,7 +25,7 @@ pub fn onInputted(self: *editor.Editor) !void {
         cmd_data.replacePromptOverlay(self, PROMPT_LINE_STARTS_AT_ONE);
         return;
     }
-    text_handler.gotoLineNo(self, line) catch {
+    text_handler.gotoLineNo(line) catch {
         cmd_data.replacePromptOverlay(self, PROMPT_OUT_OF_BOUNDS);
         return;
     };
@@ -40,11 +38,11 @@ pub fn onKey(self: *editor.Editor, keysym: *const kbd.Keysym) !bool {
         self.needs_redraw = true;
         return true;
     } else if (this_shortcuts.key("first", keysym)) {
-        self.text_handler.gotoFirstLine(self);
+        self.text_handler.gotoFirstLine();
         self.setState(.text);
         return true;
     } else if (this_shortcuts.key("last", keysym)) {
-        self.text_handler.gotoLastLine(self);
+        self.text_handler.gotoLastLine();
         self.setState(.text);
         return true;
     }
@@ -57,6 +55,6 @@ pub const PROMPT_LINE_STARTS_AT_ONE = "Lines start at 1!";
 pub const PROMPT_OUT_OF_BOUNDS = "Out of bounds!";
 
 pub const Fns: editor.CommandData.FnTable = .{
-    .onInputted = Cmd.onInputted,
-    .onKey = Cmd.onKey,
+    .onInputted = onInputted,
+    .onKey = onKey,
 };

@@ -15,6 +15,7 @@ const sig = @import("./platform/sig.zig");
 const shortcuts = @import("./shortcuts.zig");
 const encoding = @import("./encoding.zig");
 const highlight = @import("./highlight.zig");
+const lineinfo = @import("./lineinfo.zig");
 
 const Expr = @import("./patterns.zig").Expr;
 
@@ -233,8 +234,29 @@ pub const Esc = struct {
     pub const FG_EMPHASIZE = "\x1b[38;5;8m";
 };
 
+pub const Dimensions = struct {
+    width: u32 = 0,
+    height: u32 = 0,
+};
+
+pub const UISignaller = struct {
+    unprotected_editor: *Editor,
+
+    pub inline fn setNeedsRedraw(self: *UISignaller) void {
+        self.unprotected_editor.needs_redraw = true;
+    }
+
+    pub inline fn setNeedsUpdateCursor(self: *UISignaller) void {
+        self.unprotected_editor.needs_update_cursor = true;
+    }
+
+    pub inline fn setHideableMsgConst(self: *UISignaller, static: []const u8) void {
+        self.unprotected_editor.setHideableMsgConst(static);
+    }
+};
+
 pub const Editor = struct {
-    const STATUS_BAR_HEIGHT = 2;
+    pub const STATUS_BAR_HEIGHT = 2;
     const INPUT_BUFFER_SIZE = 64;
     const OutBuffer = std.fifo.LinearFifo(u8, .Dynamic);
 
@@ -255,45 +277,21 @@ pub const Editor = struct {
     state_handler: *const StateHandler,
 
     allocator: std.mem.Allocator,
-
-    w_width: u32 = 0,
-    w_height: u32 = 0,
+    ws: Dimensions = .{},
 
     text_handler: text.TextHandler,
-
     highlight_last_iter_idx: usize = 0,
-
-    conf: config.Reader,
-
+    conf: config.Reader = .{},
     unprotected_hideable_msg: ?HideableMessage = null,
-
-    unprotected_state: State,
-
-    unprotected_cmd_data: ?CommandData,
+    unprotected_state: State = State.INIT,
+    unprotected_cmd_data: ?CommandData = null,
 
     // terminal extensions
+
     has_bracketed_paste: bool = false,
     has_alt_screen_buf: bool = false,
     has_alt_scroll_mode: bool = false,
     has_mouse_tracking: bool = false,
-
-    pub fn create(allocator: std.mem.Allocator) !Editor {
-        const stdin: std.fs.File = std.io.getStdIn();
-        const stdout: std.fs.File = std.io.getStdOut();
-        return .{
-            .in = stdin,
-            .inr = stdin.reader(),
-            .out = stdout,
-            .out_raw = stdout.writer(),
-            .out_buffer = OutBuffer.init(allocator),
-            .state_handler = &StateHandler.Text,
-            .allocator = allocator,
-            .text_handler = try text.TextHandler.create(),
-            .conf = .{},
-            .unprotected_state = State.INIT,
-            .unprotected_cmd_data = null,
-        };
-    }
 
     pub fn loadConfig(self: *Editor) !void {
         var result = self.conf.open(self.allocator);
@@ -792,12 +790,12 @@ pub const Editor = struct {
 
     pub fn moveCursor(self: *Editor, p_row: u32, p_col: u32) !void {
         var row = p_row;
-        if (row > self.w_height - 1) {
-            row = self.w_height - 1;
+        if (row > self.ws.height - 1) {
+            row = self.ws.height - 1;
         }
         var col = p_col;
-        if (col > self.w_width - 1) {
-            col = self.w_width - 1;
+        if (col > self.ws.width - 1) {
+            col = self.ws.width - 1;
         }
         return self.writeFmt("\x1b[{d};{d}H", .{ row + 1, col + 1 });
     }
@@ -820,36 +818,21 @@ pub const Editor = struct {
 
     pub fn updateWinSize(self: *Editor) !void {
         if (builtin.target.os.tag == .linux) {
-            const oldw = self.w_width;
-            const oldh = self.w_height;
+            const oldw = self.ws.width;
+            const oldh = self.ws.height;
             var wsz: std.os.linux.winsize = undefined;
             const rc = std.os.linux.ioctl(self.in.handle, std.os.linux.T.IOCGWINSZ, @intFromPtr(&wsz));
             if (std.posix.errno(rc) == .SUCCESS) {
-                self.w_height = wsz.ws_row;
-                self.w_width = wsz.ws_col;
+                self.ws.height = wsz.ws_row;
+                self.ws.width = wsz.ws_col;
             }
             if (oldw != 0 and oldh != 0) {
-                self.text_handler.syncColumnScroll(self);
-                self.text_handler.syncRowScroll(self);
+                self.text_handler.syncColumnScroll();
+                self.text_handler.syncRowScroll();
             }
             self.needs_redraw = true;
         }
-    }
-
-    pub fn getTextLeftPadding(self: *const Editor) u32 {
-        if (self.conf.show_line_numbers) {
-            return self.text_handler.line_digits + 1;
-        } else {
-            return 0;
-        }
-    }
-
-    pub fn getTextWidth(self: *const Editor) u32 {
-        return self.w_width - self.getTextLeftPadding();
-    }
-
-    pub fn getTextHeight(self: *const Editor) u32 {
-        return self.w_height - STATUS_BAR_HEIGHT;
+        try self.text_handler.onResize(&self.ws);
     }
 
     // handle input
@@ -1057,14 +1040,10 @@ pub const Editor = struct {
     };
 
     pub fn renderText(self: *Editor) !void {
-        if (self.getTextHeight() == 0) {
+        const text_handler: *const text.TextHandler = &self.text_handler;
+        if (self.text_handler.dims.height == 0) {
             return;
         }
-
-        const text_handler: *const text.TextHandler = &self.text_handler;
-
-        const text_width = self.getTextWidth();
-        const text_height = self.getTextHeight();
 
         var row: u32 = 0;
         const cursor_row: u32 = text_handler.cursor.row - text_handler.scroll.row;
@@ -1110,7 +1089,7 @@ pub const Editor = struct {
 
             var printer: ColumnPrinter = .{
                 .editor = self,
-                .text_width = text_width,
+                .text_width = text_handler.dims.width,
             };
 
             if (text_handler.markers) |*markers| {
@@ -1182,7 +1161,7 @@ pub const Editor = struct {
             }
 
             row += 1;
-            if (row == text_height) {
+            if (row == text_handler.dims.height) {
                 break;
             }
         }
@@ -1210,15 +1189,15 @@ pub const Editor = struct {
         const renderable_rows_outer: u32 = renderable_rows_inner + 1;
         var row: u32 = 0;
         var draw_row: u32 = 0;
-        if (self.getTextHeight() >= renderable_rows_outer) {
-            row = self.getTextHeight() - renderable_rows_outer;
+        if (self.text_handler.dims.height >= renderable_rows_outer) {
+            row = self.text_handler.dims.height - renderable_rows_outer;
         }
         try self.moveCursor(row, 0);
         try self.writeAll(Esc.CLEAR_LINE);
 
         // header
         if (msg.header) |header| {
-            const header_max_width: u32 = self.w_width;
+            const header_max_width: u32 = self.ws.width;
             const header_col: u32 = blk: {
                 if (header_max_width > header.len) {
                     break :blk @intCast((header_max_width - header.len) / 2);
@@ -1322,12 +1301,12 @@ pub const Editor = struct {
 
     pub fn run(self: *Editor) !void {
         try self.setupTerminal();
+        try self.text_handler.onResize(&self.ws);
         var ts = std.time.milliTimestamp();
         while (true) {
             if (sig.resized) {
                 sig.resized = false;
                 try self.updateWinSize();
-                try self.text_handler.onResize(self);
             }
             self.handleInputPolling() catch |err| {
                 if (err == error.Quit) {
@@ -1352,5 +1331,68 @@ pub const Editor = struct {
     /// opened_file_str must be allocated by E.allocator
     pub fn openAtStart(self: *Editor, opened_file_str: str.StringUnmanaged) !void {
         _ = try Commands.Open.setupOpen(self, opened_file_str);
+    }
+};
+
+pub const EditorBuilder = struct {
+    const Inner = struct {
+        editor: Editor,
+    };
+    is_initialized: bool,
+    allocator: std.mem.Allocator,
+    inner: Inner,
+
+    const Self = @This();
+
+    pub fn init(allocator: std.mem.Allocator) Self {
+        return Self{
+            .is_initialized = false,
+            .allocator = allocator,
+            .inner = undefined,
+        };
+    }
+
+    pub fn create(self: *EditorBuilder) !*Editor {
+        if (self.is_initialized) {
+            return error.AlreadyInitialized;
+        }
+        const stdin: std.fs.File = std.io.getStdIn();
+        const stdout: std.fs.File = std.io.getStdOut();
+        self.inner.editor = .{
+            .in = stdin,
+            .inr = stdin.reader(),
+            .out = stdout,
+            .out_raw = stdout.writer(),
+            .out_buffer = Editor.OutBuffer.init(self.allocator),
+            .state_handler = &StateHandler.Text,
+            .allocator = self.allocator,
+            .text_handler = undefined,
+        };
+        var lineinfo_inst: lineinfo.LineInfoList = .{};
+        try lineinfo_inst.append(0);
+        self.inner.editor.text_handler = .{
+            .lineinfo = lineinfo_inst,
+            .buffer = str.String.init(text.TextHandler.BufferAllocator),
+            .gap = .{
+                // get the range 0..0 to set the length to zero
+                .items = (try text.TextHandler.BufferAllocator.alloc(u8, std.mem.page_size))[0..0],
+                .capacity = std.mem.page_size,
+            },
+            .clipboard = str.String.init(text.TextHandler.BufferAllocator),
+            .ui_signaller = .{
+                .unprotected_editor = &self.inner.editor,
+            },
+            .highlight = .{
+                .conf = &self.inner.editor.conf,
+                .allocator = self.allocator,
+            },
+            .conf = &self.inner.editor.conf,
+            .allocator = self.allocator,
+            .undo_mgr = undefined,
+        };
+        self.inner.editor.text_handler.undo_mgr = .{
+            .text_handler = &self.inner.editor.text_handler,
+        };
+        return &self.inner.editor;
     }
 };

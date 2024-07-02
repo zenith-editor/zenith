@@ -132,7 +132,8 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    var E = try editor.Editor.create(allocator);
+    var editor_builder = editor.EditorBuilder.init(allocator);
+    var E = try editor_builder.create();
     try E.updateWinSize();
 
     if (prog_args.opt_config_dir) |config_dir| {

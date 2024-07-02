@@ -6,7 +6,7 @@
 const std = @import("std");
 
 const str = @import("./str.zig");
-
+const text = @import("./text.zig");
 const Editor = @import("./editor.zig").Editor;
 
 const Action = union(enum) {
@@ -77,6 +77,7 @@ pub const UndoManager = struct {
     gpa: std.heap.GeneralPurposeAllocator(GPAConfig) = .{
         .requested_memory_limit = DEFAULT_MEM_LIMIT,
     },
+    text_handler: *text.TextHandler,
 
     fn allocator(self: *UndoManager) std.mem.Allocator {
         return self.gpa.allocator();
@@ -213,7 +214,7 @@ pub const UndoManager = struct {
 
     // undo
 
-    pub fn undo(self: *UndoManager, E: *Editor) !void {
+    pub fn undo(self: *UndoManager) !void {
         if (self.undo_stack.pop()) |act| {
             switch (act.data) {
                 .append => |*append| {
@@ -221,16 +222,14 @@ pub const UndoManager = struct {
                         if (!self.canAllocateMemory(append.len)) {
                             return error.OutOfMemoryUndo;
                         }
-                        append.orig_buffer = try E.text_handler.deleteRegionAtPos(
-                            E,
+                        append.orig_buffer = try self.text_handler.deleteRegionAtPos(
                             append.pos,
                             append.pos + append.len,
                             false, // record_undoable_action
                             true, // copy_orig_slice_to_undo_heap
                         );
                     } else {
-                        _ = try E.text_handler.deleteRegionAtPos(
-                            E,
+                        _ = try self.text_handler.deleteRegionAtPos(
                             append.pos,
                             append.pos + append.len,
                             false, // record_undoable_action
@@ -239,11 +238,10 @@ pub const UndoManager = struct {
                     }
                 },
                 .delete => |*delete| {
-                    try E.text_handler.insertSliceAtPos(E, delete.pos, delete.orig_buffer.items);
+                    try self.text_handler.insertSliceAtPos(delete.pos, delete.orig_buffer.items);
                 },
                 .replace => |*replace| {
-                    try E.text_handler.replaceRegion(
-                        E,
+                    try self.text_handler.replaceRegion(
                         replace.pos,
                         @intCast(replace.pos + replace.new_buffer.len),
                         replace.orig_buffer,
@@ -255,15 +253,14 @@ pub const UndoManager = struct {
         }
     }
 
-    pub fn redo(self: *UndoManager, E: *Editor) !void {
+    pub fn redo(self: *UndoManager) !void {
         if (self.redo_stack.pop()) |act| {
             switch (act.data) {
                 .append => |*append| {
-                    try E.text_handler.insertSliceAtPos(E, append.pos, append.orig_buffer.?);
+                    try self.text_handler.insertSliceAtPos(append.pos, append.orig_buffer.?);
                 },
                 .delete => |*delete| {
-                    _ = try E.text_handler.deleteRegionAtPos(
-                        E,
+                    _ = try self.text_handler.deleteRegionAtPos(
                         delete.pos,
                         @intCast(delete.pos + delete.orig_buffer.items.len),
                         false, // record_undoable_action
@@ -271,8 +268,7 @@ pub const UndoManager = struct {
                     );
                 },
                 .replace => |*replace| {
-                    try E.text_handler.replaceRegion(
-                        E,
+                    try self.text_handler.replaceRegion(
                         replace.pos,
                         @intCast(replace.pos + replace.orig_buffer.len),
                         replace.new_buffer,

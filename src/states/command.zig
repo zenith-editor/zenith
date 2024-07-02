@@ -3,8 +3,6 @@
 //
 // This work is licensed under the BSD 3-Clause License.
 //
-const Impl = @This();
-
 const kbd = @import("../kbd.zig");
 const text = @import("../text.zig");
 const editor = @import("../editor.zig");
@@ -42,15 +40,15 @@ pub fn handleInput(self: *editor.Editor, keysym: *const kbd.Keysym, is_clipboard
     }
 
     if (keysym.raw == kbd.Keysym.BACKSPACE) {
-        Impl.deleteCharBack(self, cmd_data);
+        deleteCharBack(self, cmd_data);
     } else if (keysym.key == kbd.Keysym.Key.del) {
-        Impl.deleteCharFront(self, cmd_data);
+        deleteCharFront(self, cmd_data);
     } else if (keysym.raw == kbd.Keysym.NEWLINE) {
         try cmd_data.fns.onInputted(self);
     } else if (keysym.key == kbd.Keysym.Key.left) {
-        Impl.goLeft(self, cmd_data);
+        goLeft(self, cmd_data);
     } else if (keysym.key == kbd.Keysym.Key.right) {
-        Impl.goRight(self, cmd_data);
+        goRight(self, cmd_data);
     } else if (keysym.key == kbd.Keysym.Key.home) {
         cmd_data.cmdinp_pos.col = 0;
         cmd_data.cmdinp_pos.gfx_col = 0;
@@ -79,7 +77,7 @@ pub fn handleInput(self: *editor.Editor, keysym: *const kbd.Keysym, is_clipboard
 }
 
 pub fn renderStatus(self: *editor.Editor) !void {
-    try self.moveCursor(self.getTextHeight(), 0);
+    try self.moveCursor(self.text_handler.dims.height, 0);
     try self.writeAll(editor.Esc.CLEAR_LINE);
     const cmd_data: *editor.CommandData = self.getCmdData();
     if (cmd_data.promptoverlay) |promptoverlay| {
@@ -87,18 +85,18 @@ pub fn renderStatus(self: *editor.Editor) !void {
     } else if (cmd_data.prompt) |prompt| {
         try self.writeAll(prompt);
     }
-    try self.moveCursor((self.getTextHeight() + 1), 0);
+    try self.moveCursor((self.text_handler.dims.height + 1), 0);
     try self.writeAll(editor.Esc.CLEAR_LINE);
     try self.writeAll(CMD_PROMPT);
     var col: u32 = 0;
     for (cmd_data.cmdinp.items) |byte| {
-        if (col > self.getTextWidth()) {
+        if (col > self.text_handler.dims.width) {
             return;
         }
         try self.writeByte(byte);
         col += 1;
     }
-    try self.moveCursor((self.getTextHeight() + 1), @intCast(CMD_PROMPT_COLS + cmd_data.cmdinp_pos.gfx_col));
+    try self.moveCursor((self.text_handler.dims.height + 1), @intCast(CMD_PROMPT_COLS + cmd_data.cmdinp_pos.gfx_col));
 }
 
 pub fn handleOutput(self: *editor.Editor) !void {
@@ -108,7 +106,7 @@ pub fn handleOutput(self: *editor.Editor) !void {
         self.needs_redraw = false;
     }
     if (self.needs_update_cursor) {
-        try Impl.renderStatus(self);
+        try renderStatus(self);
         self.needs_update_cursor = false;
     }
 }
@@ -152,7 +150,7 @@ fn deleteCharBack(self: *editor.Editor, cmd_data: *editor.CommandData) void {
     if (pos.col == 0) {
         return;
     }
-    Impl.goLeft(self, cmd_data);
+    goLeft(self, cmd_data);
     const start_byte = cmd_data.cmdinp.items[pos.col];
     const seqlen = encoding.sequenceLen(start_byte) catch unreachable;
     cmd_data.cmdinp.replaceRangeAssumeCapacity(pos.col, seqlen, "");

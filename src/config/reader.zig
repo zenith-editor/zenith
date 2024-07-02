@@ -17,7 +17,7 @@ const utils = @import("../utils.zig");
 const Error = @import("../ds/error.zig").Error;
 const Rc = @import("../ds/rc.zig").Rc;
 
-const Reader = @This();
+const Self = @This();
 
 pub const ConfigError = struct {
     pub const Type =
@@ -203,7 +203,7 @@ const REGULAR_CONFIG_FIELDS = [_]ConfigField{
 
 // methods
 
-fn reset(self: *Reader, allocator: std.mem.Allocator) void {
+fn reset(self: *Self, allocator: std.mem.Allocator) void {
     for (self.highlights.items) |*highlight| {
         highlight.deinit(allocator);
     }
@@ -266,12 +266,12 @@ const OpenWithoutParsingResult = struct {
     source: []u8,
 };
 
-fn openWithoutParsing(self: *Reader, allocator: std.mem.Allocator) ConfigError.Type!OpenWithoutParsingResult {
+fn openWithoutParsing(self: *Self, allocator: std.mem.Allocator) ConfigError.Type!OpenWithoutParsingResult {
     if (self.config_dir == null) {
-        self.config_dir = try Reader.getConfigDir();
+        self.config_dir = try Self.getConfigDir();
     }
 
-    const config_filepath: []u8 = try Reader.getConfigFile(allocator, self.config_dir.?, CONFIG_FILENAME);
+    const config_filepath: []u8 = try Self.getConfigFile(allocator, self.config_dir.?, CONFIG_FILENAME);
     self.config_filepath = config_filepath;
 
     const file = try std.fs.openFileAbsolute(self.config_filepath.?, .{ .mode = .read_only });
@@ -283,7 +283,7 @@ fn openWithoutParsing(self: *Reader, allocator: std.mem.Allocator) ConfigError.T
     };
 }
 
-pub fn open(self: *Reader, allocator: std.mem.Allocator) ConfigResult {
+pub fn open(self: *Self, allocator: std.mem.Allocator) ConfigResult {
     const res = self.openWithoutParsing(allocator) catch |err| {
         return .{
             .err = .{
@@ -332,7 +332,7 @@ fn splitPrefix(key: []const u8, comptime prefix: []const u8) ?[]const u8 {
     return null;
 }
 
-fn parseInner(self: *Reader, state: *ParserState, expr: *parser.Expr) !void {
+fn parseInner(self: *Self, state: *ParserState, expr: *parser.Expr) !void {
     switch (expr.*) {
         .kv => |*kv| {
             switch (state.config_section) {
@@ -469,7 +469,7 @@ fn parseInner(self: *Reader, state: *ParserState, expr: *parser.Expr) !void {
 }
 
 const HighlightWriter = struct {
-    reader: *Reader,
+    reader: *Self,
     allocator: std.mem.Allocator,
 
     highlight_type: ?HighlightType = null,
@@ -538,7 +538,7 @@ fn parseTabSize(int: i64) u32 {
 }
 
 pub fn parseHighlight(
-    self: *Reader,
+    self: *Self,
     allocator: std.mem.Allocator,
     highlight_id: usize,
 ) ConfigResult {
@@ -547,7 +547,7 @@ pub fn parseHighlight(
     }
 
     const decl = &self.highlight_decls.items[highlight_id];
-    const highlight_filepath: []u8 = Reader.getConfigFile(allocator, self.config_dir.?, decl.path orelse {
+    const highlight_filepath: []u8 = Self.getConfigFile(allocator, self.config_dir.?, decl.path orelse {
         return .{
             .err = .{
                 .type = error.HighlightLoadError,
@@ -723,7 +723,7 @@ fn parseHighlightInner(writer: *HighlightWriter, expr: *const parser.Expr) !void
     }
 }
 
-fn parse(self: *Reader, allocator: std.mem.Allocator, source: []const u8) ConfigResult {
+fn parse(self: *Self, allocator: std.mem.Allocator, source: []const u8) ConfigResult {
     var P = parser.Parser.init(source);
     var state: ParserState = .{
         .allocator = allocator,

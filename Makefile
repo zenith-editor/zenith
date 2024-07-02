@@ -31,6 +31,10 @@ release: $(ZIG_CACHE)
 test: $(ZIG_CACHE)
 	$(ZIG) build test $(ZIGFLAGS)
 
+.PHONY: watch
+watch: $(ZIG_CACHE)
+	find src -name '*.zig' | entr -cc $(ZIG) build
+
 .PHONY: clean
 clean:
 	rm -rf zig-out

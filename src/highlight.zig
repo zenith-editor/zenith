@@ -3,7 +3,7 @@
 //
 // This work is licensed under the BSD 3-Clause License.
 //
-const Highlight = @This();
+const Self = @This();
 
 const std = @import("std");
 const build_config = @import("build_config");
@@ -30,7 +30,7 @@ pub const Token = struct {
 pub const TokenType = struct {
     color: editor.Editor.ColorCode,
     pattern: ?patterns.Expr,
-    /// owned by Highlight
+    /// owned by Self
     promote_types: []const config.Reader.PromoteType,
 
     fn deinit(self: *TokenType, allocator: std.mem.Allocator) void {
@@ -41,7 +41,7 @@ pub const TokenType = struct {
 };
 
 pub const Iterator = struct {
-    highlight: *const Highlight,
+    highlight: *const Self,
     pos: u32 = 0,
     idx: usize = 0,
 
@@ -75,42 +75,40 @@ pub const Iterator = struct {
 tokens: std.ArrayListUnmanaged(Token) = .{},
 token_types: std.ArrayListUnmanaged(TokenType) = .{},
 highlight: ?config.Reader.HighlightRc = null,
+conf: *config.Reader,
+allocator: std.mem.Allocator,
 
-pub fn clear(self: *Highlight, allocator: std.mem.Allocator) void {
-    self.tokens.shrinkAndFree(allocator, 0);
+pub fn clear(self: *Self) void {
+    self.tokens.shrinkAndFree(self.allocator, 0);
     for (self.token_types.items) |*tt| {
-        tt.deinit(allocator);
+        tt.deinit(self.allocator);
     }
-    self.token_types.shrinkAndFree(allocator, 0);
+    self.token_types.shrinkAndFree(self.allocator, 0);
 }
 
 pub fn loadTokenTypesForFile(
-    self: *Highlight,
+    self: *Self,
     text_handler: *const text.TextHandler,
-    allocator: std.mem.Allocator,
-    cfg: *config.Reader,
 ) config.Reader.ConfigResult {
-    self.clear(allocator);
+    self.clear();
 
     const extension = std.fs.path.extension(text_handler.file_path.items);
     if (extension.len < 1) {
         return .{ .ok = {} };
     }
 
-    const highlight_idx = cfg.highlights_ext_to_idx.get(extension) orelse {
+    const highlight_idx = self.conf.highlights_ext_to_idx.get(extension) orelse {
         return .{ .ok = {} };
     };
 
-    return self.loadTokenTypesForFileInner(allocator, cfg, highlight_idx);
+    return self.loadTokenTypesForFileInner(highlight_idx);
 }
 
 fn loadTokenTypesForFileInner(
-    self: *Highlight,
-    allocator: std.mem.Allocator,
-    cfg: *config.Reader,
+    self: *Self,
     highlight_idx: usize,
 ) config.Reader.ConfigResult {
-    switch (cfg.parseHighlight(allocator, highlight_idx)) {
+    switch (self.conf.parseHighlight(self.allocator, highlight_idx)) {
         .ok => {},
         .err => |err| {
             return .{
@@ -119,10 +117,10 @@ fn loadTokenTypesForFileInner(
         },
     }
 
-    self.highlight = cfg.highlights.items[highlight_idx].?.clone();
+    self.highlight = self.conf.highlights.items[highlight_idx].?.clone();
     const highlight: *const config.Reader.Highlight = self.highlight.?.get();
     for (highlight.tokens.items) |*tt| {
-        self.token_types.append(allocator, .{
+        self.token_types.append(self.allocator, .{
             .color = editor.Editor.ColorCode.init(tt.color, null, tt.deco),
             .pattern = blk: {
                 if (tt.pattern == null) {
@@ -130,7 +128,7 @@ fn loadTokenTypesForFileInner(
                 }
 
                 const expr = patterns.Expr.create(
-                    allocator,
+                    self.allocator,
                     tt.pattern.?,
                     &tt.flags,
                 ).asErr() catch {
@@ -161,10 +159,10 @@ fn loadTokenTypesForFileInner(
     return .{ .ok = {} };
 }
 
-fn promoteTokenType(text_handler: *const text.TextHandler, allocator: std.mem.Allocator, token_start: u32, token_end: u32, tt: *const TokenType, typeid: usize) !usize {
+fn promoteTokenType(self: *Self, text_handler: *const text.TextHandler, token_start: u32, token_end: u32, tt: *const TokenType, typeid: usize) !usize {
     for (tt.promote_types) |*promote_type| {
-        var stackallocator = std.heap.stackFallback(128, allocator);
-        var token_str = std.ArrayList(u8).init(stackallocator.get());
+        var stack_allocator = std.heap.stackFallback(128, self.allocator);
+        var token_str = std.ArrayList(u8).init(stack_allocator.get());
         defer token_str.deinit();
         var iter = text_handler.iterate(token_start);
         while (iter.nextCodepointSliceUntil(token_end)) |token_bytes| {
@@ -178,11 +176,10 @@ fn promoteTokenType(text_handler: *const text.TextHandler, allocator: std.mem.Al
 }
 
 pub fn runText(
-    self: *Highlight,
+    self: *Self,
     text_handler: *const text.TextHandler,
-    allocator: std.mem.Allocator,
 ) !void {
-    self.tokens.shrinkAndFree(allocator, 0);
+    self.tokens.shrinkAndFree(self.allocator, 0);
 
     if (self.token_types.items.len == 0) {
         return;
@@ -206,9 +203,9 @@ pub fn runText(
                 const token: Token = .{
                     .pos_start = pos,
                     .pos_end = @intCast(result.pos),
-                    .typeid = try promoteTokenType(text_handler, allocator, pos, @intCast(result.pos), tt, typeid),
+                    .typeid = try self.promoteTokenType(text_handler, pos, @intCast(result.pos), tt, typeid),
                 };
-                try self.tokens.append(allocator, token);
+                try self.tokens.append(self.allocator, token);
                 pos = @intCast(result.pos);
                 continue :outer;
             }
@@ -224,9 +221,8 @@ pub fn runText(
 /// Retokenize text buffer, assumes that only one continuous region
 /// is changed before the call.
 pub fn runFrom(
-    self: *Highlight,
+    self: *Self,
     text_handler: *const text.TextHandler,
-    allocator: std.mem.Allocator,
     changed_region_start_in: u32,
     changed_region_end: u32,
     shift: u32,
@@ -238,7 +234,7 @@ pub fn runFrom(
     const opt_tok_idx_at_pos = self.findLastNearestToken(text_handler.lineinfo.getOffset(line_start), 0);
 
     if (opt_tok_idx_at_pos == null) {
-        return self.runText(text_handler, allocator);
+        return self.runText(text_handler);
     }
 
     const tok_idx_at_pos = opt_tok_idx_at_pos.?;
@@ -254,7 +250,7 @@ pub fn runFrom(
         const delete_end = changed_region_start_in + shift;
         const tok_idx_at_delete_end = self.findLastNearestToken(delete_end, tok_idx_at_pos).?;
         if (tok_idx_at_delete_end > (tok_idx_at_pos + 1)) {
-            try self.tokens.replaceRange(allocator, tok_idx_at_pos + 1, tok_idx_at_delete_end - (tok_idx_at_pos + 1), &[_]Token{});
+            try self.tokens.replaceRange(self.allocator, tok_idx_at_pos + 1, tok_idx_at_delete_end - (tok_idx_at_pos + 1), &[_]Token{});
         }
         for (self.tokens.items[(tok_idx_at_pos + 1)..]) |*token| {
             if (token.pos_start >= delete_end) {
@@ -273,7 +269,7 @@ pub fn runFrom(
         }
         break :blk text_handler.lineinfo.getOffset(anchor_start_line);
     };
-    var new_token_region = std.ArrayList(Token).init(allocator);
+    var new_token_region = std.ArrayList(Token).init(self.allocator);
     defer new_token_region.deinit();
     var shared_suffix = false;
 
@@ -291,7 +287,7 @@ pub fn runFrom(
                 const token: Token = .{
                     .pos_start = pos,
                     .pos_end = @intCast(result.pos),
-                    .typeid = try promoteTokenType(text_handler, allocator, pos, @intCast(result.pos), tt, typeid),
+                    .typeid = try self.promoteTokenType(text_handler, pos, @intCast(result.pos), tt, typeid),
                 };
 
                 existing_idx_catchup: while (existing_idx < self.tokens.items.len) {
@@ -334,13 +330,13 @@ pub fn runFrom(
         if (comptime build_config.dbg_highlighting) {
             std.debug.print("shared from {}..{}\n", .{ existing_start, existing_idx });
         }
-        try self.tokens.replaceRange(allocator, existing_start, existing_idx - existing_start, new_token_region.items);
+        try self.tokens.replaceRange(self.allocator, existing_start, existing_idx - existing_start, new_token_region.items);
     } else {
         if (comptime build_config.dbg_highlighting) {
             std.debug.print("new at {}\n", .{tok_idx_at_pos});
         }
         self.tokens.shrinkRetainingCapacity(existing_idx);
-        try self.tokens.replaceRange(allocator, tok_idx_at_pos, self.tokens.items.len - tok_idx_at_pos, new_token_region.items);
+        try self.tokens.replaceRange(self.allocator, tok_idx_at_pos, self.tokens.items.len - tok_idx_at_pos, new_token_region.items);
     }
     if (comptime build_config.dbg_highlighting) {
         std.debug.print("=> highlight: {any}\n", .{self.tokens.items});
@@ -348,11 +344,11 @@ pub fn runFrom(
 }
 
 /// Finds the last token with pos_start <= pos
-pub fn findLastNearestToken(self: *const Highlight, pos: u32, from_idx: usize) ?usize {
+pub fn findLastNearestToken(self: *const Self, pos: u32, from_idx: usize) ?usize {
     return utils.findLastNearestElement(Token, "pos_start", self.tokens.items, pos, from_idx);
 }
 
-pub fn iterate(self: *const Highlight, pos: u32, last_iter_idx: *usize) Iterator {
+pub fn iterate(self: *const Self, pos: u32, last_iter_idx: *usize) Iterator {
     var idx: usize = undefined;
     if (self.tokens.items.len > 0) {
         if (last_iter_idx.* < self.tokens.items.len and
@@ -373,7 +369,7 @@ pub fn iterate(self: *const Highlight, pos: u32, last_iter_idx: *usize) Iterator
     };
 }
 
-pub fn getTabSize(self: *const Highlight) ?u32 {
+pub fn getTabSize(self: *const Self) ?u32 {
     if (self.highlight) |hl| {
         return hl.get().tab_size;
     } else {
@@ -381,7 +377,7 @@ pub fn getTabSize(self: *const Highlight) ?u32 {
     }
 }
 
-pub fn getUseTabs(self: *const Highlight) ?bool {
+pub fn getUseTabs(self: *const Self) ?bool {
     if (self.highlight) |hl| {
         return hl.get().use_tabs;
     } else {
