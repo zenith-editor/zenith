@@ -28,7 +28,7 @@ pub const Token = struct {
 };
 
 pub const TokenType = struct {
-    color: editor.Editor.ColorCode,
+    color: editor.ColorCode,
     pattern: ?patterns.Expr,
     /// owned by Self
     promote_types: []const config.Reader.PromoteType,
@@ -121,7 +121,7 @@ fn loadTokenTypesForFileInner(
     const highlight: *const config.Reader.Highlight = self.highlight.?.get();
     for (highlight.tokens.items) |*tt| {
         self.token_types.append(self.allocator, .{
-            .color = editor.Editor.ColorCode.init(tt.color, null, tt.deco),
+            .color = editor.ColorCode.init(tt.color, tt.bg, tt.deco),
             .pattern = blk: {
                 if (tt.pattern == null) {
                     break :blk null;

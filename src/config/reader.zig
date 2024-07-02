@@ -78,7 +78,8 @@ pub const HighlightType = struct {
     name: []u8,
     pattern: ?[]u8,
     color: ?u32,
-    deco: editor.Editor.ColorCode.Decoration,
+    bg: ?u32,
+    deco: editor.ColorCode.Decoration,
     flags: patterns.Expr.Flags,
     promote_types: std.ArrayListUnmanaged(PromoteType),
 
@@ -141,7 +142,8 @@ const HighlightDecl = struct {
 const HighlightClass = struct {
     name: []u8,
     color: ?u32 = null,
-    deco: editor.Editor.ColorCode.Decoration = .{},
+    bg: ?u32 = null,
+    deco: editor.ColorCode.Decoration = .{},
 
     fn deinit(self: *HighlightClass, allocator: std.mem.Allocator) void {
         allocator.free(self.name);
@@ -165,6 +167,10 @@ large_file_limit: u32 = 10 * 1024 * 1024, // bytes
 update_mark_on_nav: bool = false,
 use_file_opener: ?[][]u8 = null,
 buffered_output: bool = true,
+bg: editor.ColorCode.Bg = .transparent,
+color: u32 = 8,
+special_char_color: u32 = 10,
+line_number_color: u32 = 10,
 
 //terminal feature flags
 force_bracketed_paste: bool = true,
@@ -362,6 +368,14 @@ fn parseInner(self: *Self, state: *ParserState, expr: *parser.Expr) !void {
                             }));
                         }
                         self.use_file_opener = try use_file_opener.toOwnedSlice();
+                    } else if (std.mem.eql(u8, kv.key, "bg")) {
+                        self.bg = .{ .coded = try parseColor(&kv.val) };
+                    } else if (std.mem.eql(u8, kv.key, "color")) {
+                        self.color = try parseColor(&kv.val);
+                    } else if (std.mem.eql(u8, kv.key, "special-char-color")) {
+                        self.special_char_color = try parseColor(&kv.val);
+                    } else if (std.mem.eql(u8, kv.key, "line-number-color")) {
+                        self.line_number_color = try parseColor(&kv.val);
                     } else {
                         inline for (&REGULAR_CONFIG_FIELDS) |*config_field| {
                             if (try kv.get(@TypeOf(@field(self, config_field.field)), config_field.conf)) |b| {
@@ -410,19 +424,15 @@ fn parseInner(self: *Self, state: *ParserState, expr: *parser.Expr) !void {
                 .hl_class => |hl_class_idx| {
                     const hl_class: *HighlightClass = &self.hl_classes.items[hl_class_idx];
                     if (std.mem.eql(u8, kv.key, "color")) {
-                        if (kv.val.getOpt([]const u8)) |s| {
-                            hl_class.color = editor.Editor.ColorCode.idFromStr(s);
-                        } else if (kv.val.getOpt(i64)) |int| {
-                            hl_class.color = @intCast(int);
-                        } else {
-                            return error.ExpectedColorCode;
-                        }
+                        hl_class.color = try parseColor(&kv.val);
                     } else if (try kv.get(bool, "bold")) |b| {
                         hl_class.deco.is_bold = b;
                     } else if (try kv.get(bool, "italic")) |b| {
                         hl_class.deco.is_italic = b;
                     } else if (try kv.get(bool, "underline")) |b| {
                         hl_class.deco.is_underline = b;
+                    } else if (std.mem.eql(u8, kv.key, "bg")) {
+                        hl_class.bg = try parseColor(&kv.val);
                     } else {
                         return error.UnknownKey;
                     }
@@ -491,6 +501,7 @@ const HighlightWriter = struct {
             .name = name,
             .pattern = null,
             .color = null,
+            .bg = null,
             .deco = .{},
             .flags = .{},
             .promote_types = .{},
@@ -650,6 +661,18 @@ pub fn parseHighlight(
     };
 }
 
+fn parseColor(val: *const parser.Value) !u32 {
+    if (val.getOpt([]const u8)) |s| {
+        return editor.ColorCode.idFromStr(s) orelse {
+            return error.ExpectedColorCode;
+        };
+    } else if (val.getOpt(i64)) |int| {
+        return @intCast(int);
+    } else {
+        return error.ExpectedColorCode;
+    }
+}
+
 fn parseHighlightInner(writer: *HighlightWriter, expr: *const parser.Expr) !void {
     switch (expr.*) {
         .kv => |*kv| {
@@ -663,17 +686,12 @@ fn parseHighlightInner(writer: *HighlightWriter, expr: *const parser.Expr) !void
                 };
                 const hl_class: *const HighlightClass = &writer.reader.hl_classes.items[hl_class_id];
                 writer.highlight_type.?.color = hl_class.color;
+                writer.highlight_type.?.bg = hl_class.bg;
                 writer.highlight_type.?.deco = hl_class.deco;
             } else if (std.mem.eql(u8, kv.key, "color")) {
-                if (kv.val.getOpt([]const u8)) |s| {
-                    writer.highlight_type.?.color = editor.Editor.ColorCode.idFromStr(s) orelse {
-                        return error.ExpectedColorCode;
-                    };
-                } else if (kv.val.getOpt(i64)) |int| {
-                    writer.highlight_type.?.color = @intCast(int);
-                } else {
-                    return error.ExpectedColorCode;
-                }
+                writer.highlight_type.?.color = try parseColor(&kv.val);
+            } else if (std.mem.eql(u8, kv.key, "bg")) {
+                writer.highlight_type.?.bg = try parseColor(&kv.val);
             } else if (try kv.get(bool, "bold")) |b| {
                 writer.highlight_type.?.deco.is_bold = b;
             } else if (try kv.get(bool, "italic")) |b| {

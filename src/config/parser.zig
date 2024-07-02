@@ -7,6 +7,7 @@
 const std = @import("std");
 
 const str = @import("../str.zig");
+const editor = @import("../editor.zig");
 const Error = @import("../ds/error.zig").Error;
 
 pub const Value = union(enum) {

@@ -196,9 +196,7 @@ pub fn renderStatus(self: *editor.Editor) !void {
         try self.writeAll("[ ] ");
     }
     if (text_handler.file_path.items.len > 0) {
-        try self.writeAll(editor.Esc.FG_EMPHASIZE);
         try self.writeAll(text_handler.file_path.items);
-        try self.writeAll(editor.Esc.COLOR_DEFAULT);
     }
     var status: [32]u8 = undefined;
     const status_slice = try std.fmt.bufPrint(
