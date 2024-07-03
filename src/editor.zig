@@ -431,6 +431,11 @@ const RowPrinter = struct {
         self.col += cwidth;
         return true;
     }
+
+    fn reset(self: *RowPrinter) !void {
+        self.col = 0;
+        try self.setColor(&.{ .bg = .transparent });
+    }
 };
 
 pub const Dimensions = struct {
@@ -919,7 +924,7 @@ pub const Editor = struct {
         try self.writeAll(Esc.RESET_POS);
     }
 
-    fn setBgColor(self: *Self, bg: *const ColorCode.Bg) !void {
+    pub fn setBgColor(self: *Self, bg: *const ColorCode.Bg) !void {
         switch (bg.*) {
             .transparent => {
                 try self.writeAll(Esc.COLOR_DEFAULT);
@@ -1091,6 +1096,9 @@ pub const Editor = struct {
 
         const cursor_row: u32 = text_handler.cursor.row - text_handler.scroll.row;
         var lineno: [16]u8 = undefined;
+
+        var printer = RowPrinter.init(self);
+
         for (text_handler.scroll.row..text_handler.lineinfo.getLen()) |i| {
             const offset_start: u32 = text_handler.lineinfo.getOffset(@intCast(i));
             const offset_end: u32 = text_handler.getRowOffsetEnd(@intCast(i));
@@ -1099,8 +1107,7 @@ pub const Editor = struct {
             var iter = text_handler.iterate(offset_start + offset_col);
             var highlight_iter = text_handler.highlight.iterate(iter.pos, &self.highlight_last_iter_idx);
 
-            var printer = RowPrinter.init(self);
-            try printer.writeColorCodeBg(&printer.color_code);
+            try printer.reset();
 
             // Line number
 
@@ -1206,6 +1213,14 @@ pub const Editor = struct {
             if (row == text_handler.dims.height) {
                 break;
             }
+        }
+
+        try printer.setColor(&.{ .bg = self.conf.empty_bg });
+
+        while (row < text_handler.dims.height) {
+            try self.writeAll(Esc.CLEAR_REST_OF_LINE);
+            try self.writeAll("\n\r");
+            row += 1;
         }
 
         try self.showHideableMessage();
@@ -1350,6 +1365,7 @@ pub const Editor = struct {
 
     pub fn run(self: *Self) !void {
         try self.setupTerminal();
+        try self.refreshScreen();
         try self.text_handler.onResize(&self.ws);
         var ts = std.time.milliTimestamp();
         while (true) {

@@ -78,6 +78,7 @@ pub fn handleInput(self: *editor.Editor, keysym: *const kbd.Keysym, is_clipboard
 
 pub fn renderStatus(self: *editor.Editor) !void {
     try self.moveCursor(self.text_handler.dims.height, 0);
+    try self.setBgColor(&self.conf.bg);
     try self.writeAll(editor.Esc.CLEAR_LINE);
     const cmd_data: *editor.CommandData = self.getCmdData();
     if (cmd_data.promptoverlay) |promptoverlay| {

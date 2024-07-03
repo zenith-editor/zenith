@@ -189,6 +189,7 @@ pub fn handleOutput(self: *editor.Editor) !void {
 pub fn renderStatus(self: *editor.Editor) !void {
     try self.moveCursor(self.text_handler.dims.height, 0);
     const text_handler: *const text.TextHandler = &self.text_handler;
+    try self.setBgColor(&self.conf.bg);
     try self.writeAll(editor.Esc.CLEAR_LINE);
     if (text_handler.buffer_changed) {
         try self.writeAll("[*] ");

@@ -168,6 +168,7 @@ update_mark_on_nav: bool = false,
 use_file_opener: ?[][]u8 = null,
 buffered_output: bool = false,
 bg: editor.ColorCode.Bg = .transparent,
+empty_bg: editor.ColorCode.Bg = .transparent,
 color: u32 = 8,
 special_char_color: u32 = 10,
 line_number_color: u32 = 10,
@@ -370,6 +371,8 @@ fn parseInner(self: *Self, state: *ParserState, expr: *parser.Expr) !void {
                         self.use_file_opener = try use_file_opener.toOwnedSlice();
                     } else if (std.mem.eql(u8, kv.key, "bg")) {
                         self.bg = .{ .coded = try parseColor(&kv.val) };
+                    } else if (std.mem.eql(u8, kv.key, "empty-bg")) {
+                        self.empty_bg = .{ .coded = try parseColor(&kv.val) };
                     } else if (std.mem.eql(u8, kv.key, "color")) {
                         self.color = try parseColor(&kv.val);
                     } else if (std.mem.eql(u8, kv.key, "special-char-color")) {

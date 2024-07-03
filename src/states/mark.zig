@@ -94,6 +94,7 @@ pub fn handleOutput(self: *editor.Editor) !void {
 
 pub fn renderStatus(self: *editor.Editor) !void {
     try self.moveCursor(self.text_handler.dims.height, 0);
+    try self.setBgColor(&self.conf.bg);
     try self.writeAll(editor.Esc.CLEAR_LINE);
     try self.writeAll("Enter: mark end, Del: delete");
     var status: [32]u8 = undefined;
