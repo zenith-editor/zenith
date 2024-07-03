@@ -1325,7 +1325,7 @@ pub const TextHandler = struct {
         };
         if (!delete_next_char) {
             if (self.cursor.gfx_col == 0 or delete_first_col_in_cont) {
-                self.cursor.row -= 1;
+                self.goUp();
                 self.goTail();
                 if (delete_first_col_in_cont) {
                     self.goLeft();
