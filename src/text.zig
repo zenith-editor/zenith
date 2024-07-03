@@ -1535,6 +1535,8 @@ pub const TextHandler = struct {
             removed_line_start // line_start
         );
 
+        // Text wrapping and update cursor
+
         try self.recheckIsMultibyte(removed_line_start);
         if ((removed_line_start + 1) < self.lineinfo.getLen()) {
             try self.recheckIsMultibyte(removed_line_start + 1);
@@ -1701,6 +1703,8 @@ pub const TextHandler = struct {
                 true, replace_line_start);
         }
 
+        // text wrapping and update line info
+
         const row_at_end_of_slice: u32 = @intCast(replace_line_start + 1 + newlines.items.len);
 
         try self.lineinfo.insertSlice(replace_line_start + 1, newlines.items);
@@ -1709,6 +1713,10 @@ pub const TextHandler = struct {
 
         for (replace_line_start..row_at_end_of_slice) |i| {
             try self.recheckIsMultibyte(@intCast(i));
+        }
+
+        if (self.isTextWrapped()) {
+            _ = try self.wrapTextFrom(replace_line_start, row_at_end_of_slice);
         }
 
         // cursor
