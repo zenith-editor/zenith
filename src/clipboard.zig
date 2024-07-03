@@ -7,21 +7,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const LinuxProtocol = enum {
-    Unknown,
-    X11,
-    Wayland,
-};
-
-fn getWhichProtocolLinux() LinuxProtocol {
-    if (std.process.hasEnvVarConstant("WAYLAND_DISPLAY")) {
-        return .Wayland;
-    } else if (std.process.hasEnvVarConstant("DISPLAY")) {
-        return .X11;
-    }
-    return .Unknown;
-}
-
 pub fn read(allocator: std.mem.Allocator) !?[]u8 {
     switch (builtin.os.tag) {
         inline .linux => {
@@ -31,29 +16,6 @@ pub fn read(allocator: std.mem.Allocator) !?[]u8 {
             return null;
         },
     }
-}
-
-fn readLinux(allocator: std.mem.Allocator) !?[]u8 {
-    const argv: []const []const u8 = switch (getWhichProtocolLinux()) {
-        .Wayland => &.{"wl-paste"},
-        .X11 => &.{ "xclip", "-selection", "clipboard", "-o" },
-        else => {
-            return null;
-        },
-    };
-    const proc = try std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = argv,
-    });
-    errdefer {
-        _ = proc.kill();
-    }
-    defer allocator.free(proc.stderr);
-    if (proc.stdout.len == 0) {
-        defer allocator.free(proc.stdout);
-        return null;
-    }
-    return proc.stdout;
 }
 
 pub fn write(allocator: std.mem.Allocator, buf: []const u8) !void {
@@ -67,18 +29,14 @@ pub fn write(allocator: std.mem.Allocator, buf: []const u8) !void {
     }
 }
 
-fn writeLinux(allocator: std.mem.Allocator, buf: []const u8) !void {
-    const argv: []const []const u8 = switch (getWhichProtocolLinux()) {
-        .Wayland => &.{"wl-copy"},
-        .X11 => &.{ "xclip", "-selection", "clipboard" },
-        else => {
-            return;
-        },
-    };
+// Shared utils
+
+fn spawnWriteToStdin(allocator: std.mem.Allocator, argv: []const []const u8, buf: []const u8) !void {
     var proc = std.process.Child.init(
         argv,
         allocator,
     );
+    proc.expand_arg0 = .expand;
     proc.stdin_behavior = .Pipe;
     proc.stdout_behavior = .Close;
     proc.stderr_behavior = .Close;
@@ -88,5 +46,53 @@ fn writeLinux(allocator: std.mem.Allocator, buf: []const u8) !void {
     }
     _ = try proc.stdin.?.writer().writeAll(buf);
     proc.stdin.?.close();
-    return;
+}
+
+fn spawnReadFromStdout(allocator: std.mem.Allocator, argv: []const []const u8) !?[]u8 {
+    const proc = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = argv,
+        .expand_arg0 = .expand,
+    });
+    defer allocator.free(proc.stderr);
+    if (proc.stdout.len == 0) {
+        defer allocator.free(proc.stdout);
+        return null;
+    }
+    return proc.stdout;
+}
+
+// Linux
+
+const LinuxProtocol = enum {
+    Unknown,
+    X11,
+    Wayland,
+};
+
+fn getWhichProtocolLinux() LinuxProtocol {
+    if (std.process.hasEnvVarConstant("WAYLAND_DISPLAY") and !std.process.hasEnvVarConstant("ZENITH_USE_WAYLAND_CLIPBOARD")) {
+        return .Wayland;
+    } else if (std.process.hasEnvVarConstant("DISPLAY")) {
+        return .X11;
+    }
+    return .Unknown;
+}
+
+fn readLinux(allocator: std.mem.Allocator) !?[]u8 {
+    switch (getWhichProtocolLinux()) {
+        .Wayland => return spawnReadFromStdout(allocator, &.{"wl-paste"}),
+        .X11 => return spawnReadFromStdout(allocator, &.{ "xclip", "-selection", "clipboard", "-o" }),
+        else => {
+            return null;
+        },
+    }
+}
+
+fn writeLinux(allocator: std.mem.Allocator, buf: []const u8) !void {
+    switch (getWhichProtocolLinux()) {
+        .Wayland => try spawnWriteToStdin(allocator, &.{"wl-copy"}, buf),
+        .X11 => try spawnWriteToStdin(allocator, &.{ "xclip", "-selection", "clipboard" }, buf),
+        else => {},
+    }
 }
