@@ -27,19 +27,19 @@ Paths are specified relative to the parent directory containing the `zenith.conf
 
   * `tab-size` (since *0.3.0*):
   
-  (int) Sets the number of space characters inserted when pressing the tab key or adjusting the indentation level of a text block (in mark mode). The tab size is the number of space characters (ASCII code 32) to be inserted. Ignored if `use-tabs` is set to true.
+  (int) Sets the number of space characters inserted when pressing the tab key or adjusting the indentation level of a text block (in mark mode). The tab size is the number of space characters (ASCII code 32) to be inserted. Ignored if `use-tabs` is true.
 
   * `use-tabs` (since *0.3.0*):
   
-  (bool) If set to true, tabs (ASCII code 9) will be used for indentation instead of spaces. Default is false.
+  (bool) If true, tabs (ASCII code 9) will be used for indentation instead of spaces. Default is false.
   
   * `detect-tab-size` (since *0.3.3*):
   
-  (bool) If set to true, the `use-tabs` and `tab-size` keys will be set based on the contents of the opened file. Default is false.
+  (bool) If true, the `use-tabs` and `tab-size` keys will be set based on the contents of the opened file. Default is false.
   
   * `use-native-clipboard` (since *0.3.0*):
   
-  (bool) If set to true, the native system clipboard will be utilized instead of zenith's session-specific clipboard. In Linux environments, this requires `xclip` to be installed and the terminal to be ran in X11.
+  (bool) If true, the native system clipboard will be utilized instead of zenith's session-specific clipboard. In Linux environments, this requires `xclip` to be installed and the terminal to be ran in X11.
 
   * `show-line-numbers` (since *0.3.0*):
   
@@ -55,7 +55,7 @@ Paths are specified relative to the parent directory containing the `zenith.conf
 
   * `escape-time` (since *0.3.0*):
   
-  (int) This configuration determines the time delay (in milliseconds) for recognizing the escape key from stdin. In Xterm-compatible terminals, this configuration is used to resolve ambiguity in parsing escape sequences, where an escape sequence beginning with a standard printable character is indistinguishable from the an escape key press, and then a printable character being typed. It operates similarly to the 'escape-time' setting in tmux. Default is *20 ms*.
+  (int) Specifies the time delay (in milliseconds) for recognizing the escape key from stdin. In Xterm-compatible terminals, this configuration is used to resolve ambiguity in parsing escape sequences, where an escape sequence beginning with a standard printable character is indistinguishable from the an escape key press, and then a printable character being typed. It operates similarly to the 'escape-time' setting in tmux. Default is *20 ms*.
  
   * `large-file-limit` (since *0.3.2*):
   
@@ -68,26 +68,71 @@ Paths are specified relative to the parent directory containing the `zenith.conf
   
   * `update-mark-on-navigate` (since *0.3.2*):
   
-  (bool) If set to true, then when navigating in text marking mode, the markers will automatically move without needing to press Enter. Defaults to *false*.
+  (bool) If true, then when navigating in text marking mode, the markers will automatically move without needing to press Enter. Defaults to *false*.
 
   * `use-file-opener` (since *0.3.2*):
   
   (array of strings) Specifies the command used for opening a file manager. If this setting exists, then when prompting for a file, Zenith will try to call the external file manager application and read the path of the selected file. The file manager should return the selected file by writing into stdout, and it should display its UI by writing into stderr. Defaults to nothing.
 
-  *nnn* is the recommended file manager. In order to to use nnn as the file manager, set the configuration to the following:
+  *nnn* is the recommended file manager. In order to to use nnn as the file manager, set the key to the following:
   
 ```
 use-file-opener = ["nnn", "-p", "-"]
 ```
 
+  * `buffered-output` (since *0.3.6*):
+
+  (bool) If true, then zenith will buffer terminal output before writing it into stdout. Enabling this option may or may not gain you any performance. Defaults to *false*.
+
+  * `bg` (since *0.3.6*):
+
+  (string or int) The default background color. Defaults to transparent.
+
+  * `empty-bg` (since *0.3.6*):
+
+  (string or int) The default background color for lines that are outside of text buffer. Defaults to transparent.
+
+  * `color` (since *0.3.6*):
+
+  (string or int) The default foreground color. Defaults to gray.
+
+  * `special-char-color` (since *0.3.6*):
+
+  (string or int) The default foreground color used for the following special characters: the character that is displayed when a line is wrapped. Defaults to cyan.
+
+  * `line-number-color` (since *0.3.6*):
+
+  (string or int) The default color used for line numbers. Defaults to cyan.
+
 ### Terminal feature flags
 
-The following configuration keys control the use of specific terminal features by the editor. When the keys are set to true, the editor will use these features *if* the terminal supports them. Setting them to false means these features will not be used. The default setting for all configuration keys is *true*.
+The following configuration keys control the use of specific terminal features by the editor. When the keys are true, the editor will use these features *if* the terminal supports them. Setting them to false means these features will not be used. The default setting for all configuration keys is *true*.
 
   * `force-bracketed-paste`: bracketed paste
   * `force-alt-screen-buf`: use the alternate screen buffer instead of the normal screen buffer.
-  * `force-alt-scroll-mode`: if set to true and the alternate screen buffer is used, then scrolling will be enabled
+  * `force-alt-scroll-mode`: if true and the alternate screen buffer is used, then scrolling will be enabled
   * `force-mouse-tracking`: enables mouse tracking (required for detecting clicks and scrolls)
+
+### Specifying colors
+
+For keys requiring colors as value, you may either specify colors as integers (for escape sequence compatible colors), or strings. Under string form, the following values are accepted:
+
+  * `black`
+  * `dark-red`
+  * `dark-green`
+  * `dark-yellow`
+  * `dark-blue`
+  * `dark-purple`
+  * `dark-cyan`
+  * `gray`
+  * `dark-gray`
+  * `red`
+  * `green`
+  * `yellow`
+  * `blue`
+  * `purple`
+  * `cyan`
+  * `white`
 
 ## Syntax highlighting config
 
@@ -150,6 +195,10 @@ In this example, a "string" token type is defined, which matches any text with t
   * `promote:...` (since *0.3.0*):
   
   (array of strings) List of raw-text tokens to promote to token type ...
+
+  * `inherit:...` (since *0.3.6*):
+
+  (string) The name of the token in the main config file which this token inherits its attributes from. The inheriting token will only inherit the color and text decoration of the parent token.
 
 ## Example
 
