@@ -210,6 +210,9 @@ pub fn renderStatus(self: *editor.Editor) !void {
         @intCast(self.ws.width - status_slice.len),
     );
     try self.writeAll(status_slice);
+    for (1..editor.Editor.STATUS_BAR_HEIGHT) |_| {
+        try self.writeAll("\n" ++ editor.Esc.CLEAR_LINE);
+    }
 }
 
 pub const PROMPT_QUIT_CONFIRM = "Save before quitting?";
