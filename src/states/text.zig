@@ -175,7 +175,7 @@ pub fn handleInput(self: *editor.Editor, keysym: *const kbd.Keysym, is_clipboard
 
 pub fn handleOutput(self: *editor.Editor) !void {
     if (self.needs_redraw) {
-        try self.refreshScreen();
+        // try self.refreshScreen();
         try self.renderText();
         self.needs_redraw = false;
     }

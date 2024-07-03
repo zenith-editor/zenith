@@ -224,7 +224,12 @@ pub const HideableMessage = struct {
 pub const Esc = struct {
     pub const CLEAR_SCREEN = "\x1b[2J";
     pub const CLEAR_LINE = "\x1b[2K";
+    pub const CLEAR_REST_OF_LINE = "\x1b[K";
     pub const RESET_POS = "\x1b[H";
+
+    pub const CURSOR_HIDE = "\x1b[?25l";
+    pub const CURSOR_SHOW = "\x1b[?25h";
+
     pub const COLOR_INVERT = "\x1b[7m";
     pub const COLOR_DEFAULT = "\x1b[0m";
 
@@ -238,7 +243,6 @@ pub const Esc = struct {
 pub const ColorCode = struct {
     pub const Bg = union(enum) {
         transparent,
-        invert,
         coded: u32,
 
         pub fn eql(self: *const Bg, other: *const Bg) bool {
@@ -246,12 +250,6 @@ pub const ColorCode = struct {
                 .transparent => {
                     switch (other.*) {
                         .transparent => return true,
-                        else => return false,
-                    }
-                },
-                .invert => {
-                    switch (other.*) {
-                        .invert => return true,
                         else => return false,
                     }
                 },
@@ -276,11 +274,13 @@ pub const ColorCode = struct {
         is_bold: bool = false,
         is_italic: bool = false,
         is_underline: bool = false,
+        is_invert: bool = false,
 
         pub fn eql(self: *const Decoration, other: *const Decoration) bool {
             return (self.is_bold == other.is_bold and
                 self.is_italic == other.is_italic and
-                self.is_underline == other.is_underline);
+                self.is_underline == other.is_underline and
+                self.is_invert == other.is_invert);
         }
     };
 
@@ -394,6 +394,10 @@ const RowPrinter = struct {
         }
         if (cc.deco.is_underline) {
             try self.editor.writeAll(Esc.FG_UNDERLINE);
+            self.had_decoration = true;
+        }
+        if (cc.deco.is_invert) {
+            try self.editor.writeAll(Esc.COLOR_INVERT);
             self.had_decoration = true;
         }
     }
@@ -923,9 +927,6 @@ pub const Editor = struct {
             .coded => |coded| {
                 try self.writeFmt(Esc.BG_COLOR, .{coded});
             },
-            .invert => {
-                try self.writeAll(Esc.COLOR_INVERT);
-            },
         }
     }
 
@@ -1085,6 +1086,8 @@ pub const Editor = struct {
 
         var row: u32 = 0;
         try self.moveCursor(0, 0);
+        try self.writeAll(Esc.CLEAR_LINE);
+        try self.writeAll(Esc.CURSOR_HIDE);
 
         const cursor_row: u32 = text_handler.cursor.row - text_handler.scroll.row;
         var lineno: [16]u8 = undefined;
@@ -1107,7 +1110,7 @@ pub const Editor = struct {
                 if ((comptime build_config.dbg_show_multibyte_line) and
                     self.text_handler.lineinfo.checkIsMultibyte(@intCast(i)))
                 {
-                    try printer.setColor(&.{ .bg = .invert });
+                    try printer.setColor(&.{ .deco = .{ .is_invert = true } });
                 } else {
                     try printer.setColor(&.{ .fg = self.conf.line_number_color });
                 }
@@ -1128,7 +1131,7 @@ pub const Editor = struct {
 
             if (text_handler.markers) |*markers| {
                 if (iter.pos >= markers.start and iter.pos < markers.end) {
-                    try printer.setColor(&.{ .bg = .invert });
+                    try printer.setColor(&.{ .deco = .{ .is_invert = true } });
                 }
 
                 while (iter.nextCodepointSliceUntilWithCurPos(offset_end)) |bytes_with_pos| {
@@ -1142,7 +1145,7 @@ pub const Editor = struct {
                             try printer.setColor(&.{ .bg = .transparent });
                         }
                     } else if (bytes_with_pos.pos >= markers.start) {
-                        try printer.setColor(&.{ .bg = .invert });
+                        try printer.setColor(&.{ .deco = .{ .is_invert = true } });
                     }
                     if (!try printer.writeAll(bytes_with_pos.bytes)) {
                         break;
@@ -1154,7 +1157,7 @@ pub const Editor = struct {
                     @intCast(logical_gap_buf_start + self.text_handler.gap.items.len);
 
                 if (iter.pos >= logical_gap_buf_start and iter.pos < logical_gap_buf_end) {
-                    try printer.setColor(&.{ .bg = .invert });
+                    try printer.setColor(&.{ .deco = .{ .is_invert = true } });
                 }
 
                 while (iter.nextCodepointSliceUntilWithCurPos(offset_end)) |bytes_with_pos| {
@@ -1168,7 +1171,7 @@ pub const Editor = struct {
                             try printer.setColor(&.{ .bg = .transparent });
                         }
                     } else if (bytes_with_pos.pos >= logical_gap_buf_start) {
-                        try printer.setColor(&.{ .bg = .invert });
+                        try printer.setColor(&.{ .deco = .{ .is_invert = true } });
                     }
                     if (!try printer.writeAll(bytes_with_pos.bytes)) {
                         break;
@@ -1196,6 +1199,7 @@ pub const Editor = struct {
             }
             try printer.setColor(&.{ .bg = .transparent });
 
+            try self.writeAll(Esc.CLEAR_REST_OF_LINE);
             try self.writeAll("\n\r");
 
             row += 1;
@@ -1206,6 +1210,7 @@ pub const Editor = struct {
 
         try self.showHideableMessage();
 
+        try self.writeAll(Esc.CURSOR_SHOW);
         self.needs_update_cursor = true;
     }
 
@@ -1231,6 +1236,9 @@ pub const Editor = struct {
             row = self.text_handler.dims.height - renderable_rows_outer;
         }
         try self.moveCursor(row, 0);
+
+        var printer = RowPrinter.init(self);
+        try printer.writeColorCodeBg(&printer.color_code);
         try self.writeAll(Esc.CLEAR_LINE);
 
         // header
@@ -1244,14 +1252,15 @@ pub const Editor = struct {
                 }
             };
             try self.moveCursor(row, header_col);
-            try self.writeAll(Esc.COLOR_INVERT);
+            try printer.setColor(&.{ .deco = .{ .is_invert = true } });
             try self.writeAll(header);
-            try self.writeAll(Esc.COLOR_DEFAULT);
+            try printer.setColor(&.{ .bg = .transparent });
         }
 
         // body
         row += 1;
         try self.moveCursor(row, 0);
+        try printer.setColor(&.{ .bg = .transparent });
         try self.writeAll(Esc.CLEAR_LINE);
         for (msg.text.slice()[msg.offset..]) |byte| {
             if (byte == '\n') {
