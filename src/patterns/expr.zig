@@ -181,11 +181,56 @@ const VM = struct {
         return self.arena.allocator();
     }
 
+    fn topThread(thread_stack: *ThreadStack) ?*Thread {
+        if (thread_stack.items.len > 0) {
+            return &thread_stack.items[thread_stack.items.len - 1];
+        }
+        return null;
+    }
+
+    fn addThread(thread_stack: *ThreadStack, str_idx: usize, pc: usize) !void {
+        if (VM.topThread(thread_stack)) |top| {
+            // run length encode the thread stack so that less memory is used
+            // when greedy matching repetitive groups of characters
+            if (top.pc == pc) {
+                if (top.str_idx_delta == 0) {
+                    top.str_idx_delta = @intCast(str_idx - top.str_idx);
+                    top.str_idx_repeats = 1;
+                    return;
+                } else if (str_idx > top.str_idx and
+                    (top.str_idx + top.str_idx_delta * top.str_idx_repeats) == str_idx)
+                {
+                    top.str_idx_repeats += 1;
+                    return;
+                }
+            }
+        }
+        try thread_stack.append(.{
+            .str_idx = str_idx,
+            .pc = pc,
+        });
+    }
+
+    fn popThread(thread_stack: *ThreadStack) !Thread {
+        if (VM.topThread(thread_stack).?.str_idx_delta == 0) {
+            return thread_stack.pop();
+        }
+        const top: *Thread = VM.topThread(thread_stack).?;
+        var ret_thread: Thread = top.*;
+        ret_thread.str_idx = top.str_idx + top.str_idx_delta * top.str_idx_repeats;
+        if (top.str_idx_repeats > 0) {
+            top.str_idx_repeats -= 1;
+        } else {
+            _ = thread_stack.pop();
+        }
+        return ret_thread;
+    }
+
     fn nextInstr(self: *VM, thread: *const Thread, thread_stack: *ThreadStack) error{ InvalidUtf8, OutOfMemory }!void {
         if (comptime build_config.dbg_patterns_vm) {
-            std.debug.print("{s}\n", .{self.haystack[thread.str_idx..]});
-            std.debug.print(">>> {} {}\n", .{ thread.pc, self.instrs[thread.pc] });
-            std.debug.print("{any}\n", .{thread_stack.items});
+            std.debug.print("[pat] src: {s}\n", .{self.haystack[thread.str_idx..]});
+            std.debug.print("[pat] instr: {} {}\n", .{ thread.pc, self.instrs[thread.pc] });
+            std.debug.print("[pat] stack: {any}\n", .{thread_stack.items});
         }
         switch (self.instrs[thread.pc]) {
             .abort => {
@@ -293,51 +338,6 @@ const VM = struct {
                 }
             },
         }
-    }
-
-    fn topThread(thread_stack: *ThreadStack) ?*Thread {
-        if (thread_stack.items.len > 0) {
-            return &thread_stack.items[thread_stack.items.len - 1];
-        }
-        return null;
-    }
-
-    fn addThread(thread_stack: *ThreadStack, str_idx: usize, pc: usize) !void {
-        if (VM.topThread(thread_stack)) |top| {
-            // run length encode the thread stack so that less memory is used
-            // when greedy matching repetitive groups of characters
-            if (top.pc == pc) {
-                if (top.str_idx_delta == 0) {
-                    top.str_idx_delta = @intCast(str_idx - top.str_idx);
-                    top.str_idx_repeats = 1;
-                    return;
-                } else if (str_idx > top.str_idx and
-                    (top.str_idx + top.str_idx_delta * top.str_idx_repeats) == str_idx)
-                {
-                    top.str_idx_repeats += 1;
-                    return;
-                }
-            }
-        }
-        try thread_stack.append(.{
-            .str_idx = str_idx,
-            .pc = pc,
-        });
-    }
-
-    fn popThread(thread_stack: *ThreadStack) !Thread {
-        if (VM.topThread(thread_stack).?.str_idx_delta == 0) {
-            return thread_stack.pop();
-        }
-        const top: *Thread = VM.topThread(thread_stack).?;
-        var ret_thread: Thread = top.*;
-        ret_thread.str_idx = top.str_idx + top.str_idx_delta * top.str_idx_repeats;
-        if (top.str_idx_repeats > 0) {
-            top.str_idx_repeats -= 1;
-        } else {
-            _ = thread_stack.pop();
-        }
-        return ret_thread;
     }
 
     fn exec(self: *VM, init_offset: usize) !MatchResult {
