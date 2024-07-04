@@ -1778,7 +1778,8 @@ pub const TextHandler = struct {
         var replaced = str.String.init(self.allocator);
         defer replaced.deinit();
 
-        // TODO: replace all within gap buffer
+        const pos: usize = @intCast(self.calcOffsetFromCursor());
+        var new_pos: usize = 0;
         try self.flushGapBuffer();
 
         const src_text = self.buffer.items[markers.start..markers.end];
@@ -1786,18 +1787,27 @@ pub const TextHandler = struct {
         var slide: usize = 0;
         var replacements: usize = 0;
         while (slide < src_text.len) {
+            var slide_offset: usize = undefined;
+            var new_pos_delta: usize = undefined;
             if (needle.checkMatch(src_text[slide..])) |len| {
                 try replaced.appendSlice(replacement);
-                slide += len;
+                slide_offset = len;
                 replacements += 1;
+                new_pos_delta = replacement.len;
             } else {
                 try replaced.append(src_text[slide]);
-                slide += 1;
+                slide_offset = 1;
+                new_pos_delta = 1;
             }
+            if (slide <= pos) {
+                new_pos += new_pos_delta;
+            }
+            slide += slide_offset;
         }
 
         const new_end: u32 = @intCast(markers.start + replaced.items.len);
         try self.replaceRegion(markers.start, markers.end, replaced.items, true);
+        try self.gotoPos(@intCast(new_pos));
         markers.end = new_end;
 
         return replacements;
