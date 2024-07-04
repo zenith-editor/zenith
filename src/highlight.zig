@@ -89,16 +89,16 @@ pub fn clear(self: *Self) void {
 pub fn loadTokenTypesForFile(
     self: *Self,
     text_handler: *const text.TextHandler,
-) config.Reader.ConfigResult {
+) config.Reader.ConfigError!void {
     self.clear();
 
     const extension = std.fs.path.extension(text_handler.file_path.items);
     if (extension.len < 1) {
-        return .{ .ok = {} };
+        return;
     }
 
     const highlight_idx = self.conf.highlights_ext_to_idx.get(extension) orelse {
-        return .{ .ok = {} };
+        return;
     };
 
     return self.loadTokenTypesForFileInner(highlight_idx);
@@ -107,16 +107,8 @@ pub fn loadTokenTypesForFile(
 fn loadTokenTypesForFileInner(
     self: *Self,
     highlight_idx: usize,
-) config.Reader.ConfigResult {
-    switch (self.conf.parseHighlight(self.allocator, highlight_idx)) {
-        .ok => {},
-        .err => |err| {
-            return .{
-                .err = err,
-            };
-        },
-    }
-
+) config.Reader.ConfigError!void {
+    try self.conf.parseHighlight(highlight_idx);
     self.highlight = self.conf.highlights.items[highlight_idx].?.clone();
     const highlight: *const config.Reader.Highlight = self.highlight.?.get();
     for (highlight.tokens.items) |*tt| {
@@ -133,30 +125,16 @@ fn loadTokenTypesForFileInner(
                     &tt.flags,
                 ).asErr() catch {
                     // TODO: propagate error location if regex parsing fails
-                    return .{
-                        .err = .{
-                            .type = error.InvalidKey,
-                            .pos = 0,
-                            .location = .not_loaded,
-                        },
-                    };
+                    return error.InvalidKey;
                 };
 
                 break :blk expr;
             },
             .promote_types = tt.promote_types.items,
         }) catch |err| {
-            return .{
-                .err = .{
-                    .type = err,
-                    .pos = 0,
-                    .location = .not_loaded,
-                },
-            };
+            return err;
         };
     }
-
-    return .{ .ok = {} };
 }
 
 fn promoteTokenType(self: *Self, text_handler: *const text.TextHandler, token_start: u32, token_end: u32, tt: *const TokenType, typeid: usize) !usize {

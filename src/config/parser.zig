@@ -8,7 +8,6 @@ const std = @import("std");
 
 const str = @import("../str.zig");
 const editor = @import("../editor.zig");
-const Error = @import("../ds/error.zig").Error;
 
 pub const Value = union(enum) {
     uninitialized: void,
@@ -138,7 +137,7 @@ pub const Expr = union(enum) {
     }
 };
 
-pub const ParseErrorType = error{
+pub const ParseError = error{
     ExpectedNewline,
     EmptySection,
     ExpectedDigit,
@@ -151,17 +150,10 @@ pub const ParseErrorType = error{
     OutOfMemory,
 };
 
-pub const ParseError = struct {
-    type: ParseErrorType,
-    pos: usize,
-};
-
-const ValueResult = Error(Value, ParseError);
-const ExprOrNullResult = Error(?Expr, ParseError);
-
 pub const Parser = struct {
-    buffer: []const u8,
+    source: []const u8,
     pos: usize = 0,
+    allocator: std.mem.Allocator,
 
     fn isId(char: u8) bool {
         return switch (char) {
@@ -177,17 +169,11 @@ pub const Parser = struct {
         return char == ' ' or char == '\t';
     }
 
-    pub fn init(buffer: []const u8) Parser {
-        return Parser{
-            .buffer = buffer,
-        };
-    }
-
     fn peek(self: *Parser) ?u8 {
-        if (self.pos == self.buffer.len) {
+        if (self.pos == self.source.len) {
             return null;
         }
-        return self.buffer[self.pos];
+        return self.source[self.pos];
     }
 
     fn skipSpace(self: *Parser) void {
@@ -200,7 +186,7 @@ pub const Parser = struct {
         }
     }
 
-    fn skipSpaceAndNewline(self: *Parser) ?ParseError {
+    fn skipSpaceAndNewline(self: *Parser) ParseError!void {
         self.skipSpace();
         if (self.peek()) |char| {
             if (char == '#') {
@@ -213,7 +199,7 @@ pub const Parser = struct {
                         self.pos += 1;
                     }
                 }
-                return null;
+                return;
             }
             if (char == '\n') {
                 self.pos += 1;
@@ -224,18 +210,14 @@ pub const Parser = struct {
                         break;
                     }
                 }
-                return null;
+                return;
             }
-            return .{
-                .type = ParseErrorType.ExpectedNewline,
-                .pos = self.pos,
-            };
+            return error.ExpectedNewline;
         }
-        return null;
     }
 
     fn matchStr(self: *Parser, match: []const u8) bool {
-        if (std.mem.startsWith(u8, self.buffer[self.pos..], match)) {
+        if (std.mem.startsWith(u8, self.source[self.pos..], match)) {
             self.pos += match.len;
             return true;
         } else {
@@ -266,7 +248,7 @@ pub const Parser = struct {
         }
     }
 
-    pub fn nextExpr(self: *Parser, allocator: std.mem.Allocator) ExprOrNullResult {
+    pub fn nextExpr(self: *Parser) ParseError!?Expr {
         // expr = ws* (comment newline)* keyval ws* comment? newline+
         self.skipSpaceBeforeExpr();
         if (self.peek()) |char| {
@@ -286,12 +268,7 @@ pub const Parser = struct {
                         self.pos += 1;
                         if (is_table) {
                             if (self.peek() != ']') {
-                                return .{
-                                    .err = .{
-                                        .type = ParseErrorType.ExpectedDoubleBracket,
-                                        .pos = self.pos,
-                                    },
-                                };
+                                return error.ExpectedDoubleBracket;
                             }
                             self.pos += 1;
                         }
@@ -302,29 +279,14 @@ pub const Parser = struct {
                     }
                 }
                 if (size == 0) {
-                    return .{
-                        .err = .{
-                            .type = ParseErrorType.EmptySection,
-                            .pos = self.pos,
-                        },
-                    };
+                    return error.EmptySection;
                 }
-                if (self.skipSpaceAndNewline()) |err| {
-                    return .{
-                        .err = err,
-                    };
-                }
+                try self.skipSpaceAndNewline();
                 if (is_table) {
-                    return .{
-                        .ok = .{
-                            .table_section = self.buffer[start_pos..(start_pos + size)],
-                        },
-                    };
+                    return .{ .table_section = self.source[start_pos..(start_pos + size)] };
                 } else {
                     return .{
-                        .ok = .{
-                            .section = self.buffer[start_pos..(start_pos + size)],
-                        },
+                        .section = self.source[start_pos..(start_pos + size)],
                     };
                 }
             } else if (Parser.isId(char)) {
@@ -341,120 +303,68 @@ pub const Parser = struct {
                 }
 
                 self.skipSpace();
-
                 if (self.peek() != '=') {
-                    return .{
-                        .err = .{
-                            .type = ParseErrorType.ExpectedEqual,
-                            .pos = self.pos,
-                        },
-                    };
+                    return error.ExpectedEqual;
                 }
                 self.pos += 1;
-
                 self.skipSpace();
 
-                var val = self.nextValue(allocator);
-                if (val.isErr()) {
-                    return .{
-                        .err = val.err,
-                    };
-                }
-                if (self.skipSpaceAndNewline()) |err| {
-                    return .{
-                        .err = err,
-                    };
-                }
-
-                const key = self.buffer[start_pos..(start_pos + size)];
-
-                return .{
-                    .ok = .{
-                        .kv = .{
-                            .key = key,
-                            .val = val.ok,
-                        },
-                    },
-                };
+                const val = try self.nextValue();
+                try self.skipSpaceAndNewline();
+                const key = self.source[start_pos..(start_pos + size)];
+                return .{ .kv = .{
+                    .key = key,
+                    .val = val,
+                } };
             } else {
-                return .{
-                    .err = .{
-                        .type = ParseErrorType.UnexpectedChar,
-                        .pos = self.pos,
-                    },
-                };
+                return error.UnexpectedChar;
             }
         }
-        return .{
-            .ok = null,
-        };
+        return null;
     }
 
-    fn nextValue(self: *Parser, allocator: std.mem.Allocator) ValueResult {
+    fn nextValue(self: *Parser) ParseError!Value {
         if (self.peek()) |char| {
             if (self.matchStr("true")) {
-                return .{
-                    .ok = .{
-                        .bool = true,
-                    },
-                };
+                return .{ .bool = true };
             } else if (self.matchStr("false")) {
-                return .{
-                    .ok = .{
-                        .bool = false,
-                    },
-                };
+                return .{ .bool = false };
             }
-            const start_pos = self.pos;
             switch (char) {
                 '0'...'9' => {
                     self.pos += 1;
-                    return self.parseInteger(char - '0', false, start_pos);
+                    return try self.parseInteger(char - '0', false);
                 },
                 '-' => {
                     self.pos += 1;
-                    return self.parseInteger(null, true, start_pos);
+                    return try self.parseInteger(null, true);
                 },
                 '"' => {
                     self.pos += 1;
-                    return self.parseStr(allocator, start_pos);
+                    return try self.parseStr();
                 },
                 '\\' => {
                     self.pos += 1;
                     if (self.peek() == '\\') {
                         self.pos += 1;
-                        return self.parseMultilineStr(allocator, start_pos);
+                        return try self.parseMultilineStr();
                     }
                 },
                 '[' => {
                     self.pos += 1;
-                    return self.parseArray(allocator, start_pos);
+                    return try self.parseArray();
                 },
                 else => {},
             }
-            return .{
-                .err = .{
-                    .type = ParseErrorType.ExpectedValue,
-                    .pos = start_pos,
-                },
-            };
-        } else {
-            return .{
-                .err = .{
-                    .type = ParseErrorType.ExpectedValue,
-                    .pos = self.pos,
-                },
-            };
         }
+        return error.ExpectedValue;
     }
 
-    fn parseInteger(self: *Parser, init_digit: ?i64, is_neg: bool, start_pos: usize) ValueResult {
+    fn parseInteger(self: *Parser, init_digit: ?i64, is_neg: bool) ParseError!Value {
         var num: i64 = 0;
         if (init_digit == 0) {
             return .{
-                .ok = .{
-                    .i64 = 0,
-                },
+                .i64 = 0,
             };
         } else if (init_digit == null) {
             if (self.peek()) |char| {
@@ -466,27 +376,15 @@ pub const Parser = struct {
                     '0' => {
                         self.pos += 1;
                         return .{
-                            .ok = .{
-                                .i64 = 0,
-                            },
+                            .i64 = 0,
                         };
                     },
                     else => {
-                        return .{
-                            .err = .{
-                                .type = ParseErrorType.ExpectedDigit,
-                                .pos = start_pos,
-                            },
-                        };
+                        return error.ExpectedDigit;
                     },
                 }
             } else {
-                return .{
-                    .err = .{
-                        .type = ParseErrorType.ExpectedDigit,
-                        .pos = start_pos,
-                    },
-                };
+                return error.ExpectedDigit;
             }
         } else {
             num = init_digit.?;
@@ -504,23 +402,19 @@ pub const Parser = struct {
                 },
                 else => {
                     return .{
-                        .ok = .{
-                            .i64 = num,
-                        },
+                        .i64 = num,
                     };
                 },
             }
         }
         return .{
-            .ok = .{
-                .i64 = num,
-            },
+            .i64 = num,
         };
     }
 
-    fn parseStrInner(self: *Parser, allocator: std.mem.Allocator, start_pos: usize) !ValueResult {
+    fn parseStr(self: *Parser) ParseError!Value {
         var string: str.StringUnmanaged = .{};
-        errdefer string.deinit(allocator);
+        errdefer string.deinit(self.allocator);
         while (self.peek()) |char| {
             switch (char) {
                 '"' => {
@@ -533,63 +427,32 @@ pub const Parser = struct {
                         switch (esc) {
                             '\\' => {
                                 self.pos += 1;
-                                try string.append(allocator, '\\');
+                                try string.append(self.allocator, '\\');
                             },
                             '"' => {
                                 self.pos += 1;
-                                try string.append(allocator, '"');
+                                try string.append(self.allocator, '"');
                             },
                             else => {
-                                return .{
-                                    .err = .{
-                                        .type = ParseErrorType.InvalidEscapeSeq,
-                                        .pos = start_pos,
-                                    },
-                                };
+                                return error.InvalidEscapeSeq;
                             },
                         }
                     } else {
-                        return .{
-                            .err = .{
-                                .type = ParseErrorType.UnexpectedEof,
-                                .pos = start_pos,
-                            },
-                        };
+                        return error.UnexpectedEof;
                     }
                 },
                 else => {
                     self.pos += 1;
-                    try string.append(allocator, char);
+                    try string.append(self.allocator, char);
                 },
             }
         }
-        return .{
-            .ok = .{
-                .string = string,
-            },
-        };
+        return .{ .string = string };
     }
 
-    fn parseStr(self: *Parser, allocator: std.mem.Allocator, start_pos: usize) ValueResult {
-        if (self.parseStrInner(allocator, start_pos)) |result| {
-            return result;
-        } else |err| {
-            switch (err) {
-                error.OutOfMemory => {
-                    return .{
-                        .err = .{
-                            .type = ParseErrorType.OutOfMemory,
-                            .pos = start_pos,
-                        },
-                    };
-                },
-            }
-        }
-    }
-
-    fn parseMultilineStrInner(self: *Parser, allocator: std.mem.Allocator) !ValueResult {
+    fn parseMultilineStr(self: *Parser) ParseError!Value {
         var string: str.StringUnmanaged = .{};
-        errdefer string.deinit(allocator);
+        errdefer string.deinit(self.allocator);
         while (self.peek()) |char| {
             switch (char) {
                 '\n' => {
@@ -600,7 +463,7 @@ pub const Parser = struct {
                         self.pos += 1;
                         if (self.peek() == '\\') {
                             self.pos += 1;
-                            try string.append(allocator, '\n');
+                            try string.append(self.allocator, '\n');
                             continue;
                         }
                     }
@@ -609,47 +472,23 @@ pub const Parser = struct {
                 },
                 else => {
                     self.pos += 1;
-                    try string.append(allocator, char);
+                    try string.append(self.allocator, char);
                 },
             }
         }
-        return .{
-            .ok = .{
-                .string = string,
-            },
-        };
+        return .{ .string = string };
     }
 
-    fn parseMultilineStr(self: *Parser, allocator: std.mem.Allocator, start_pos: usize) ValueResult {
-        if (self.parseMultilineStrInner(allocator)) |result| {
-            return result;
-        } else |err| {
-            switch (err) {
-                error.OutOfMemory => {
-                    return .{
-                        .err = .{
-                            .type = @errorCast(err),
-                            .pos = start_pos,
-                        },
-                    };
-                },
-            }
-        }
-    }
-
-    fn parseArrayInner(self: *Parser, allocator: std.mem.Allocator) !ValueResult {
-        var array = std.ArrayList(Value).init(allocator);
+    fn parseArray(self: *Parser) ParseError!Value {
+        var array = std.ArrayList(Value).init(self.allocator);
         errdefer array.deinit();
         self.skipSpaceBeforeExpr();
         while (self.peek()) |char| {
             if (char == ']') {
                 break;
             }
-            const value = self.nextValue(allocator);
-            if (value.isErr()) {
-                return value;
-            }
-            try array.append(value.ok);
+            const value = try self.nextValue();
+            try array.append(value);
             self.skipSpaceBeforeExpr();
             if (self.peek()) |char1| {
                 switch (char1) {
@@ -662,30 +501,13 @@ pub const Parser = struct {
                         self.skipSpaceBeforeExpr();
                     },
                     else => {
-                        return error.ExpectedArrayValue;
+                        return error.ExpectedValue;
                     },
                 }
             } else {
-                return error.ExpectedArrayValue;
+                return error.ExpectedValue;
             }
         }
-        return .{ .ok = .{ .array = try array.toOwnedSlice() } };
-    }
-
-    fn parseArray(self: *Parser, allocator: std.mem.Allocator, start_pos: usize) ValueResult {
-        if (self.parseArrayInner(allocator)) |result| {
-            return result;
-        } else |err| {
-            switch (err) {
-                error.OutOfMemory, error.ExpectedArrayValue => {
-                    return .{
-                        .err = .{
-                            .type = @errorCast(err),
-                            .pos = start_pos,
-                        },
-                    };
-                },
-            }
-        }
+        return .{ .array = try array.toOwnedSlice() };
     }
 };

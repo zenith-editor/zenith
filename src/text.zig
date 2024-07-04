@@ -183,21 +183,16 @@ pub const TextHandler = struct {
     };
 
     pub fn open(self: *Self, args: OpenFileArgs, flush_buffer: bool) !OpenFileResult {
-        var ret: OpenFileResult = .ok;
-
         if (args.file == null) {
             if (self.file != null) {
                 self.file.?.close();
             }
             self.file_path.clearAndFree(self.allocator);
             try self.file_path.appendSlice(self.allocator, args.file_path);
-            switch (self.highlight.loadTokenTypesForFile(self)) {
-                .ok => {},
-                .err => |err| {
-                    ret = .{ .warn_highlight = err };
-                },
-            }
-            return ret;
+            self.highlight.loadTokenTypesForFile(self) catch |err| {
+                return .{ .warn_highlight = err };
+            };
+            return .ok;
         }
 
         const file = args.file.?;
@@ -230,12 +225,9 @@ pub const TextHandler = struct {
             };
 
             // Try to load highlighting first so that indentation is detected
-            switch (self.highlight.loadTokenTypesForFile(self)) {
-                .ok => {},
-                .err => |err| {
-                    ret = .{ .warn_highlight = err };
-                },
-            }
+            self.highlight.loadTokenTypesForFile(self) catch |err| {
+                return .{ .warn_highlight = err };
+            };
             self.readLines(new_buffer) catch |err| {
                 self.clearBuffersForFile();
                 return err;
@@ -243,7 +235,7 @@ pub const TextHandler = struct {
             try self.highlightText();
         }
 
-        return ret;
+        return .ok;
     }
 
     fn clearBuffersForFile(self: *Self) void {

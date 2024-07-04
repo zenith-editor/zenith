@@ -131,8 +131,8 @@ fn tryOpen(self: *editor.Editor, args: text.TextHandler.OpenFileArgs, flush_buff
     const result = try self.text_handler.open(args, flush_buffer);
     switch (result) {
         .ok => {},
-        .warn_highlight => |*warn_highlight| {
-            self.showConfigError(warn_highlight) catch {};
+        .warn_highlight => |warn_highlight| {
+            try self.showConfigErrors(warn_highlight);
         },
     }
 }

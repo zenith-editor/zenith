@@ -486,7 +486,7 @@ pub const Editor = struct {
 
     text_handler: text.TextHandler,
     highlight_last_iter_idx: usize = 0,
-    conf: config.Reader = .{},
+    conf: config.Reader,
     unprotected_hideable_msg: ?HideableMessage = null,
     unprotected_state: State = State.INIT,
     unprotected_cmd_data: ?CommandData = null,
@@ -499,33 +499,38 @@ pub const Editor = struct {
     has_mouse_tracking: bool = false,
 
     pub fn loadConfig(self: *Self) !void {
-        var result = self.conf.open(self.allocator);
-
-        switch (result) {
-            .ok => {},
-            .err => |*err| {
-                defer err.deinit(self.allocator);
-                if (err.type == error.FileNotFound and err.location == .not_loaded) {
-                    // ignored
-                } else {
-                    const error_string = try err.toString(self.allocator, .{
-                        .main_path = self.conf.config_filepath orelse "<main>",
-                    });
-                    defer self.allocator.free(error_string);
-                    try self.out_raw.writeAll(error_string);
-                    try self.errorPromptBeforeLoaded();
-                }
-            },
-        }
+        self.conf.open() catch |err| {
+            defer self.conf.clearDiagnostics();
+            if (err == error.FileNotFound) {
+                // ignored
+            } else {
+                try std.fmt.format(self.out_raw, "Unable to read config file: {}\n", .{err});
+                try self.showConfigDiagnostics(self.out_raw);
+                try self.errorPromptBeforeLoaded();
+            }
+        };
 
         self.text_handler.undo_mgr.setMemoryLimit(self.conf.undo_memory_limit);
     }
 
-    pub fn showConfigError(self: *Self, err: *const config.Reader.ConfigError) !void {
-        const error_string = try err.toString(self.allocator, .{
-            .main_path = self.conf.config_filepath orelse "<main>",
-        });
-        self.copyHideableMsg(&HideableMessage.fromAllocated("config error", error_string));
+    pub fn showConfigDiagnostics(self: *const Self, writer: anytype) !void {
+        var it = std.mem.reverseIterator(self.conf.diagnostics.items);
+        while (it.next()) |*diagnostic| {
+            if (diagnostic.pos) |pos| {
+                try std.fmt.format(writer, "from {s}:+{}\n", .{ diagnostic.path, pos });
+            } else {
+                try std.fmt.format(writer, "from {s}\n", .{diagnostic.path});
+            }
+        }
+    }
+
+    pub fn showConfigErrors(self: *Self, err: config.Reader.ConfigError) !void {
+        var fifo = std.fifo.LinearFifo(u8, .Dynamic).init(self.allocator);
+        errdefer fifo.deinit();
+        const writer = fifo.writer();
+        try std.fmt.format(writer, "Unable to read config file: {}\n", .{err});
+        try self.showConfigDiagnostics(writer);
+        self.copyHideableMsg(&HideableMessage.fromAllocated("config error", try fifo.toOwnedSlice()));
     }
 
     pub fn errorPromptBeforeLoaded(self: *const Self) !void {
@@ -1430,6 +1435,9 @@ pub const EditorBuilder = struct {
             .out_raw = stdout.writer(),
             .out_buffer = Editor.OutBuffer.init(self.allocator),
             .state_handler = &StateHandler.Text,
+            .conf = .{
+                .allocator = self.allocator,
+            },
             .allocator = self.allocator,
             .text_handler = undefined,
         };

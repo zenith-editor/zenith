@@ -3,6 +3,7 @@
 //
 // This work is licensed under the BSD 3-Clause License.
 //
+const Self = @This();
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -13,63 +14,25 @@ const str = @import("../str.zig");
 const editor = @import("../editor.zig");
 const patterns = @import("../patterns.zig");
 const utils = @import("../utils.zig");
-
-const Error = @import("../ds/error.zig").Error;
 const Rc = @import("../ds/rc.zig").Rc;
 
-const Self = @This();
-
-pub const ConfigError = struct {
-    pub const Type =
-        parser.ParseErrorType || parser.AccessError || OpenDirError || error{
-        OutOfMemory,
-        ExpectedRegexFlag,
-        ExpectedColorCode,
-        InvalidSection,
-        InvalidKey,
-        DuplicateKey,
-        UnknownKey,
-        HighlightLoadError,
-        HighlightParseError,
-    };
-
-    pub const Location = union(enum) {
-        not_loaded,
-        main,
-        highlight: []u8,
-    };
-
-    type: Type,
-    pos: ?usize = null,
-    location: Location = .not_loaded,
-
-    pub fn deinit(self: *ConfigError, allocator: std.mem.Allocator) void {
-        switch (self.location) {
-            .highlight => |v| {
-                allocator.free(v);
-            },
-            else => {},
-        }
-    }
-
-    pub fn toString(self: *const ConfigError, allocator: std.mem.Allocator, args: struct {
-        main_path: []const u8 = "",
-    }) ![]u8 {
-        switch (self.location) {
-            .not_loaded => {
-                return std.fmt.allocPrint(allocator, "Unable to read config file: {}", .{self.type});
-            },
-            .main => {
-                return std.fmt.allocPrint(allocator, "Unable to read config file <{s}:+{}>: {}", .{ args.main_path, self.pos orelse 0, self.type });
-            },
-            .highlight => |path| {
-                return std.fmt.allocPrint(allocator, "Unable to read config file <{s}:+{}>: {}", .{ path, self.pos.?, self.type });
-            },
-        }
-    }
+pub const ConfigError =
+    parser.ParseError || parser.AccessError || OpenDirError || error{
+    OutOfMemory,
+    ExpectedRegexFlag,
+    ExpectedColorCode,
+    InvalidSection,
+    InvalidKey,
+    DuplicateKey,
+    UnknownKey,
+    HighlightLoadError,
+    HighlightParseError,
 };
 
-pub const ConfigResult = Error(void, ConfigError);
+pub const Diagnostic = struct {
+    pos: ?usize = null,
+    path: []const u8,
+};
 
 const CONFIG_DIR = "zenith";
 const CONFIG_FILENAME = "zenith.conf";
@@ -152,6 +115,8 @@ const HighlightClass = struct {
 
 config_dir: ?std.fs.Dir = null,
 config_filepath: ?[]u8 = null,
+diagnostics: std.ArrayListUnmanaged(Diagnostic) = .{},
+allocator: std.mem.Allocator,
 
 // config fields
 
@@ -173,7 +138,7 @@ color: u32 = 8,
 special_char_color: u32 = 10,
 line_number_color: u32 = 10,
 
-//terminal feature flags
+// terminal feature flags
 force_bracketed_paste: bool = true,
 force_alt_screen_buf: bool = true,
 force_alt_scroll_mode: bool = true,
@@ -210,13 +175,17 @@ const REGULAR_CONFIG_FIELDS = [_]ConfigField{
 
 // methods
 
-fn reset(self: *Self, allocator: std.mem.Allocator) void {
+fn reset(self: *Self) void {
     for (self.highlights.items) |*highlight| {
-        highlight.deinit(allocator);
+        highlight.deinit(self.allocator);
     }
-    self.highlights.clearAndFree(allocator);
-    self.highlights_ext_to_idx.clearAndFree(allocator);
+    self.highlights.clearAndFree(self.allocator);
+    self.highlights_ext_to_idx.clearAndFree(self.allocator);
     self.* = .{};
+}
+
+pub fn clearDiagnostics(self: *Self) void {
+    self.diagnostics.clearAndFree(self.allocator);
 }
 
 const OpenDirError =
@@ -273,56 +242,37 @@ const OpenWithoutParsingResult = struct {
     source: []u8,
 };
 
-fn openWithoutParsing(self: *Self, allocator: std.mem.Allocator) ConfigError.Type!OpenWithoutParsingResult {
+fn openWithoutParsing(self: *Self) ConfigError!OpenWithoutParsingResult {
     if (self.config_dir == null) {
-        self.config_dir = try Self.getConfigDir();
+        self.config_dir = try getConfigDir();
     }
 
-    const config_filepath: []u8 = try Self.getConfigFile(allocator, self.config_dir.?, CONFIG_FILENAME);
+    const config_filepath: []u8 = try getConfigFile(self.allocator, self.config_dir.?, CONFIG_FILENAME);
     self.config_filepath = config_filepath;
 
     const file = try std.fs.openFileAbsolute(self.config_filepath.?, .{ .mode = .read_only });
     defer file.close();
 
-    const source = try file.readToEndAlloc(allocator, 1 << 24);
+    const source = try file.readToEndAlloc(self.allocator, 1 << 24);
     return .{
         .source = source,
     };
 }
 
-pub fn open(self: *Self, allocator: std.mem.Allocator) ConfigResult {
-    const res = self.openWithoutParsing(allocator) catch |err| {
-        return .{
-            .err = .{
-                .type = err,
-            },
-        };
-    };
-    switch (self.parse(allocator, res.source)) {
-        .ok => {
-            return .{
-                .ok = {},
-            };
-        },
-        .err => |err| {
-            return .{
-                .err = err,
-            };
-        },
-    }
+pub fn open(self: *Self) ConfigError!void {
+    const res = try self.openWithoutParsing();
+    try self.parse(res.source);
 }
 
 const ParserState = struct {
     config_section: ConfigSection = .global,
     highlight_decls: std.ArrayListUnmanaged(HighlightDecl) = .{},
-    /// Must be E.allocator
-    allocator: std.mem.Allocator,
 
-    fn deinit(self: *ParserState) void {
+    fn deinit(self: *ParserState, allocator: std.mem.Allocator) void {
         for (self.highlight_decls.items) |*highlight| {
-            highlight.deinit(self.allocator);
+            highlight.deinit(allocator);
         }
-        self.highlight_decls.deinit(self.allocator);
+        self.highlight_decls.deinit(allocator);
     }
 };
 
@@ -356,15 +306,15 @@ fn parseInner(self: *Self, state: *ParserState, expr: *parser.Expr) !void {
                         if (self.use_file_opener != null) {
                             return error.DuplicateKey;
                         }
-                        var use_file_opener = std.ArrayList([]u8).init(state.allocator);
+                        var use_file_opener = std.ArrayList([]u8).init(self.allocator);
                         errdefer {
                             for (use_file_opener.items) |item| {
-                                state.allocator.free(item);
+                                self.allocator.free(item);
                             }
                             use_file_opener.deinit();
                         }
                         for (val_arr) |val| {
-                            try use_file_opener.append(try state.allocator.dupe(u8, val.getOpt([]const u8) orelse {
+                            try use_file_opener.append(try self.allocator.dupe(u8, val.getOpt([]const u8) orelse {
                                 return error.InvalidKey;
                             }));
                         }
@@ -395,20 +345,20 @@ fn parseInner(self: *Self, state: *ParserState, expr: *parser.Expr) !void {
                         if (decl.path != null) {
                             return error.DuplicateKey;
                         }
-                        decl.path = try state.allocator.dupe(u8, s);
+                        decl.path = try self.allocator.dupe(u8, s);
                     } else if (std.mem.eql(u8, kv.key, "extension")) {
                         if (kv.val.getOpt([]const u8)) |s| {
-                            const ext = try state.allocator.dupe(u8, s);
-                            try decl.extension.append(state.allocator, ext);
-                            const old = try self.highlights_ext_to_idx.fetchPut(state.allocator, ext, decl_idx);
+                            const ext = try self.allocator.dupe(u8, s);
+                            try decl.extension.append(self.allocator, ext);
+                            const old = try self.highlights_ext_to_idx.fetchPut(self.allocator, ext, decl_idx);
                             if (old != null) {
                                 return error.DuplicateKey;
                             }
                         } else if (kv.val.getOpt([]parser.Value)) |array| {
                             for (array) |val| {
-                                const ext = try state.allocator.dupe(u8, try val.getErr([]const u8));
-                                try decl.extension.append(state.allocator, ext);
-                                const old = try self.highlights_ext_to_idx.fetchPut(state.allocator, ext, decl_idx);
+                                const ext = try self.allocator.dupe(u8, try val.getErr([]const u8));
+                                try decl.extension.append(self.allocator, ext);
+                                const old = try self.highlights_ext_to_idx.fetchPut(self.allocator, ext, decl_idx);
                                 if (old != null) {
                                     return error.DuplicateKey;
                                 }
@@ -457,20 +407,20 @@ fn parseInner(self: *Self, state: *ParserState, expr: *parser.Expr) !void {
                 state.config_section = .{
                     .highlight = state.highlight_decls.items.len,
                 };
-                try state.highlight_decls.append(state.allocator, .{});
+                try state.highlight_decls.append(self.allocator, .{});
             } else if (splitPrefix(table_section, "hl_class.")) |hl_class_name| {
                 if (hl_class_name.len == 0) {
                     return error.InvalidSection;
                 }
                 const hl_class_id = self.hl_classes.items.len;
                 const hl_class: HighlightClass = .{
-                    .name = try state.allocator.dupe(u8, hl_class_name),
+                    .name = try self.allocator.dupe(u8, hl_class_name),
                 };
                 state.config_section = .{
                     .hl_class = hl_class_id,
                 };
-                try self.hl_classes.append(state.allocator, hl_class);
-                const old = try self.hl_classes_by_name.fetchPut(state.allocator, hl_class.name, hl_class_id);
+                try self.hl_classes.append(self.allocator, hl_class);
+                const old = try self.hl_classes_by_name.fetchPut(self.allocator, hl_class.name, hl_class_id);
                 if (old != null) {
                     return error.DuplicateKey;
                 }
@@ -553,62 +503,41 @@ fn parseTabSize(int: i64) u32 {
 
 pub fn parseHighlight(
     self: *Self,
-    allocator: std.mem.Allocator,
     highlight_id: usize,
-) ConfigResult {
+) ConfigError!void {
     if (self.highlights.items[highlight_id] != null) {
-        return .{ .ok = {} };
+        return;
     }
 
     const decl = &self.highlight_decls.items[highlight_id];
-    const highlight_filepath: []u8 = Self.getConfigFile(allocator, self.config_dir.?, decl.path orelse {
-        return .{
-            .err = .{
-                .type = error.HighlightLoadError,
-                .pos = 0,
-                .location = .not_loaded,
-            },
-        };
+    const highlight_filepath: []u8 = getConfigFile(self.allocator, self.config_dir.?, decl.path orelse {
+        return error.HighlightLoadError;
     }) catch |err| {
-        return .{
-            .err = .{
-                .type = err,
-                .pos = 0,
-                .location = .{
-                    .highlight = decl.path.?,
-                },
-            },
-        };
+        try self.diagnostics.append(self.allocator, .{ .path = decl.path.? });
+        return err;
     };
-    defer allocator.free(highlight_filepath);
+    defer self.allocator.free(highlight_filepath);
 
     const file = std.fs.openFileAbsolute(highlight_filepath, .{ .mode = .read_only }) catch |err| {
-        return .{
-            .err = .{
-                .type = err,
-                .pos = 0,
-                .location = .not_loaded,
-            },
-        };
+        try self.diagnostics.append(self.allocator, .{ .path = highlight_filepath });
+        return err;
     };
     defer file.close();
 
-    const source = file.readToEndAlloc(allocator, 1 << 24) catch |err| {
-        return .{
-            .err = .{
-                .type = err,
-                .pos = 0,
-                .location = .not_loaded,
-            },
-        };
+    const source = file.readToEndAlloc(self.allocator, 1 << 24) catch |err| {
+        try self.diagnostics.append(self.allocator, .{ .path = highlight_filepath });
+        return err;
     };
-    defer allocator.free(source);
+    defer self.allocator.free(source);
 
-    var P = parser.Parser.init(source);
+    var P: parser.Parser = .{
+        .source = source,
+        .allocator = self.allocator,
+    };
 
     var writer: HighlightWriter = .{
         .reader = self,
-        .allocator = allocator,
+        .allocator = self.allocator,
         .highlight = .{
             .tab_size = decl.tab_size,
             .use_tabs = decl.use_tabs,
@@ -619,49 +548,41 @@ pub fn parseHighlight(
 
     while (true) {
         expr_start = P.pos;
-        var expr = switch (P.nextExpr(allocator)) {
-            .ok => |val| val,
-            .err => |err| {
-                return .{ .err = .{
-                    .type = err.type,
-                    .pos = err.pos,
-                    .location = .{ .highlight = decl.path.? },
-                } };
-            },
+        var expr = P.nextExpr() catch |err| {
+            try self.diagnostics.append(self.allocator, .{
+                .pos = P.pos,
+                .path = decl.path.?,
+            });
+            return err;
         } orelse break;
-        defer expr.deinit(allocator);
+        defer expr.deinit(self.allocator);
 
         parseHighlightInner(&writer, &expr) catch |err| {
-            return .{ .err = .{
-                .type = err,
+            try self.diagnostics.append(self.allocator, .{
                 .pos = expr_start,
-                .location = .{ .highlight = decl.path.? },
-            } };
+                .path = decl.path.?,
+            });
+            return err;
         };
     }
 
     if (writer.highlight_type != null) {
         writer.flush() catch |err| {
-            return .{ .err = .{
-                .type = err,
+            try self.diagnostics.append(self.allocator, .{
                 .pos = expr_start,
-                .location = .{ .highlight = decl.path.? },
-            } };
+                .path = decl.path.?,
+            });
+            return err;
         };
     }
 
-    self.highlights.items[highlight_id] = HighlightRc.create(allocator, &writer.highlight) catch |err| {
-        return .{ .err = .{
-            .type = err,
-            .pos = 0,
-            .location = .{ .highlight = decl.path.? },
-        } };
+    self.highlights.items[highlight_id] = HighlightRc.create(self.allocator, &writer.highlight) catch |err| {
+        try self.diagnostics.append(self.allocator, .{
+            .path = decl.path.?,
+        });
+        return err;
     };
     writer.highlight = .{};
-
-    return .{
-        .ok = {},
-    };
 }
 
 fn parseColor(val: *const parser.Value) !u32 {
@@ -744,44 +665,39 @@ fn parseHighlightInner(writer: *HighlightWriter, expr: *const parser.Expr) !void
     }
 }
 
-fn parse(self: *Self, allocator: std.mem.Allocator, source: []const u8) ConfigResult {
-    var P = parser.Parser.init(source);
-    var state: ParserState = .{
-        .allocator = allocator,
+fn parse(self: *Self, source: []const u8) ConfigError!void {
+    var P: parser.Parser = .{
+        .source = source,
+        .allocator = self.allocator,
     };
-    defer state.deinit();
+    var state: ParserState = .{};
+    defer state.deinit(self.allocator);
 
     while (true) {
         const expr_start = P.pos;
-        var expr = switch (P.nextExpr(allocator)) {
-            .ok => |val| val,
-            .err => |err| {
-                return .{ .err = .{
-                    .type = err.type,
-                    .pos = err.pos,
-                    .location = .main,
-                } };
-            },
+        var expr = P.nextExpr() catch |err| {
+            try self.diagnostics.append(self.allocator, .{
+                .pos = P.pos,
+                .path = self.config_filepath.?,
+            });
+            return err;
         } orelse break;
-        defer expr.deinit(allocator);
+        defer expr.deinit(self.allocator);
         self.parseInner(&state, &expr) catch |err| {
-            return .{ .err = .{
-                .type = err,
+            try self.diagnostics.append(self.allocator, .{
                 .pos = expr_start,
-                .location = .main,
-            } };
+                .path = self.config_filepath.?,
+            });
+            return err;
         };
     }
 
     self.highlight_decls = state.highlight_decls;
     state.highlight_decls = .{};
-    self.highlights.appendNTimes(allocator, null, self.highlight_decls.items.len) catch |err| {
-        return .{ .err = .{
-            .type = err,
-        } };
-    };
-
-    return .{
-        .ok = {},
+    self.highlights.appendNTimes(self.allocator, null, self.highlight_decls.items.len) catch |err| {
+        try self.diagnostics.append(self.allocator, .{
+            .path = self.config_filepath.?,
+        });
+        return err;
     };
 }
