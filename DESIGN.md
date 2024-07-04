@@ -52,15 +52,5 @@ See [tigerbeetle: Zig tracking issue (#1191)](https://github.com/tigerbeetle/tig
 
 ### Other problems to investigate...
 
-* I'm not sure if it is safe to store allocators within other objects. The standard library does not do this, instead it always stores a reference to another allocator. It seems like moving allocators into another memory location may cause memory corruption (not detectable even with `.retain_metadata = true`), because internal data within the allocators (GeneralPurposeAllocator) links to other fields within itself, meaning if you were to copy the object to another location the pointers would be invalid? This is only a hypothesis I had when debugging a mysterious segfault. I checked and I did not do any double frees, or anything that would override the heap's metadata (`verbose_log` brought up nothing).
+* ~~I'm not sure if it is safe to store allocators within other objects. The standard library does not do this, instead it always stores a reference to another allocator. It seems like moving allocators into another memory location may cause memory corruption (not detectable even with `.retain_metadata = true`), because internal data within the allocators (GeneralPurposeAllocator) links to other fields within itself, meaning if you were to copy the object to another location the pointers would be invalid? This is only a hypothesis I had when debugging a mysterious segfault. I checked and I did not do any double frees, or anything that would override the heap's metadata (`verbose_log` brought up nothing).~~ All objects now follow the allocator convention as set by Zig's standard library: allocators are never owned, it is up to the caller to create the allocator and pass it to the object.
 
-<details>
-
-<summary>Segfault dump</summary>
-
-```
-/zig-linux-x86_64-0.12.0/lib/std/heap/general_purpose_allocator.zig:515:91: 0x10f69ff in allocSlot (zenith)
-            if (self.cur_buckets[bucket_index] == null or self.cur_buckets[bucket_index].?.alloc_cursor == slot_count) {
-```
-
-</details>
