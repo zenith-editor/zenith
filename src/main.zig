@@ -7,6 +7,7 @@ const std = @import("std");
 const build_config = @import("build_config");
 
 const str = @import("./str.zig");
+const config = @import("./config.zig");
 const sig = @import("./platform/sig.zig");
 const editor = @import("./editor.zig");
 
@@ -138,7 +139,9 @@ pub fn main() !void {
 
     if (prog_args.opt_config_dir) |config_dir| {
         const cwd = std.fs.cwd();
-        E.conf.config_dir = cwd.openDir(config_dir, .{}) catch |err| blk: {
+        const config_path = try cwd.realpathAlloc(allocator, config_dir);
+        defer allocator.free(config_path);
+        E.conf.config_dir = config.Reader.DirWithPath.fromPath(config_path) catch |err| blk: {
             try E.out_raw.print("Error: failed to open config directory ({})", .{err});
             try E.errorPromptBeforeLoaded();
             break :blk null;
