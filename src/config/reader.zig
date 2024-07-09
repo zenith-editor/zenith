@@ -127,8 +127,10 @@ const HighlightClass = struct {
 
 config_dir: ?DirWithPath = null,
 config_filepath: ?[]u8 = null,
-diagnostics: std.ArrayListUnmanaged(Diagnostic) = .{},
 allocator: std.mem.Allocator,
+
+imported_paths: std.ArrayListUnmanaged([]u8) = .{},
+diagnostics: std.ArrayListUnmanaged(Diagnostic) = .{},
 
 // config fields
 
@@ -188,11 +190,22 @@ const REGULAR_CONFIG_FIELDS = [_]ConfigField{
 // methods
 
 fn reset(self: *Self) void {
+    for (self.imported_paths.items) |path| {
+        self.allocator.free(path);
+    }
+    self.imported_paths.clearAndFree(self.allocator);
+    self.diagnostics.clearAndFree(self.allocator);
     for (self.highlights.items) |*highlight| {
         highlight.deinit(self.allocator);
     }
     self.highlights.clearAndFree(self.allocator);
+    self.highlight_decls.clearAndFree(self.allocator);
     self.highlights_ext_to_idx.clearAndFree(self.allocator);
+    for (self.hl_classes.items) |*hl_classes| {
+        hl_classes.deinit(self.allocator);
+    }
+    self.hl_classes.clearAndFree(self.allocator);
+    self.hl_classes_by_name.deinit(self.allocator);
     self.* = .{};
 }
 
@@ -601,7 +614,7 @@ fn parseConfig(self: *Self, state: *ConfigParserState, expr: *parser.Expr) Confi
                         defer file.close();
                         const source = try file.readToEndAlloc(self.allocator, std.math.maxInt(u32));
                         defer self.allocator.free(source);
-                        try parseIncludeConfig(self, source, parent_dir);
+                        try parseIncludeConfig(self, source, parent_dir, abs_path);
                     } else if (std.mem.eql(u8, kv.key, "bg")) {
                         self.bg = .{ .coded = try parseColor(&kv.val) };
                     } else if (std.mem.eql(u8, kv.key, "empty-bg")) {
@@ -714,7 +727,7 @@ fn parseConfig(self: *Self, state: *ConfigParserState, expr: *parser.Expr) Confi
     }
 }
 
-fn parseIncludeConfig(self: *Self, source: []const u8, parent_dir: std.fs.Dir) ConfigError!void {
+fn parseIncludeConfig(self: *Self, source: []const u8, parent_dir: std.fs.Dir, abs_path_src: []const u8) ConfigError!void {
     var P: parser.Parser = .{
         .source = source,
         .allocator = self.allocator,
@@ -722,13 +735,15 @@ fn parseIncludeConfig(self: *Self, source: []const u8, parent_dir: std.fs.Dir) C
     var state: ConfigParserState = .{
         .parent_dir = parent_dir,
     };
+    const abs_path: []u8 = try self.allocator.dupe(u8, abs_path_src);
+    try self.imported_paths.append(self.allocator, abs_path);
 
     while (true) {
         const expr_start = P.pos;
         var expr = P.nextExpr() catch |err| {
             try self.diagnostics.append(self.allocator, .{
                 .pos = P.pos,
-                .path = self.config_filepath.?,
+                .path = abs_path,
             });
             return err;
         } orelse break;
@@ -736,7 +751,7 @@ fn parseIncludeConfig(self: *Self, source: []const u8, parent_dir: std.fs.Dir) C
         self.parseConfig(&state, &expr) catch |err| {
             try self.diagnostics.append(self.allocator, .{
                 .pos = expr_start,
-                .path = self.config_filepath.?,
+                .path = abs_path,
             });
             return err;
         };

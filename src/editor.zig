@@ -514,8 +514,7 @@ pub const Editor = struct {
     }
 
     pub fn showConfigDiagnostics(self: *const Self, writer: anytype) !void {
-        var it = std.mem.reverseIterator(self.conf.diagnostics.items);
-        while (it.next()) |*diagnostic| {
+        for (self.conf.diagnostics.items) |*diagnostic| {
             if (diagnostic.pos) |pos| {
                 try std.fmt.format(writer, "from {s}:+{}\n", .{ diagnostic.path, pos });
             } else {
