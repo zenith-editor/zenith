@@ -1203,15 +1203,15 @@ pub const Editor = struct {
                 }
             }
 
-            try printer.setColor(&.{ .bg = .transparent });
-
             if ((i + 1) < text_handler.lineinfo.getLen() and text_handler.lineinfo.isContLine(@intCast(i + 1))) {
                 try printer.setColor(&.{ .fg = self.conf.special_char_color });
-                try self.writeAll(LINEWRAP_SYM);
+                _ = try printer.writeAll(LINEWRAP_SYM);
             }
-            try printer.setColor(&.{ .bg = .transparent });
 
-            try self.writeAll(Esc.CLEAR_REST_OF_LINE);
+            try printer.setColor(&.{ .bg = .transparent });
+            if (printer.col < printer.text_width) {
+                try self.writeAll(Esc.CLEAR_REST_OF_LINE);
+            }
             try self.writeAll("\n\r");
 
             row += 1;
