@@ -272,15 +272,7 @@ pub fn open(self: *Self) ConfigError!void {
 
 const ConfigParserState = struct {
     config_section: ConfigSection = .global,
-    highlight_decls: std.ArrayListUnmanaged(HighlightDecl) = .{},
     parent_dir: std.fs.Dir,
-
-    fn deinit(self: *ConfigParserState, allocator: std.mem.Allocator) void {
-        for (self.highlight_decls.items) |*highlight| {
-            highlight.deinit(allocator);
-        }
-        self.highlight_decls.deinit(allocator);
-    }
 };
 
 fn splitPrefix(key: []const u8, comptime prefix: []const u8) ?[]const u8 {
@@ -542,7 +534,6 @@ fn parse(self: *Self, source: []const u8, parent_dir: std.fs.Dir) ConfigError!vo
     var state: ConfigParserState = .{
         .parent_dir = parent_dir,
     };
-    defer state.deinit(self.allocator);
 
     while (true) {
         const expr_start = P.pos;
@@ -563,8 +554,6 @@ fn parse(self: *Self, source: []const u8, parent_dir: std.fs.Dir) ConfigError!vo
         };
     }
 
-    self.highlight_decls = state.highlight_decls;
-    state.highlight_decls = .{};
     self.highlights.appendNTimes(self.allocator, null, self.highlight_decls.items.len) catch |err| {
         try self.diagnostics.append(self.allocator, .{
             .path = self.config_filepath.?,
@@ -603,6 +592,16 @@ fn parseConfig(self: *Self, state: *ConfigParserState, expr: *parser.Expr) Confi
                             }));
                         }
                         self.use_file_opener = try use_file_opener.toOwnedSlice();
+                    } else if (try kv.get([]const u8, "include")) |path| {
+                        const abs_path: []u8 = try state.parent_dir.realpathAlloc(self.allocator, path);
+                        defer self.allocator.free(abs_path);
+                        const parent_dirpath: []const u8 = std.fs.path.dirname(abs_path).?;
+                        const parent_dir: std.fs.Dir = try std.fs.openDirAbsolute(parent_dirpath, .{});
+                        const file = try std.fs.openFileAbsolute(abs_path, .{ .mode = .read_only });
+                        defer file.close();
+                        const source = try file.readToEndAlloc(self.allocator, std.math.maxInt(u32));
+                        defer self.allocator.free(source);
+                        try parseIncludeConfig(self, source, parent_dir);
                     } else if (std.mem.eql(u8, kv.key, "bg")) {
                         self.bg = .{ .coded = try parseColor(&kv.val) };
                     } else if (std.mem.eql(u8, kv.key, "empty-bg")) {
@@ -624,7 +623,7 @@ fn parseConfig(self: *Self, state: *ConfigParserState, expr: *parser.Expr) Confi
                     }
                 },
                 .highlight => |decl_idx| {
-                    const decl: *HighlightDecl = &state.highlight_decls.items[decl_idx];
+                    const decl: *HighlightDecl = &self.highlight_decls.items[decl_idx];
                     if (try kv.get([]const u8, "path")) |s| {
                         if (decl.path != null) {
                             return error.DuplicateKey;
@@ -654,16 +653,6 @@ fn parseConfig(self: *Self, state: *ConfigParserState, expr: *parser.Expr) Confi
                         decl.tab_size = parseTabSize(int);
                     } else if (try kv.get(bool, "use-tabs")) |b| {
                         decl.use_tabs = b;
-                    } else if (try kv.get([]const u8, "include")) |path| {
-                        const abs_path: []u8 = try state.parent_dir.realpathAlloc(self.allocator, path);
-                        defer self.allocator.free(abs_path);
-                        const parent_dirpath: []const u8 = std.fs.path.dirname(abs_path).?;
-                        const parent_dir: std.fs.Dir = try std.fs.openDirAbsolute(parent_dirpath, .{});
-                        const file = try std.fs.openFileAbsolute(abs_path, .{ .mode = .read_only });
-                        defer file.close();
-                        const source = try file.readToEndAlloc(self.allocator, std.math.maxInt(u32));
-                        defer self.allocator.free(source);
-                        try parseIncludeConfig(self, state, source, parent_dir);
                     } else {
                         return error.UnknownKey;
                     }
@@ -699,9 +688,9 @@ fn parseConfig(self: *Self, state: *ConfigParserState, expr: *parser.Expr) Confi
                     return error.InvalidSection;
                 }
                 state.config_section = .{
-                    .highlight = state.highlight_decls.items.len,
+                    .highlight = self.highlight_decls.items.len,
                 };
-                try state.highlight_decls.append(self.allocator, .{});
+                try self.highlight_decls.append(self.allocator, .{});
             } else if (splitPrefix(table_section, "hl_class.")) |hl_class_name| {
                 if (hl_class_name.len == 0) {
                     return error.InvalidSection;
@@ -725,7 +714,7 @@ fn parseConfig(self: *Self, state: *ConfigParserState, expr: *parser.Expr) Confi
     }
 }
 
-fn parseIncludeConfig(self: *Self, parent_state: *ConfigParserState, source: []const u8, parent_dir: std.fs.Dir) ConfigError!void {
+fn parseIncludeConfig(self: *Self, source: []const u8, parent_dir: std.fs.Dir) ConfigError!void {
     var P: parser.Parser = .{
         .source = source,
         .allocator = self.allocator,
@@ -733,7 +722,6 @@ fn parseIncludeConfig(self: *Self, parent_state: *ConfigParserState, source: []c
     var state: ConfigParserState = .{
         .parent_dir = parent_dir,
     };
-    defer state.deinit(self.allocator);
 
     while (true) {
         const expr_start = P.pos;
@@ -753,7 +741,4 @@ fn parseIncludeConfig(self: *Self, parent_state: *ConfigParserState, source: []c
             return err;
         };
     }
-
-    try parent_state.highlight_decls.appendSlice(self.allocator, state.highlight_decls.items);
-    self.highlight_decls = .{};
 }
